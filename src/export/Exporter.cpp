@@ -2,6 +2,8 @@
 #include "ue/AssetJson.h"
 #include "ue/Texture.h"
 #include "export/Png.h"
+#include "export/MeshExport.h"
+#include "ue/Mesh.h"
 
 std::wstring ExportPathFor(const ExportOptions& opt, const Package& pkg, const std::wstring& ext) {
     std::string rel = pkg.GamePath();
@@ -76,13 +78,31 @@ static bool ExportTexture(const Package& pkg, size_t exportIdx, const ExportOpti
 }
 
 bool ExportPackage(PackageCache& cache, const Package& pkg, const ExportOptions& opt, std::vector<std::string>& written, std::string* error) {
-    (void)cache;
     bool ok = true;
     i32 main = pkg.MainExport();
     std::string cls = main ? pkg.ExportClass(main - 1) : "";
     if (IsTextureClass(cls)) {
         std::string err;
         if (!ExportTexture(pkg, main - 1, opt, written, &err)) { ok = false; if (error) *error = err; }
+    } else if (IsStaticMeshClass(cls) || IsSkeletalMeshClass(cls)) {
+        std::string err;
+        MeshData mesh;
+        if (!ReadMesh(pkg, main - 1, mesh, &err)) { ok = false; if (error) *error = err; }
+        else if (opt.meshFormat == 1) {
+            std::string obj, mtl;
+            std::wstring path = ExportPathFor(opt, pkg, L".obj");
+            std::wstring mtlPath = path.substr(0, path.size() - 4) + L".mtl";
+            ExportMeshObj(mesh, 0, obj, mtl, Narrow(mtlPath.substr(mtlPath.find_last_of(L'\\') + 1)));
+            ok &= WriteOut(path, obj.data(), obj.size(), written);
+            ok &= WriteOut(mtlPath, mtl.data(), mtl.size(), written);
+        } else {
+            MeshExportOptions mo;
+            mo.maxTextureSize = opt.maxTextureSize;
+            mo.embedTextures = opt.embedTextures;
+            Bytes glb;
+            if (!ExportMeshGlb(cache, mesh, mo, glb, &err)) { ok = false; if (error) *error = err; }
+            else ok &= WriteOut(ExportPathFor(opt, pkg, L".glb"), glb.data(), glb.size(), written);
+        }
     }
     if (opt.json) {
         std::string j = PackageToJson(pkg);

@@ -8,6 +8,8 @@ struct ExportOptions {
     bool keepDirectories = true;
     bool raw = false;        // also write the .uasset itself
     bool json = true;
+    bool embedTextures = true;   // glTF: embed material textures
+    int maxTextureSize = 0;      // embedded textures: 0 = full resolution
 };
 
 std::wstring ExportPathFor(const ExportOptions& opt, const Package& pkg, const std::wstring& ext);

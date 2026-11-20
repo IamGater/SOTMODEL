@@ -8,6 +8,7 @@
 #include "app/Api.h"
 #include "core/Json.h"
 #include "ue/Texture.h"
+#include "ue/Mesh.h"
 #include <windows.h>
 #include <map>
 
@@ -39,6 +40,12 @@ static int DevScan(Api& api, const std::string& arg, size_t max) {
             auto& c = perClass[cls];
             if (perr.empty()) c.first++;
             else if (c.second++ < 3) Out("PROPS " + p + " [" + pkg.Exports()[e].objectName + "]: " + perr + "\n");
+            if (IsStaticMeshClass(cls) || IsSkeletalMeshClass(cls)) {
+                MeshData md;
+                std::string merr;
+                if (ReadMesh(pkg, e, md, &merr)) formats[cls + " ok"]++;
+                else if (++formats[cls + " <error>"] <= 8) Out("MESH " + p + ": " + merr + "\n");
+            }
             if (IsTextureClass(cls)) {
                 TextureInfo ti;
                 std::string terr;
