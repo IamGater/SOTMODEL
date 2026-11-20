@@ -106,6 +106,7 @@ public:
 
     ImFont* monoFont = nullptr;
     int startTab = -1;   // --tab: initial left tab
+    std::string startFolder;   // --folder: initial explorer folder (game path)
     std::vector<std::string> openOnStart;   // asset paths from the command line
 
 private:

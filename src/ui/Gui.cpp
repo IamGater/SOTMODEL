@@ -180,10 +180,12 @@ int RunGui(const std::vector<std::string>& args) {
     std::wstring screenshot;
     double delay = 4;
     int forceW = 0, forceH = 0, startTab = -1;
+    std::string startFolder;
     for (size_t i = 0; i < args.size(); i++) {
         if (args[i] == "--screenshot" && i + 1 < args.size()) screenshot = Widen(args[++i]);
         else if (args[i] == "--size" && i + 1 < args.size()) sscanf(args[++i].c_str(), "%dx%d", &forceW, &forceH);
         else if (args[i] == "--tab" && i + 1 < args.size()) startTab = atoi(args[++i].c_str());
+        else if (args[i] == "--folder" && i + 1 < args.size()) startFolder = args[++i];
         else if (args[i] == "--delay" && i + 1 < args.size()) delay = atof(args[++i].c_str());
         else open.push_back(args[i]);
     }
@@ -235,6 +237,7 @@ int RunGui(const std::vector<std::string>& args) {
         app.monoFont = mono ? mono : io.Fonts->Fonts[0];
         app.openOnStart = open;
         app.startTab = startTab;
+        app.startFolder = startFolder;
         if (!app.Init(hwnd, g_dev.Get(), g_ctx.Get())) {
             MessageBoxW(hwnd, L"Renderer initialisation failed (see log).", L"SOTModel", MB_ICONERROR);
         }

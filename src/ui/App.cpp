@@ -228,6 +228,20 @@ void App::StartMount() {
             m_assets = std::make_unique<GpuAssets>(*m_renderer, *m_api->cache);
             m_assets->SetMaxTextureSize(std::min(m_settings.previewMaxTexture, 1024));
             m_folder = 0;
+            if (!startFolder.empty()) {   // walk the tree along the path components
+                auto& folders = m_api->vfs.Folders();
+                std::string_view p = startFolder;
+                size_t pos = 0;
+                while (pos < p.size()) {
+                    size_t sl = std::min(p.find('/', pos), p.size());
+                    std::string_view part = p.substr(pos, sl - pos);
+                    u32 next = UINT32_MAX;
+                    for (u32 c : folders[m_folder].folders) if (IEquals(folders[c].name, part)) { next = c; break; }
+                    if (next == UINT32_MAX) break;
+                    m_folder = next;
+                    pos = sl + 1;
+                }
+            }
             for (auto& p : openOnStart) {
                 i64 e = m_api->ResolveFile(p);
                 if (e >= 0) OpenFile((u32)e);
