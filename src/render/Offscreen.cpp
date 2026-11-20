@@ -77,3 +77,37 @@ bool RenderMeshPreview(PackageCache& cache, const MeshData& mesh, const PreviewR
     out = std::move(imgs[0]);
     return true;
 }
+
+bool RenderWorldPreview(PackageCache& cache, const WorldData& world, const WorldPreviewRequest& req, Image& out, std::string* error) {
+    std::lock_guard lk(g_mutex);
+    Headless* h = GetHeadless(cache);
+    if (!h->ok) { if (error) *error = h->error; return false; }
+    bool ok = true;
+    {
+        WorldScene scene(h->renderer, *h->assets, cache);
+        scene.Build(world);
+        Camera cam;
+        Vec3 bmin = scene.FocusMin(), bmax = scene.FocusMax();
+        if (Length(bmax - bmin) < 1) { bmin = world.boundsMin; bmax = world.boundsMax; }
+        cam.Frame(bmin, bmax);
+        cam.yaw = req.yaw;
+        cam.pitch = req.pitch;
+        cam.distance *= std::max(0.01f, req.zoom);
+        if (req.useEye) {
+            Vec3 d = req.target - req.eye;
+            cam.target = req.target;
+            cam.distance = std::max(1.f, Length(d));
+            cam.yaw = atan2f(d.y, d.x) * 180 / kPi;
+            cam.pitch = asinf(std::clamp(d.z / cam.distance, -1.f, 1.f)) * 180 / kPi;
+        }
+        cam.nearZ = std::max(1.f, cam.distance * 0.0005f);
+        int w = std::clamp(req.width, 16, 4096), hgt = std::clamp(req.height, 16, 4096);
+        h->renderer.BeginFrame(w, hgt, cam, req.draw);
+        scene.Draw(cam, (float)hgt, req.world);
+        h->renderer.EndFrame();
+        if (!h->renderer.ReadOutput(out)) { if (error) *error = "readback failed"; ok = false; }
+        else for (size_t i = 3; i < out.rgba.size(); i += 4) out.rgba[i] = 255;
+    }
+    h->assets->Trim();
+    return ok;
+}

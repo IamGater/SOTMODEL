@@ -44,6 +44,7 @@ float4 PSMain(PSIn i, bool front : SV_IsFrontFace) : SV_Target {
         if (MatFlags.z > 0) { clip(t.a - 0.33); }
     }
     if (Flags.z > 0) base.rgb *= i.col.rgb;
+    else if (MatFlags.w > 0) base.rgb *= pow(abs(i.col.rgb), 2.2);
     float3 n = normalize(i.nrm);
     if (Flags.y > 0 && MatFlags.y > 0 && dot(i.tan.xyz, i.tan.xyz) > 1e-6) {
         float3 t = normalize(i.tan.xyz - n * dot(n, i.tan.xyz));
@@ -440,6 +441,7 @@ void Renderer::DrawMesh(const GpuMesh& mesh, const Mat4* instances, u32 count) {
         mc.flags[0] = mat->diffuse ? 1.f : 0.f;
         mc.flags[1] = mat->normal ? 1.f : 0.f;
         mc.flags[2] = mat->masked ? 1.f : 0.f;
+        mc.flags[3] = mat->vertexColor ? 1.f : 0.f;
         if (SUCCEEDED(m_ctx->Map(m_materialCb.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &ms))) {
             memcpy(ms.pData, &mc, sizeof(mc));
             m_ctx->Unmap(m_materialCb.Get(), 0);

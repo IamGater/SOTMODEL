@@ -19,6 +19,7 @@ struct GpuMaterial {
     float color[4] = {0.75f, 0.75f, 0.75f, 1};
     bool twoSided = false;
     bool masked = false;
+    bool vertexColor = false;   // multiply by the (sRGB) vertex colour, e.g. landscape paint layers
 };
 
 struct GpuSection {
