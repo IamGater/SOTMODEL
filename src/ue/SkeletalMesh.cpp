@@ -189,6 +189,45 @@ void ReadLod(Reader& r, MeshLod& lod, bool hasVertexColors, bool filterEditorOnl
 }
 }
 
+void ReadReferenceSkeleton(const Package& pkg, Reader& r, std::vector<Bone>& bones) {
+    bool filterEditorOnly = (pkg.Summary().packageFlags & 0x80000000u) != 0;
+    i32 nb = r.Count(12);
+    bones.resize(nb);
+    for (auto& b : bones) {
+        b.name = pkg.ReadName(r);
+        b.parent = r.I32();
+        if (!filterEditorOnly) r.FString();   // export name
+    }
+    i32 np = r.Count(40);
+    if (np != nb) throw ParseError(Fmt("bone pose count %d != bone count %d", np, nb));
+    for (auto& b : bones) {
+        b.rotation = {r.F32(), r.F32(), r.F32(), r.F32()};
+        b.translation = {r.F32(), r.F32(), r.F32()};
+        b.scale = {r.F32(), r.F32(), r.F32()};
+    }
+    i32 nmap = r.Count(12);
+    r.Skip((i64)nmap * 12);
+    for (i32 i = 0; i < nb; i++)
+        if (bones[i].parent >= i) throw ParseError("bad bone hierarchy");
+    if (nb) bones[0].parent = -1;
+}
+
+bool ReadSkeleton(const Package& pkg, size_t exportIdx, std::vector<Bone>& bones, std::string* error) {
+    try {
+        size_t end = 0;
+        pkg.ReadProperties(exportIdx, &end);
+        Reader r = pkg.ExportReader(exportIdx);
+        r.Seek(end);
+        if (r.U32()) r.Skip(16);
+        ReadReferenceSkeleton(pkg, r, bones);
+        if (bones.empty()) throw ParseError("skeleton has no bones");
+    } catch (const std::exception& ex) {
+        if (error) *error = ex.what();
+        return false;
+    }
+    return true;
+}
+
 bool ReadSkeletalMesh(const Package& pkg, size_t exportIdx, MeshData& m, std::string* error) {
     try {
         m.name = pkg.Exports()[exportIdx].objectName;
@@ -214,26 +253,7 @@ bool ReadSkeletalMesh(const Package& pkg, size_t exportIdx, MeshData& m, std::st
             if (mat) s.materialPath = pkg.FullPath(mat);
             m.materials.push_back(s);
         }
-        // FReferenceSkeleton
-        i32 nb = r.Count(12);
-        m.skeleton.resize(nb);
-        for (auto& b : m.skeleton) {
-            b.name = pkg.ReadName(r);
-            b.parent = r.I32();
-            if (!filterEditorOnly) r.FString();   // export name
-        }
-        i32 np = r.Count(40);
-        if (np != nb) throw ParseError(Fmt("bone pose count %d != bone count %d", np, nb));
-        for (auto& b : m.skeleton) {
-            b.rotation = {r.F32(), r.F32(), r.F32(), r.F32()};
-            b.translation = {r.F32(), r.F32(), r.F32()};
-            b.scale = {r.F32(), r.F32(), r.F32()};
-        }
-        i32 nmap = r.Count(12);
-        r.Skip((i64)nmap * 12);
-        for (i32 i = 0; i < nb; i++)
-            if (m.skeleton[i].parent >= i) throw ParseError("bad bone hierarchy");
-        if (nb) m.skeleton[0].parent = -1;
+        ReadReferenceSkeleton(pkg, r, m.skeleton);
 
         i32 nl = r.Count(32);
         m.lods.resize(nl);

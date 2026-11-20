@@ -9,6 +9,7 @@
 #include "core/Json.h"
 #include "ue/Texture.h"
 #include "ue/Mesh.h"
+#include "ue/Animation.h"
 #include <windows.h>
 #include <map>
 
@@ -45,6 +46,12 @@ static int DevScan(Api& api, const std::string& arg, size_t max) {
                 std::string merr;
                 if (ReadMesh(pkg, e, md, &merr)) formats[cls + " ok"]++;
                 else if (++formats[cls + " <error>"] <= 8) Out("MESH " + p + ": " + merr + "\n");
+            }
+            if (IsAnimSequenceClass(cls)) {
+                AnimSequenceData ad;
+                std::string aerr;
+                if (ReadAnimSequence(pkg, e, ad, &aerr)) formats["AnimSequence ok " + ad.encoding + (ad.sequentialOffsets ? " (sequential)" : "")]++;
+                else if (++formats["AnimSequence <error>"] <= 12) Out("ANIM " + p + ": " + aerr + "\n");
             }
             if (IsTextureClass(cls)) {
                 TextureInfo ti;

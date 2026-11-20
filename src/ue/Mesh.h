@@ -68,6 +68,10 @@ bool ReadStaticMesh(const Package& pkg, size_t exportIdx, MeshData& out, std::st
 bool ReadSkeletalMesh(const Package& pkg, size_t exportIdx, MeshData& out, std::string* error = nullptr);
 bool ReadMesh(const Package& pkg, size_t exportIdx, MeshData& out, std::string* error = nullptr);
 
+// USkeleton: its reference skeleton (bone names, parents, reference pose)
+bool ReadSkeleton(const Package& pkg, size_t exportIdx, std::vector<Bone>& bones, std::string* error = nullptr);
+void ReadReferenceSkeleton(const Package& pkg, Reader& r, std::vector<Bone>& bones);
+
 // helpers shared by the mesh readers
 Vec3 UnpackNormal(u32 packed);
 void SkipBulkArray(Reader& r);
