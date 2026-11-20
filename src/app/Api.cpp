@@ -49,6 +49,7 @@ Api::Api(Settings& s) : settings(s) {
     RegisterCoreTools();
     RegisterAssetTools();
     RegisterMeshTools(*this);
+    RegisterWorldTools(*this);
 }
 
 bool Api::EnsureMounted(std::string* error) {
