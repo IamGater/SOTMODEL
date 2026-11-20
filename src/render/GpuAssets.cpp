@@ -64,10 +64,10 @@ std::shared_ptr<GpuMaterial> GpuAssets::Material(const std::string& path) {
     return gm;
 }
 
-std::shared_ptr<GpuMesh> GpuAssets::Mesh(const MeshData& mesh, int lod, bool loadMaterials) {
+std::shared_ptr<GpuMesh> GpuAssets::Mesh(const MeshData& mesh, int lod, bool loadMaterials, bool dynamic) {
     if (mesh.lods.empty()) return nullptr;
     lod = std::clamp(lod, 0, (int)mesh.lods.size() - 1);
-    auto gm = m_r.CreateMesh(mesh.lods[lod], mesh.boundsMin, mesh.boundsMax);
+    auto gm = m_r.CreateMesh(mesh.lods[lod], mesh.boundsMin, mesh.boundsMax, dynamic);
     if (!gm) return nullptr;
     for (auto& slot : mesh.materials) gm->materials.push_back(loadMaterials ? Material(slot.materialPath) : std::make_shared<GpuMaterial>());
     return gm;

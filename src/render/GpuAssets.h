@@ -12,7 +12,7 @@ public:
     std::shared_ptr<GpuTexture> Texture(const std::string& path, bool forceLinear = false);
     std::shared_ptr<GpuMaterial> Material(const std::string& path);
     // Uploads one LOD of a decoded mesh with its material slots resolved.
-    std::shared_ptr<GpuMesh> Mesh(const MeshData& mesh, int lod, bool loadMaterials = true);
+    std::shared_ptr<GpuMesh> Mesh(const MeshData& mesh, int lod, bool loadMaterials = true, bool dynamic = false);
     // Loads a mesh asset by object path (cached; nullptr if it can't be decoded).
     std::shared_ptr<GpuMesh> MeshByPath(const std::string& path, int lod = 0);
 

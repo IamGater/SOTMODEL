@@ -3,6 +3,7 @@
 #include "render/GpuAssets.h"
 #include "ue/Material.h"
 #include "ue/Mesh.h"
+#include "ue/AnimPose.h"
 #include "export/Exporter.h"
 #include <thread>
 #include <condition_variable>
@@ -29,7 +30,7 @@ private:
     bool m_stop = false;
 };
 
-enum class DocView { Properties, Texture, Model, Material };
+enum class DocView { Properties, Texture, Model, Material, Animation };
 
 struct Document {
     u64 id = 0;
@@ -61,6 +62,15 @@ struct Document {
     Camera camera;
     DrawOptions draw;
 
+    // animation
+    std::shared_ptr<AnimSequenceData> anim;
+    std::shared_ptr<AnimPoser> poser;
+    std::string animMesh;          // mesh the animation is shown on
+    char animMeshEdit[512] = {};
+    float animTime = 0, animSpeed = 1;
+    bool animPlaying = true, animLoop = true, showBones = false;
+    std::vector<Vec3> boneLines;   // bone segments for the viewport (world space)
+
     // material
     bool hasMaterial = false;
     MaterialInfo material;
@@ -78,7 +88,8 @@ public:
     void Frame();   // builds the whole UI for one frame
     void Post(std::function<void()> fn);   // run on the UI thread next frame
     bool WantsQuit() const { return m_quit; }
-    bool Busy() const;   // something animating / loading: keep rendering frames
+    bool Busy() const;
+    bool Loading() const;   // archives mounting, jobs queued or documents loading   // something animating / loading: keep rendering frames
 
     ImFont* monoFont = nullptr;
     std::vector<std::string> openOnStart;   // asset paths from the command line
@@ -95,6 +106,9 @@ private:
     void DrawTexture(Document& d);
     void DrawModel(Document& d);
     void DrawMaterial(Document& d);
+    void DrawAnimation(Document& d);
+    void LoadAnimationMesh(std::shared_ptr<Document> d, std::string meshPath);
+    bool LoadAnimationMeshNow(Document& d, const std::string& meshPath);
     void DrawLog();
     void DrawSettings();
     void DrawStatusBar();

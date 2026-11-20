@@ -236,7 +236,7 @@ int RunGui(const std::vector<std::string>& args) {
             g_ctx->OMSetRenderTargets(1, &rtv, nullptr);
             g_ctx->ClearRenderTargetView(rtv, clear);
             ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
-            if (!screenshot.empty() && (GetTickCount64() - start) / 1000.0 >= delay && !app.Busy()) {
+            if (!screenshot.empty() && (GetTickCount64() - start) / 1000.0 >= delay && !app.Loading()) {
                 SaveBackBuffer(screenshot);
                 break;
             }

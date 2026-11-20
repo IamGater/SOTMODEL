@@ -71,8 +71,10 @@ or `/Game/Models/Props/Common/cmn_barrel_debris_02_a.cmn_barrel_debris_02_a`.
 | `preview_texture` | decoded texture as a PNG image + format info |
 | `get_mesh_info` | LODs, sections, material slots, bounds (and bones for skeletal meshes) |
 | `preview_mesh` | renders a mesh with its textures to a PNG (`yaw`/`pitch` orbit, `wireframe`, `lod`) |
+| `get_animation_info` | AnimSequence: frames, length, fps, compression, skeleton, animated bones (+ a mesh that can show it) |
+| `preview_animation` | contact sheet PNG of an animation posed on a skeletal mesh (found automatically or `mesh=`) |
 | `get_material` | material instance chain with every texture / scalar / vector parameter resolved |
-| `export` | write files: textures (PNG/DDS), meshes (glTF/OBJ), animations, JSON |
+| `export` | write files: textures (PNG/DDS), meshes (glTF/OBJ), animations (glTF with skeleton + skinned mesh), JSON |
 
 Typical flow: `search` → `get_package` → `get_properties` / `preview_*` → `export`.
 

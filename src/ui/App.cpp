@@ -123,6 +123,12 @@ bool App::Busy() const {
     return false;
 }
 
+bool App::Loading() const {
+    if (m_mountState == MountState::Mounting || (m_jobs && m_jobs->Pending() > 0)) return true;
+    for (auto& d : m_docs) if (d->loading) return true;
+    return false;
+}
+
 void App::Post(std::function<void()> fn) {
     {
         std::lock_guard lk(m_postMutex);
@@ -581,6 +587,47 @@ static void SplitLines(Document& d) {
         if (d.json[i] == '\n') d.lines.push_back(i + 1);
 }
 
+// Worker thread: skeleton + mesh + poser for an animation document. Returns false (and sets d.error) on failure.
+bool App::LoadAnimationMeshNow(Document& d, const std::string& meshPath) {
+    std::string err;
+    std::vector<Bone> skeleton;
+    auto sp = m_api->cache->LoadPath(d.anim->skeletonPath, &err);
+    i32 se = sp ? sp->MainExport() : 0;
+    if (!se || !ReadSkeleton(*sp, se - 1, skeleton, &err)) { d.error = "skeleton: " + err; return false; }
+    i64 entry = m_api->ResolveFile(meshPath);
+    auto mp = entry >= 0 ? m_api->cache->Load((u32)entry, &err) : nullptr;
+    auto mesh = std::make_shared<MeshData>();
+    if (!mp || !mp->MainExport() || !ReadMesh(*mp, mp->MainExport() - 1, *mesh, &err) || !mesh->skeletal) {
+        d.error = "mesh " + meshPath + ": " + (err.empty() ? "not a skeletal mesh" : err);
+        return false;
+    }
+    auto poser = std::make_shared<AnimPoser>();
+    if (!poser->Init(*mesh, skeleton, &err)) { d.error = err; return false; }
+    int lod = 0;
+    auto gm = m_assets->Mesh(*mesh, lod, true, true);
+    if (!gm) { d.error = "mesh has no geometry"; return false; }
+    d.mesh = mesh;
+    d.poser = poser;
+    d.gpuMesh = gm;
+    d.lod = lod;
+    d.animMesh = mesh->name.empty() ? meshPath : meshPath;
+    snprintf(d.animMeshEdit, sizeof(d.animMeshEdit), "%s", meshPath.c_str());
+    d.camera.Frame(mesh->boundsMin, mesh->boundsMax);
+    d.camera.yaw = -135;
+    d.draw.grid = m_settings.showGrid;
+    d.error.clear();
+    return true;
+}
+
+void App::LoadAnimationMesh(std::shared_ptr<Document> d, std::string meshPath) {
+    d->loading = true;
+    m_jobs->Push([this, d, meshPath] {
+        LoadAnimationMeshNow(*d, meshPath);
+        d->loading = false;
+        Post([] {});
+    });
+}
+
 void App::LoadDocument(std::shared_ptr<Document> d) {
     m_jobs->Push([this, d] {
         std::string err;
@@ -619,6 +666,17 @@ void App::LoadDocument(std::shared_ptr<Document> d) {
                 if (d->hasMesh) d->preferred = DocView::Model;
             } else {
                 d->error = "mesh: " + err;
+            }
+        } else if (main && IsAnimSequenceClass(d->className)) {
+            auto anim = std::make_shared<AnimSequenceData>();
+            if (ReadAnimSequence(*pkg, main - 1, *anim, &err)) {
+                d->anim = anim;
+                d->preferred = DocView::Animation;
+                std::string mesh = FindMeshForSkeleton(*m_api->cache, anim->skeletonPath);
+                if (!mesh.empty()) LoadAnimationMeshNow(*d, mesh);
+                else d->error = "no skeletal mesh found for " + anim->skeletonPath + " (enter one below)";
+            } else {
+                d->error = "animation: " + err;
             }
         } else if (main && IsMaterialClass(d->className) && d->className != "MaterialFunction") {
             std::string objPath = pkg->FullPath(main);
@@ -720,6 +778,7 @@ void App::DrawDocument(Document& d) {
     };
     if (d.texture && tab("Texture", DocView::Texture)) { DrawTexture(d); ImGui::EndTabItem(); }
     if (d.hasMesh && tab("Model", DocView::Model)) { DrawModel(d); ImGui::EndTabItem(); }
+    if (d.anim && tab("Animation", DocView::Animation)) { DrawAnimation(d); ImGui::EndTabItem(); }
     if (d.hasMaterial && tab("Material", DocView::Material)) { DrawMaterial(d); ImGui::EndTabItem(); }
     if (tab("Properties", DocView::Properties)) { DrawProperties(d); ImGui::EndTabItem(); }
     d.selectPreferred = false;
@@ -919,6 +978,7 @@ static void DrawViewport(Renderer& r, Document& d, ImVec2 size, bool allowFly) {
     }
     Mat4 id = Mat4::Identity();
     r.DrawMesh(*d.gpuMesh, &id, 1);
+    if (!d.boneLines.empty()) r.DrawLines(d.boneLines, 0xff40d0ffu);
     r.EndFrame();
     ImDrawList* dl = ImGui::GetWindowDrawList();
     dl->AddImage((ImTextureID)(intptr_t)r.Output(), p0, ImVec2(p0.x + size.x, p0.y + size.y));
@@ -978,6 +1038,70 @@ void App::DrawModel(Document& d) {
     }
     if (m.skeletal) ImGui::TextDisabled("%zu bones", m.skeleton.size());
     ImGui::EndChild();
+}
+
+void App::DrawAnimation(Document& d) {
+    auto& a = *d.anim;
+    float fps = a.FrameRate();
+    // toolbar: transport + options
+    if (ImGui::Button(d.animPlaying ? "Pause" : "Play")) d.animPlaying = !d.animPlaying;
+    ImGui::SameLine();
+    float frame = d.animTime * fps;
+    ImGui::SetNextItemWidth(std::max(120.f, ImGui::GetContentRegionAvail().x - 520));
+    if (ImGui::SliderFloat("##frame", &frame, 0, (float)std::max(0, a.numFrames - 1), "frame %.1f")) {
+        d.animTime = frame / fps;
+        d.animPlaying = false;
+    }
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(90);
+    ImGui::SliderFloat("##speed", &d.animSpeed, 0.05f, 2.f, "speed %.2fx");
+    ImGui::SameLine();
+    ImGui::Checkbox("Loop", &d.animLoop);
+    ImGui::SameLine();
+    ImGui::Checkbox("Bones", &d.showBones);
+    ImGui::SameLine();
+    ImGui::Checkbox("Textures", &d.draw.textures);
+    ImGui::SameLine();
+    ImGui::Checkbox("Grid", &d.draw.grid);
+    ImGui::TextDisabled("%d frames, %.2f s, %.1f fps | %s | %zu tracks%s | skeleton %s", a.numFrames, a.length, fps, a.encoding.c_str(), a.tracks.size(),
+                        a.additiveType != "AAT_None" ? (" | additive " + a.additiveType).c_str() : "", a.skeletonPath.c_str());
+    ImGui::SetNextItemWidth(-140);
+    bool apply = ImGui::InputTextWithHint("##animmesh", "skeletal mesh to preview on (/Game/... path)", d.animMeshEdit, sizeof(d.animMeshEdit), ImGuiInputTextFlags_EnterReturnsTrue);
+    ImGui::SameLine();
+    apply |= ImGui::Button("Use mesh");
+    if (apply && d.animMeshEdit[0]) {
+        for (auto& sp : m_docs)
+            if (sp.get() == &d) { LoadAnimationMesh(sp, d.animMeshEdit); break; }
+        return;
+    }
+    if (!d.poser || !d.gpuMesh || !d.mesh) {
+        ImGui::TextDisabled("No mesh to show the animation on.");
+        return;
+    }
+    // advance time and pose the mesh (CPU skinning into the dynamic vertex buffer)
+    if (d.animPlaying && a.length > 0) {
+        d.animTime += ImGui::GetIO().DeltaTime * d.animSpeed;
+        if (d.animTime > a.length) d.animTime = d.animLoop ? fmodf(d.animTime, a.length) : a.length;
+        if (!d.animLoop && d.animTime >= a.length) d.animPlaying = false;
+        m_busyFrames = 3;
+    }
+    std::vector<Bone> pose;
+    d.poser->MeshPose(a, d.animTime * fps, pose);
+    std::vector<Vec3> pos, nrm;
+    const MeshLod& lod = d.mesh->lods[std::clamp(d.lod, 0, (int)d.mesh->lods.size() - 1)];
+    d.poser->Skin(lod, pose, pos, nrm);
+    m_renderer->UpdateMeshVertices(*d.gpuMesh, pos, nrm);
+    d.boneLines.clear();
+    if (d.showBones) {
+        std::vector<Mat4> world;
+        AnimPoser::WorldMatrices(pose, world);
+        for (size_t i = 0; i < pose.size(); i++)
+            if (pose[i].parent >= 0) {
+                d.boneLines.push_back(world[pose[i].parent].Translation());
+                d.boneLines.push_back(world[i].Translation());
+            }
+    }
+    DrawViewport(*m_renderer, d, ImGui::GetContentRegionAvail(), true);
 }
 
 void App::DrawMaterial(Document& d) {

@@ -34,6 +34,7 @@ struct GpuMesh {
     float radius = 0;
     u32 vertexCount = 0, triangleCount = 0;
     size_t gpuBytes = 0;
+    Bytes cpuVertices;   // dynamic meshes (animation playback): CPU copy of the vertex buffer
 };
 
 struct Camera {
@@ -64,12 +65,15 @@ public:
 
     // Creation functions only touch the device (free threaded): safe to call from worker threads.
     std::shared_ptr<GpuTexture> CreateTexture(const Image& img, bool srgb, bool mips) const;
-    std::shared_ptr<GpuMesh> CreateMesh(const MeshLod& lod, const Vec3& bmin, const Vec3& bmax) const;
+    std::shared_ptr<GpuMesh> CreateMesh(const MeshLod& lod, const Vec3& bmin, const Vec3& bmax, bool dynamic = false) const;
+    // Dynamic meshes only (main thread): replace positions / normals, e.g. after CPU skinning.
+    void UpdateMeshVertices(GpuMesh& mesh, const std::vector<Vec3>& positions, const std::vector<Vec3>& normals);
 
     // Viewport rendering into an offscreen target (main thread).
     void BeginFrame(int width, int height, const Camera& cam, const DrawOptions& opt);
     void DrawMesh(const GpuMesh& mesh, const Mat4* instances, u32 count);
     void DrawGrid(float cellSize, int cells);
+    void DrawLines(const std::vector<Vec3>& segments, u32 colorAbgr);   // pairs of points, drawn on top
     void EndFrame();
     ID3D11ShaderResourceView* Output() const { return m_outSrv.Get(); }
     bool ReadOutput(Image& out);   // CPU readback of the last frame (RGBA8, gamma encoded)
@@ -91,7 +95,9 @@ private:
     int m_gridCells = 0;
     ComPtr<ID3D11SamplerState> m_sampler;
     ComPtr<ID3D11RasterizerState> m_rsSolid[2], m_rsWire;   // [cull back, none]
-    ComPtr<ID3D11DepthStencilState> m_depth;
+    ComPtr<ID3D11DepthStencilState> m_depth, m_noDepth;
+    ComPtr<ID3D11Buffer> m_lineVb;
+    u32 m_lineCap = 0;
     ComPtr<ID3D11BlendState> m_opaqueBlend, m_lineBlend;
     std::shared_ptr<GpuTexture> m_white, m_flatNormal;
 

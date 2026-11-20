@@ -186,6 +186,9 @@ bool Renderer::Init(ID3D11Device* device, ID3D11DeviceContext* ctx, std::string*
     dd.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ALL;
     dd.DepthFunc = D3D11_COMPARISON_GREATER_EQUAL;   // reversed Z
     m_dev->CreateDepthStencilState(&dd, &m_depth);
+    dd.DepthEnable = FALSE;
+    dd.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ZERO;
+    m_dev->CreateDepthStencilState(&dd, &m_noDepth);
 
     D3D11_BLEND_DESC bd = {};
     bd.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
@@ -273,7 +276,7 @@ std::shared_ptr<GpuTexture> Renderer::CreateTexture(const Image& img, bool srgb,
     return t;
 }
 
-std::shared_ptr<GpuMesh> Renderer::CreateMesh(const MeshLod& lod, const Vec3& bmin, const Vec3& bmax) const {
+std::shared_ptr<GpuMesh> Renderer::CreateMesh(const MeshLod& lod, const Vec3& bmin, const Vec3& bmax, bool dynamic) const {
     u32 n = lod.VertexCount();
     if (!n || lod.indices.empty()) return nullptr;
     std::vector<MeshVertex> v(n);
@@ -290,11 +293,18 @@ std::shared_ptr<GpuMesh> Renderer::CreateMesh(const MeshLod& lod, const Vec3& bm
     }
     auto m = std::make_shared<GpuMesh>();
     D3D11_BUFFER_DESC bd = {};
-    bd.Usage = D3D11_USAGE_IMMUTABLE;
+    bd.Usage = dynamic ? D3D11_USAGE_DYNAMIC : D3D11_USAGE_IMMUTABLE;
+    bd.CPUAccessFlags = dynamic ? D3D11_CPU_ACCESS_WRITE : 0;
     bd.BindFlags = D3D11_BIND_VERTEX_BUFFER;
     bd.ByteWidth = (UINT)(v.size() * sizeof(MeshVertex));
     D3D11_SUBRESOURCE_DATA sd = {v.data()};
     if (FAILED(m_dev->CreateBuffer(&bd, &sd, &m->vb))) return nullptr;
+    if (dynamic) {
+        m->cpuVertices.resize(v.size() * sizeof(MeshVertex));
+        memcpy(m->cpuVertices.data(), v.data(), m->cpuVertices.size());
+    }
+    bd.Usage = D3D11_USAGE_IMMUTABLE;
+    bd.CPUAccessFlags = 0;
     bd.BindFlags = D3D11_BIND_INDEX_BUFFER;
     bd.ByteWidth = (UINT)(lod.indices.size() * 4);
     sd.pSysMem = lod.indices.data();
@@ -482,6 +492,57 @@ void Renderer::DrawGrid(float cellSize, int cells) {
     m_ctx->OMSetBlendState(m_lineBlend.Get(), nullptr, 0xffffffff);
     m_ctx->Draw(m_gridVerts, 0);
     m_ctx->OMSetBlendState(m_opaqueBlend.Get(), nullptr, 0xffffffff);
+}
+
+void Renderer::UpdateMeshVertices(GpuMesh& mesh, const std::vector<Vec3>& pos, const std::vector<Vec3>& nrm) {
+    if (mesh.cpuVertices.empty() || pos.size() != mesh.vertexCount) return;
+    MeshVertex* v = (MeshVertex*)mesh.cpuVertices.data();
+    for (u32 i = 0; i < mesh.vertexCount; i++) {
+        v[i].pos[0] = pos[i].x; v[i].pos[1] = pos[i].y; v[i].pos[2] = pos[i].z;
+        if (i < nrm.size()) { v[i].nrm[0] = nrm[i].x; v[i].nrm[1] = nrm[i].y; v[i].nrm[2] = nrm[i].z; }
+    }
+    D3D11_MAPPED_SUBRESOURCE ms;
+    if (SUCCEEDED(m_ctx->Map(mesh.vb.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &ms))) {
+        memcpy(ms.pData, mesh.cpuVertices.data(), mesh.cpuVertices.size());
+        m_ctx->Unmap(mesh.vb.Get(), 0);
+    }
+}
+
+void Renderer::DrawLines(const std::vector<Vec3>& segments, u32 color) {
+    if (segments.size() < 2) return;
+    u32 n = (u32)(segments.size() & ~(size_t)1);
+    if (n > m_lineCap) {
+        m_lineVb.Reset();
+        D3D11_BUFFER_DESC bd = {};
+        bd.Usage = D3D11_USAGE_DYNAMIC;
+        bd.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+        bd.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+        bd.ByteWidth = std::max(n, 1024u) * sizeof(LineVertex);
+        if (FAILED(m_dev->CreateBuffer(&bd, nullptr, &m_lineVb))) return;
+        m_lineCap = std::max(n, 1024u);
+    }
+    D3D11_MAPPED_SUBRESOURCE ms;
+    if (FAILED(m_ctx->Map(m_lineVb.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &ms))) return;
+    LineVertex* lv = (LineVertex*)ms.pData;
+    for (u32 i = 0; i < n; i++) lv[i] = {{segments[i].x, segments[i].y, segments[i].z}, color};
+    m_ctx->Unmap(m_lineVb.Get(), 0);
+    float scale[4] = {1, 0, 0, 0};
+    if (FAILED(m_ctx->Map(m_materialCb.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &ms))) return;
+    memcpy(ms.pData, scale, sizeof(scale));
+    m_ctx->Unmap(m_materialCb.Get(), 0);
+    m_ctx->IASetInputLayout(m_lineLayout.Get());
+    m_ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_LINELIST);
+    ID3D11Buffer* vb = m_lineVb.Get();
+    UINT stride = sizeof(LineVertex), off = 0;
+    m_ctx->IASetVertexBuffers(0, 1, &vb, &stride, &off);
+    m_ctx->VSSetShader(m_lineVs.Get(), nullptr, 0);
+    m_ctx->PSSetShader(m_linePs.Get(), nullptr, 0);
+    ID3D11Buffer* cbs[2] = {m_frameCb.Get(), m_materialCb.Get()};
+    m_ctx->VSSetConstantBuffers(0, 2, cbs);
+    m_ctx->RSSetState(m_rsSolid[1].Get());
+    m_ctx->OMSetDepthStencilState(m_noDepth.Get(), 0);   // bones are drawn on top of the mesh
+    m_ctx->Draw(n, 0);
+    m_ctx->OMSetDepthStencilState(m_depth.Get(), 0);
 }
 
 bool Renderer::ReadOutput(Image& out) {
