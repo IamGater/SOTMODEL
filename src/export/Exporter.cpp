@@ -4,6 +4,7 @@
 #include "export/Png.h"
 #include "export/MeshExport.h"
 #include "ue/Mesh.h"
+#include "ue/AnimPose.h"
 
 std::wstring ExportPathFor(const ExportOptions& opt, const Package& pkg, const std::wstring& ext) {
     std::string rel = pkg.GamePath();
@@ -102,6 +103,31 @@ bool ExportPackage(PackageCache& cache, const Package& pkg, const ExportOptions&
             Bytes glb;
             if (!ExportMeshGlb(cache, mesh, mo, glb, &err)) { ok = false; if (error) *error = err; }
             else ok &= WriteOut(ExportPathFor(opt, pkg, L".glb"), glb.data(), glb.size(), written);
+        }
+    } else if (IsAnimSequenceClass(cls)) {
+        std::string err;
+        AnimSequenceData anim;
+        std::vector<Bone> skeleton;
+        if (!ReadAnimSequence(pkg, main - 1, anim, &err)) { ok = false; if (error) *error = err; }
+        else {
+            auto sp = cache.LoadPath(anim.skeletonPath, &err);
+            i32 se = sp ? sp->MainExport() : 0;
+            if (!se || !ReadSkeleton(*sp, se - 1, skeleton, &err)) { ok = false; if (error) *error = "skeleton: " + err; }
+            else {
+                MeshData mesh;
+                bool withMesh = false;
+                if (opt.animationMesh) {
+                    std::string mp = FindMeshForSkeleton(cache, anim.skeletonPath);
+                    auto mpkg = mp.empty() ? nullptr : cache.LoadPath(mp);
+                    withMesh = mpkg && mpkg->MainExport() && ReadMesh(*mpkg, mpkg->MainExport() - 1, mesh);
+                }
+                MeshExportOptions mo;
+                mo.maxTextureSize = opt.maxTextureSize ? opt.maxTextureSize : 1024;
+                mo.embedTextures = opt.embedTextures;
+                Bytes glb;
+                if (!ExportAnimationGlb(cache, anim, skeleton, withMesh ? &mesh : nullptr, mo, glb, &err)) { ok = false; if (error) *error = err; }
+                else ok &= WriteOut(ExportPathFor(opt, pkg, L".glb"), glb.data(), glb.size(), written);
+            }
         }
     }
     if (opt.json) {

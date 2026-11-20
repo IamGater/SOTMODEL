@@ -1,6 +1,7 @@
 #pragma once
 #include "export/Gltf.h"
 #include "ue/Material.h"
+#include "ue/Animation.h"
 #include <map>
 
 struct MeshExportOptions {
@@ -29,3 +30,7 @@ bool ExportMeshObj(const MeshData& mesh, int lod, std::string& obj, std::string&
 
 // Decodes a texture asset by object path into PNG (downscaled to maxSize when > 0).
 bool TextureToPng(PackageCache& cache, const std::string& path, int maxSize, Bytes& png, std::string* error = nullptr);
+
+// Animation as glTF: skeleton joints (+ the skinned mesh when given) and one animation clip.
+bool ExportAnimationGlb(PackageCache& cache, const AnimSequenceData& anim, const std::vector<Bone>& skeleton, const MeshData* mesh, const MeshExportOptions& opt,
+                        Bytes& out, std::string* error);

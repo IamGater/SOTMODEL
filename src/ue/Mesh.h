@@ -17,7 +17,7 @@ struct MeshSection {
     u32 numTriangles = 0;
     u32 minVertex = 0, maxVertex = 0;
     bool castShadow = true;
-    u32 baseVertex = 0;   // skeletal: chunk base
+    u32 baseVertex = 0;   // added to the section's indices (0: indices are absolute)
 };
 
 // Renderable LOD shared by static and skeletal meshes (Unreal space, cm).

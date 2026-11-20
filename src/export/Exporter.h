@@ -10,6 +10,7 @@ struct ExportOptions {
     bool json = true;
     bool embedTextures = true;   // glTF: embed material textures
     int maxTextureSize = 0;      // embedded textures: 0 = full resolution
+    bool animationMesh = true;   // animations: include a skinned mesh using the same skeleton
 };
 
 std::wstring ExportPathFor(const ExportOptions& opt, const Package& pkg, const std::wstring& ext);

@@ -182,7 +182,6 @@ void ReadLod(Reader& r, MeshLod& lod, bool hasVertexColors, bool filterEditorOnl
         ms.materialIndex = s.material;
         ms.firstIndex = s.baseIndex;
         ms.numTriangles = s.numTriangles;
-        if (s.chunk < chunks.size()) ms.baseVertex = chunks[s.chunk].baseVertex;
         if ((u64)ms.firstIndex + (u64)ms.numTriangles * 3 > lod.indices.size()) throw ParseError("section outside index buffer");
         lod.sections.push_back(ms);
     }

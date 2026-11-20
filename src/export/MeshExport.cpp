@@ -104,3 +104,42 @@ bool ExportMeshObj(const MeshData& mesh, int lodIndex, std::string& obj, std::st
     for (auto& m : mesh.materials) mtl += "newmtl " + m.name + "\nKd 0.8 0.8 0.8\n# " + m.materialPath + "\n\n";
     return true;
 }
+
+bool ExportAnimationGlb(PackageCache& cache, const AnimSequenceData& anim, const std::vector<Bone>& skeleton, const MeshData* mesh, const MeshExportOptions& opt,
+                        Bytes& out, std::string* error) {
+    if (skeleton.empty()) { if (error) *error = "skeleton has no bones"; return false; }
+    GltfBuilder g;
+    // joints: the mesh's bones when a mesh is included (so it deforms), otherwise the animation skeleton itself
+    const std::vector<Bone>& joints = mesh && mesh->skeletal && !mesh->skeleton.empty() ? mesh->skeleton : skeleton;
+    std::vector<int> boneNodes;
+    int skin = g.AddSkin(joints, -1, &boneNodes);
+    if (mesh && &joints == &mesh->skeleton && !mesh->lods.empty()) {
+        GltfMaterialResolver mats(cache, g, opt);
+        std::vector<int> map = mats.ResolveAll(*mesh);
+        int meshIdx = g.AddMesh(*mesh, std::clamp(opt.lod, 0, (int)mesh->lods.size() - 1), map, true);
+        int node = g.AddNode(mesh->name, meshIdx);
+        g.SetNodeSkin(node, skin);
+    }
+    // skeleton bone index -> joint index (by name)
+    std::vector<int> toJoint(skeleton.size(), -1);
+    for (size_t s = 0; s < skeleton.size(); s++)
+        for (size_t j = 0; j < joints.size(); j++)
+            if (IEquals(skeleton[s].name, joints[j].name)) { toJoint[s] = (int)j; break; }
+    std::vector<float> times(anim.numFrames);
+    for (int f = 0; f < anim.numFrames; f++) times[f] = anim.numFrames > 1 ? f * anim.length / (anim.numFrames - 1) : 0.f;
+    std::vector<GltfBuilder::Track> tracks;
+    for (auto& t : anim.tracks) {
+        if (t.bone < 0 || t.bone >= (i32)toJoint.size() || toJoint[t.bone] < 0) continue;
+        GltfBuilder::Track tr;
+        tr.node = boneNodes[toJoint[t.bone]];
+        tr.times = times;
+        tr.translations = t.translation;
+        tr.rotations = t.rotation;
+        tr.scales = t.scale;
+        tracks.push_back(std::move(tr));
+    }
+    if (tracks.empty()) { if (error) *error = "no animated bone matches the skeleton"; return false; }
+    g.AddAnimation(anim.name, tracks);
+    out = g.Finish();
+    return true;
+}
