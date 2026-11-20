@@ -4,12 +4,14 @@
 #include <shellapi.h>
 
 int RunGui();
+int RunMcp();
 
 int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     int argc = 0;
     wchar_t** argv = CommandLineToArgvW(GetCommandLineW(), &argc);
     int rc;
     if (argc >= 2 && wcscmp(argv[1], L"--cli") == 0) rc = RunCli(argc, argv);
+    else if (argc >= 2 && wcscmp(argv[1], L"--mcp") == 0) rc = RunMcp();
     else rc = RunGui();
     LocalFree(argv);
     return rc;
