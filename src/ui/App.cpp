@@ -6,6 +6,7 @@
 #include <shellapi.h>
 #include <shlobj.h>
 #include <psapi.h>
+#include <array>
 #include <chrono>
 
 // ---------------------------------------------------------------- jobs
@@ -305,7 +306,7 @@ void App::Frame() {
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6, 6));
         DrawLeftPanel(cellH);
         ImGui::TableNextColumn();
-        float split = 8;
+        float split = std::round(ImGui::GetFontSize() * 0.9f);   // FModel-style strip between the tabs and the log
         if (m_logFrac <= 0) m_logFrac = 0.2f;
         float logH = m_showLog ? std::clamp(m_logFrac * cellH, 48.f, std::max(48.f, cellH * 0.6f)) : 0;
         // the splitter and the log are two more items: account for the spacing before each so the column does not overflow
@@ -316,10 +317,17 @@ void App::Frame() {
         if (m_showLog) {
             ImGui::InvisibleButton("##logsplit", ImVec2(-FLT_MIN, split));
             if (ImGui::IsItemActive()) m_logFrac = std::clamp((logH - ImGui::GetIO().MouseDelta.y) / std::max(1.f, cellH), 0.08f, 0.6f);
-            if (ImGui::IsItemHovered() || ImGui::IsItemActive()) ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
+            bool hot = ImGui::IsItemHovered() || ImGui::IsItemActive();
+            if (hot) ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
             ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
             ImVec2 c((a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f);
-            ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(c.x - 14, c.y - 1), ImVec2(c.x + 14, c.y + 1), IM_COL32(120, 124, 145, 255));
+            ImDrawList* sdl = ImGui::GetWindowDrawList();
+            sdl->AddRectFilled(a, b, hot ? IM_COL32(52, 54, 66, 255) : IM_COL32(42, 43, 52, 255));
+            // up / down arrows: the strip resizes the log
+            float k = (b.y - a.y) * 0.32f;
+            ImU32 ac = IM_COL32(200, 201, 212, 255);
+            sdl->AddTriangleFilled(ImVec2(c.x - 4 - k * 0.6f, c.y - 1), ImVec2(c.x - 4 + k * 0.6f, c.y - 1), ImVec2(c.x - 4, c.y - 1 - k), ac);
+            sdl->AddTriangleFilled(ImVec2(c.x + 4 - k * 0.6f, c.y + 1), ImVec2(c.x + 4 + k * 0.6f, c.y + 1), ImVec2(c.x + 4, c.y + 1 + k), ac);
             DrawLog(logH);
         }
         ImGui::PopStyleVar();
@@ -524,11 +532,13 @@ void App::DrawLeftPanel(float height) {
             if (ImGui::InvisibleButton("##t", ImVec2(w, h))) m_leftTab = i;
             ImGui::PopID();
             bool sel = m_leftTab == i;
-            dl->AddRectFilled(p, ImVec2(p.x + w, p.y + h), sel ? IM_COL32(58, 61, 80, 255) : ImGui::IsItemHovered() ? IM_COL32(44, 47, 63, 255) : IM_COL32(32, 34, 46, 255));
+            dl->AddRectFilled(p, ImVec2(p.x + w, p.y + h), sel ? IM_COL32(59, 61, 74, 255) : ImGui::IsItemHovered() ? IM_COL32(48, 49, 60, 255) : IM_COL32(38, 38, 48, 255));
             ImVec2 ts = ImGui::CalcTextSize(labels[i].c_str());
             dl->AddText(ImVec2(p.x + (w - ts.x) * 0.5f, p.y + (h - ts.y) * 0.5f), ImGui::GetColorU32(ImGuiCol_Text), labels[i].c_str());
         }
-        ImGui::SetCursorScreenPos(ImVec2(p0.x, p0.y + h + st.ItemSpacing.y));
+        // the strip under the tab row continues the selected tab's colour (FModel's tab control border)
+        dl->AddRectFilled(ImVec2(p0.x, p0.y + h), ImVec2(p0.x + w * 3, p0.y + h + 2), IM_COL32(59, 61, 74, 255));
+        ImGui::SetCursorScreenPos(ImVec2(p0.x, p0.y + h + 2 + st.ItemSpacing.y));
     }
     bool showInfo = height > ImGui::GetFontSize() * 28;
     float infoH = showInfo ? ImGui::GetTextLineHeightWithSpacing() * 5 + ImGui::GetFrameHeight() + 12 : 0;
@@ -539,9 +549,52 @@ void App::DrawLeftPanel(float height) {
         if (m_mountState == MountState::Ready) {
             auto& folders = m_api->vfs.Folders();
             if (!folders.empty()) {
-                ImGui::TextDisabled("'%s' has %zu folders and %zu packages", m_folder ? cur->name.c_str() : "/", cur->folders.size(), cur->files.size());
+                // header: summary of the current folder, "locate" and "collapse all" on the right
+                float u = ImGui::GetFontSize() / 16.f, bs = ImGui::GetFrameHeight();
+                ImDrawList* hdl = ImGui::GetWindowDrawList();
+                ImVec2 hp = ImGui::GetCursorScreenPos();
+                float hw = ImGui::GetContentRegionAvail().x;
+                DrawFolderIcon(hdl, ImVec2(hp.x + 2 * u, hp.y + bs * 0.5f));
+                ImGui::SetCursorScreenPos(ImVec2(hp.x + 22 * u, hp.y));
+                ImGui::AlignTextToFramePadding();
+                ImGui::PushClipRect(ImVec2(hp.x, hp.y), ImVec2(hp.x + hw - bs * 2 - 8 * u, hp.y + bs), true);
+                ImGui::Text("'%s' has %zu folders and %zu packages", m_folder ? cur->name.c_str() : "Root", cur->folders.size(), cur->files.size());
+                ImGui::PopClipRect();
+                auto iconButton = [&](const char* id, float x, const char* tip) {
+                    ImGui::SetCursorScreenPos(ImVec2(x, hp.y));
+                    bool r = ImGui::InvisibleButton(id, ImVec2(bs, bs));
+                    if (ImGui::IsItemHovered()) {
+                        hdl->AddRectFilled(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), IM_COL32(59, 61, 74, 255), 3 * u);
+                        ImGui::SetTooltip("%s", tip);
+                    }
+                    return r;
+                };
+                ImU32 ic = IM_COL32(220, 221, 230, 255);
+                float bx = hp.x + hw - bs * 2 - 2 * u;
+                if (iconButton("##locate", bx, "Show the current folder")) m_treeFolder = UINT32_MAX;
+                {   // crosshair
+                    ImVec2 c(bx + bs * 0.5f, hp.y + bs * 0.5f);
+                    hdl->AddCircle(c, bs * 0.22f, ic, 0, 1.5f * u);
+                    hdl->AddCircleFilled(c, 1.8f * u, ic);
+                    for (int k = 0; k < 4; k++) {
+                        ImVec2 d(k == 0 ? 1.f : k == 1 ? -1.f : 0.f, k == 2 ? 1.f : k == 3 ? -1.f : 0.f);
+                        hdl->AddLine(ImVec2(c.x + d.x * bs * 0.22f, c.y + d.y * bs * 0.22f), ImVec2(c.x + d.x * bs * 0.36f, c.y + d.y * bs * 0.36f), ic, 1.5f * u);
+                    }
+                }
+                if (iconButton("##collapse", bx + bs, "Collapse all")) m_collapseTree = true;
+                {   // two chevrons pointing at each other
+                    ImVec2 c(bx + bs * 1.5f, hp.y + bs * 0.5f);
+                    float a = bs * 0.16f;
+                    hdl->AddPolyline(std::array<ImVec2, 3>{ImVec2(c.x - a, c.y - a * 1.9f), ImVec2(c.x, c.y - a * 0.7f), ImVec2(c.x + a, c.y - a * 1.9f)}.data(), 3, ic, 0, 1.5f * u);
+                    hdl->AddPolyline(std::array<ImVec2, 3>{ImVec2(c.x - a, c.y + a * 1.9f), ImVec2(c.x, c.y + a * 0.7f), ImVec2(c.x + a, c.y + a * 1.9f)}.data(), 3, ic, 0, 1.5f * u);
+                }
+                ImGui::SetCursorScreenPos(ImVec2(hp.x, hp.y + bs + ImGui::GetStyle().ItemSpacing.y));
                 ImGui::Separator();
                 ImGui::BeginChild("##tree");
+                if (m_collapseTree) {   // forget every node's open state
+                    ImGui::GetStateStorage()->Clear();
+                    m_collapseTree = false;
+                }
                 for (u32 c : folders[0].folders) DrawFolderTree(c);
                 m_treeFolder = m_folder;
                 ImGui::EndChild();
@@ -650,34 +703,84 @@ void App::DrawFileMenu(u32 e, bool searching) {
     }
 }
 
-// FModel "new explorer": tiles for folders and packages of the selected folder (or the search results)
+// Explorer in the style of FModel's tiled explorer: folder cards and package cards (own vector icons, no FModel artwork)
 static ImU32 FileTint(std::string_view name) {
-    if (IEndsWith(name, ".umap")) return IM_COL32(255, 165, 0, 255);
-    if (IEndsWith(name, ".uasset")) return IM_COL32(30, 144, 255, 255);
-    if (IEndsWith(name, ".ubulk") || IEndsWith(name, ".uexp")) return IM_COL32(147, 112, 219, 255);
-    return IM_COL32(255, 235, 0, 255);
+    if (IEndsWith(name, ".umap")) return IM_COL32(255, 160, 40, 255);
+    if (IEndsWith(name, ".uasset")) return IM_COL32(40, 150, 255, 255);
+    if (IEndsWith(name, ".ubulk") || IEndsWith(name, ".uexp")) return IM_COL32(160, 120, 235, 255);
+    return IM_COL32(245, 215, 40, 255);
 }
 
-static void DrawBigFolder(ImDrawList* dl, ImVec2 mn, ImVec2 mx) {
-    float w = mx.x - mn.x, h = mx.y - mn.y;
-    float fw = std::min(w * 0.62f, h * 0.8f / 0.72f), fh = fw * 0.72f;   // fits wide (stretched) tiles too
-    ImVec2 p(mn.x + (w - fw) * 0.5f, mn.y + (h - fh) * 0.5f);
-    dl->AddRectFilled(p, ImVec2(p.x + fw * 0.42f, p.y + fh * 0.3f), IM_COL32(215, 170, 100, 255), fw * 0.06f);
-    dl->AddRectFilled(ImVec2(p.x, p.y + fh * 0.12f), ImVec2(p.x + fw, p.y + fh), IM_COL32(236, 196, 140, 255), fw * 0.08f);
-    dl->AddRectFilled(ImVec2(p.x, p.y + fh * 0.12f), ImVec2(p.x + fw, p.y + fh * 0.22f), IM_COL32(222, 178, 112, 255), fw * 0.05f, ImDrawFlags_RoundCornersTop);
+static ImU32 Shade(ImU32 c, float k) {
+    ImVec4 v = ImGui::ColorConvertU32ToFloat4(c);
+    return ImGui::ColorConvertFloat4ToU32(ImVec4(v.x * k, v.y * k, v.z * k, v.w));
 }
 
-static void DrawBigFile(ImDrawList* dl, ImVec2 mn, ImVec2 mx, ImU32 col) {
-    float w = mx.x - mn.x, h = mx.y - mn.y;
-    float fw = std::min(w * 0.3f, h * 0.6f / 1.25f), fh = fw * 1.25f, c = fw * 0.3f;
-    ImVec2 p(mn.x + (w - fw) * 0.5f, mn.y + (h - fh) * 0.5f);
-    dl->AddRectFilled(p, ImVec2(p.x + fw, p.y + fh), col, 3);
-    dl->AddTriangleFilled(ImVec2(p.x + fw - c, p.y), ImVec2(p.x + fw, p.y), ImVec2(p.x + fw, p.y + c), IM_COL32(24, 25, 34, 255));
-    for (int r = 0; r < 3; r++)
-        for (int k = 0; k < 2; k++) {
-            float gx = p.x + fw * 0.2f + k * fw * 0.33f, gy = p.y + fh * 0.45f + r * fh * 0.17f;
-            dl->AddRectFilled(ImVec2(gx, gy), ImVec2(gx + fw * 0.27f, gy + fh * 0.13f), IM_COL32(24, 25, 34, 255));
+// Folder: back panel with a tab, lighter front panel, thin darker outline
+static void DrawBigFolder(ImDrawList* dl, ImVec2 c, float size) {
+    float w = size, h = size * 0.74f, r = size * 0.07f;
+    ImVec2 p(c.x - w * 0.5f, c.y - h * 0.5f);
+    ImU32 back = IM_COL32(222, 172, 96, 255), front = IM_COL32(242, 204, 140, 255), line = IM_COL32(200, 150, 80, 255);
+    dl->AddRectFilled(p, ImVec2(p.x + w * 0.4f, p.y + h * 0.25f), back, r);
+    dl->AddRectFilled(ImVec2(p.x, p.y + h * 0.12f), ImVec2(p.x + w, p.y + h), back, r);
+    dl->AddRectFilled(ImVec2(p.x, p.y + h * 0.3f), ImVec2(p.x + w, p.y + h), front, r);
+    dl->AddRect(ImVec2(p.x, p.y + h * 0.3f), ImVec2(p.x + w, p.y + h), line, r, 0, std::max(1.f, size / 64));
+}
+
+// Per type glyphs: map (.umap), cube (.uasset), sheet with lines (anything else)
+static void DrawFileGlyph(ImDrawList* dl, ImVec2 c, float size, std::string_view name, ImU32 col, ImU32 bg) {
+    float s = size;
+    if (IEndsWith(name, ".umap")) {   // folded map: three slanted panels
+        float w = s * 0.9f, h = s * 0.7f, x0 = c.x - w * 0.5f, y0 = c.y - h * 0.5f, pw = w / 3, k = h * 0.1f;
+        for (int i = 0; i < 3; i++) {
+            float xa = x0 + pw * i, xb = xa + pw;
+            float ya = (i % 2) ? k : 0, yb = (i % 2) ? 0 : k;
+            ImU32 pc = (i % 2) ? Shade(col, 0.8f) : col;
+            dl->AddQuadFilled(ImVec2(xa, y0 + ya), ImVec2(xb, y0 + yb), ImVec2(xb, y0 + h + yb - k), ImVec2(xa, y0 + h + ya - k), pc);
         }
+        dl->AddCircleFilled(ImVec2(x0 + pw * 1.5f, y0 + h * 0.42f), s * 0.08f, bg);
+        return;
+    }
+    if (IEndsWith(name, ".uasset")) {   // isometric cube, three shaded faces
+        float r = s * 0.45f;
+        ImVec2 top(c.x, c.y - r), ul(c.x - r * 0.87f, c.y - r * 0.5f), ur(c.x + r * 0.87f, c.y - r * 0.5f), mid = c;
+        ImVec2 bl(c.x - r * 0.87f, c.y + r * 0.5f), br(c.x + r * 0.87f, c.y + r * 0.5f), bot(c.x, c.y + r);
+        dl->AddQuadFilled(top, ur, mid, ul, Shade(col, 1.15f));
+        dl->AddQuadFilled(ul, mid, bot, bl, col);
+        dl->AddQuadFilled(mid, ur, br, bot, Shade(col, 0.72f));
+        return;
+    }
+    float w = s * 0.62f, h = s * 0.8f, fold = w * 0.3f;   // sheet with a folded corner and text lines
+    ImVec2 p(c.x - w * 0.5f, c.y - h * 0.5f);
+    dl->AddRectFilled(p, ImVec2(p.x + w - fold, p.y + h), col, s * 0.04f);
+    dl->AddRectFilled(ImVec2(p.x + w - fold - 1, p.y + fold), ImVec2(p.x + w, p.y + h), col, s * 0.04f);
+    dl->AddTriangleFilled(ImVec2(p.x + w - fold, p.y), ImVec2(p.x + w, p.y + fold), ImVec2(p.x + w - fold, p.y + fold), Shade(col, 0.7f));
+    for (int i = 0; i < 3; i++) {
+        float ly = p.y + h * (0.45f + i * 0.15f);
+        dl->AddRectFilled(ImVec2(p.x + w * 0.18f, ly), ImVec2(p.x + w * (i == 2 ? 0.55f : 0.82f), ly + s * 0.05f), bg);
+    }
+}
+
+// Text helpers for cards (font + size pushed by the caller)
+static void CardText(ImDrawList* dl, ImVec2 pos, ImU32 col, const char* s) { dl->AddText(ImGui::GetFont(), ImGui::GetFontSize(), pos, col, s); }
+static void CardTextCentered(ImDrawList* dl, float x0, float x1, float y, ImU32 col, const std::string& s) {
+    float w = ImGui::CalcTextSize(s.c_str()).x;
+    if (w <= x1 - x0) { CardText(dl, ImVec2(x0 + (x1 - x0 - w) * 0.5f, y), col, s.c_str()); return; }
+    ImGui::PushStyleColor(ImGuiCol_Text, col);
+    ImGui::RenderTextEllipsis(dl, ImVec2(x0, y), ImVec2(x1, y + ImGui::GetFontSize()), x1, s.c_str(), nullptr, nullptr);
+    ImGui::PopStyleColor();
+}
+// Up to two lines, broken anywhere (asset names rarely have spaces); the second line ends with "..." when it still does not fit
+static void CardTextTwoLines(ImDrawList* dl, ImVec2 pos, float width, ImU32 col, const std::string& s) {
+    size_t n = 0;
+    while (n < s.size() && ImGui::CalcTextSize(s.c_str(), s.c_str() + n + 1).x <= width) n++;
+    CardText(dl, pos, col, s.substr(0, n).c_str());
+    if (n >= s.size()) return;
+    std::string rest = s.substr(n);
+    float y = pos.y + ImGui::GetFontSize() * 1.15f;
+    ImGui::PushStyleColor(ImGuiCol_Text, col);
+    ImGui::RenderTextEllipsis(dl, ImVec2(pos.x, y), ImVec2(pos.x + width, y + ImGui::GetFontSize()), pos.x + width, rest.c_str(), nullptr, nullptr);
+    ImGui::PopStyleColor();
 }
 
 void App::DrawExplorer() {
@@ -688,51 +791,76 @@ void App::DrawExplorer() {
     const Vfs& vfs = m_api->vfs;
     auto& folders = vfs.Folders();
     float u = ImGui::GetFontSize() / 16.f;
-    // search bar
+    float base = ImGui::GetStyle().FontSizeBase;
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    // search bar: magnifier inside on the left, clear button inside on the right, type filter next to it
     {
-        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(26 * u, ImGui::GetStyle().FramePadding.y));
         float availX = ImGui::GetContentRegionAvail().x;
-        float rightW = std::min(120 * u, availX * 0.3f);
-        ImGui::SetNextItemWidth(std::max(80 * u, availX - rightW - 34 * u));
+        float rightW = std::min(140 * u, availX * 0.3f);
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(28 * u, 5 * u));
+        ImGui::SetNextItemWidth(std::max(80 * u, availX - rightW - 8 * u));
+        ImGui::SetNextItemAllowOverlap();
         ImVec2 p0 = ImGui::GetCursorScreenPos();
         ImGui::InputTextWithHint("##xsearch", "Search by name...", m_search, sizeof(m_search));
         ImGui::PopStyleVar();
-        float fh = ImGui::GetItemRectSize().y;
-        ImDrawList* dl = ImGui::GetWindowDrawList();
-        ImVec2 mc(p0.x + 12 * u, p0.y + fh * 0.5f - 1.5f * u);
-        ImU32 ic = IM_COL32(210, 212, 225, 255);
-        dl->AddCircle(mc, 4.5f * u, ic, 0, 1.5f);
-        dl->AddLine(ImVec2(mc.x + 3.6f * u, mc.y + 3.6f * u), ImVec2(mc.x + 7 * u, mc.y + 7 * u), ic, 1.6f);
-        ImGui::SameLine(0, 0);
-        if (ImGui::Button("x##xclear", ImVec2(fh, fh))) m_search[0] = 0;
-        ImGui::SameLine(0, 6 * u);
+        ImVec2 sz = ImGui::GetItemRectSize();
+        float fh = sz.y;
+        ImVec2 mc(p0.x + 13 * u, p0.y + fh * 0.5f - 1.5f * u);
+        ImU32 ic = IM_COL32(225, 226, 235, 255);
+        dl->AddCircle(mc, 5 * u, ic, 0, 1.6f * u);
+        dl->AddLine(ImVec2(mc.x + 3.6f * u, mc.y + 3.6f * u), ImVec2(mc.x + 7.5f * u, mc.y + 7.5f * u), ic, 1.8f * u);
+        ImVec2 after = ImGui::GetCursorScreenPos();
+        if (m_search[0]) {   // clear: a small "x" in a rounded box at the right end of the field
+            ImVec2 cp(p0.x + sz.x - fh, p0.y);
+            ImGui::SetCursorScreenPos(cp);
+            if (ImGui::InvisibleButton("##xclear", ImVec2(fh, fh))) m_search[0] = 0;
+            ImU32 xc = ImGui::IsItemHovered() ? IM_COL32(255, 255, 255, 255) : IM_COL32(200, 202, 215, 255);
+            ImVec2 cc(cp.x + fh * 0.5f, cp.y + fh * 0.5f);
+            float r = fh * 0.2f;
+            dl->AddLine(ImVec2(cc.x - r, cc.y - r), ImVec2(cc.x + r, cc.y + r), xc, 1.6f * u);
+            dl->AddLine(ImVec2(cc.x - r, cc.y + r), ImVec2(cc.x + r, cc.y - r), xc, 1.6f * u);
+        }
+        ImGui::SetCursorScreenPos(ImVec2(p0.x + sz.x + 8 * u, p0.y));
         ImGui::SetNextItemWidth(rightW);
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8 * u, 5 * u));
         const char* kinds[] = {"All", "Packages", "Other files"};
         ImGui::Combo("##xfilter", &m_explorerFilter, kinds, 3);
+        ImGui::PopStyleVar();
+        ImGui::SetCursorScreenPos(ImVec2(after.x, std::max(after.y, ImGui::GetItemRectMax().y + ImGui::GetStyle().ItemSpacing.y)));
     }
     UpdateSearch();
     bool searching = m_search[0] != 0;
     const std::vector<u32>& allFiles = searching ? m_searchResults : folders[m_folder].files;
 
-    // breadcrumb
+    // location line: the path as plain clickable segments ("Athena / Content / Models")
+    ImGui::Dummy(ImVec2(0, 2 * u));
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 8 * u);
     if (searching) {
-        ImGui::TextDisabled("%zu result(s)%s", m_searchResults.size(), m_searchTruncated ? " (truncated)" : "");
+        ImGui::Text("%zu result(s)%s", m_searchResults.size(), m_searchTruncated ? " (truncated)" : "");
     } else {
         std::vector<u32> chain;
         for (u32 f = m_folder; f != UINT32_MAX && f != 0; f = folders[f].parent) chain.push_back(f);
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
-        ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.f);   // plain text links, no boxes
-        if (ImGui::SmallButton("/")) m_folder = 0;
+        auto link = [&](const char* label, u32 target, bool last) {
+            ImVec2 ts = ImGui::CalcTextSize(label);
+            ImVec2 p = ImGui::GetCursorScreenPos();
+            bool clicked = ImGui::InvisibleButton("##crumb", ts);
+            bool hov = ImGui::IsItemHovered();
+            ImU32 col = last ? IM_COL32(240, 240, 240, 255) : hov ? IM_COL32(110, 165, 255, 255) : IM_COL32(160, 162, 178, 255);
+            dl->AddText(p, col, label);
+            if (hov && !last) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+            if (clicked && !last) m_folder = target;
+        };
+        ImGui::PushID("crumbs");
+        link("Root", 0, chain.empty());
         for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
-            ImGui::SameLine(0, 2);
-            ImGui::TextDisabled(">");
-            ImGui::SameLine(0, 2);
+            ImGui::SameLine(0, 6 * u);
+            ImGui::TextDisabled("/");
+            ImGui::SameLine(0, 6 * u);
             ImGui::PushID((int)*it);
-            if (ImGui::SmallButton(folders[*it].name.c_str())) m_folder = *it;
+            link(folders[*it].name.c_str(), *it, it + 1 == chain.rend());
             ImGui::PopID();
         }
-        ImGui::PopStyleVar();
-        ImGui::PopStyleColor();
+        ImGui::PopID();
     }
 
     // items: folders first, then files filtered by type
@@ -746,25 +874,35 @@ void App::DrawExplorer() {
         if (m_explorerFilter == 2 && pkg) continue;
         files.push_back(e);
     }
+    int total = (int)(subfolders.size() + files.size());
     ImGui::BeginChild("##tiles", ImVec2(0, 0), ImGuiChildFlags_None);
+    dl = ImGui::GetWindowDrawList();
     // back to the top when another folder (or another search) is shown
     std::string viewKey = searching ? std::string(m_search) : Fmt("#%u", m_folder);
     if (viewKey != m_explorerView) {
         m_explorerView = viewKey;
         ImGui::SetScrollY(0);
     }
-    // left-aligned grid with one gap size on every side; tiles stretch so each row fills the width exactly
-    float gap = 10 * u, minTw = 124 * u;
-    float availW = ImGui::GetContentRegionAvail().x - gap * 2;
-    int cols = std::max(1, (int)((availW + gap) / (minTw + gap)));
-    float tw = std::max(60 * u, (availW - gap * (cols - 1)) / cols), th = 156 * u, gx = gap, gy = gap;
-    int total = (int)(subfolders.size() + files.size());
+    if (total == 0) {
+        const char* msg = searching ? "No packages match the search" : "No folders or packages found";
+        ImVec2 ts = ImGui::CalcTextSize(msg);
+        ImGui::SetCursorPos(ImVec2((ImGui::GetContentRegionAvail().x - ts.x) * 0.5f, 24 * u));
+        ImGui::TextColored(ImVec4(1, 0.42f, 0.42f, 1), "%s", msg);
+        ImGui::EndChild();
+        return;
+    }
+    // fixed-size cards (2:3 like FModel's), the spare width spread evenly: the same gap at both edges and between cards
+    float tw = 132 * u, th = 198 * u, minGap = 10 * u, gy = 12 * u;
+    float availW = ImGui::GetContentRegionAvail().x;
+    int cols = std::max(1, (int)((availW - minGap) / (tw + minGap)));
+    float gx = std::max(minGap, (availW - cols * tw) / (cols + 1));
     int rows = (total + cols - 1) / cols;
-    float startX = ImGui::GetCursorPosX() + gap;
-    float y0 = ImGui::GetCursorPosY() + gap;
+    float startX = ImGui::GetCursorPosX() + gx;
+    float y0 = ImGui::GetCursorPosY() + 6 * u;
     ImGuiListClipper clip;
     clip.Begin(rows, th + gy);
-    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImU32 textCol = IM_COL32(240, 240, 240, 255), subCol = IM_COL32(240, 240, 240, 200), dimCol = IM_COL32(150, 151, 165, 255);
+    const ImU32 accent = IM_COL32(32, 107, 212, 255);
     while (clip.Step())
         for (int row = clip.DisplayStart; row < clip.DisplayEnd; row++)
             for (int cI = 0; cI < cols; cI++) {
@@ -775,30 +913,34 @@ void App::DrawExplorer() {
                 ImGui::PushID(idx);
                 bool isFolder = idx < (int)subfolders.size();
                 u32 id = isFolder ? subfolders[idx] : files[idx - subfolders.size()];
-                bool selected = !isFolder && m_selected == (i64)id;
                 ImGui::InvisibleButton("##tile", ImVec2(tw, th));
                 bool hov = ImGui::IsItemHovered();
                 // buttons report clicks on release, so a double click has to be read from the press itself
                 bool clicked = ImGui::IsItemClicked(ImGuiMouseButton_Left);
                 bool dblClicked = hov && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
+                float pad = 6 * u;
                 if (isFolder) {
-                    dl->AddRectFilled(mn, mx, hov ? IM_COL32(56, 59, 78, 255) : IM_COL32(46, 48, 64, 255));
-                    const std::string& nm = folders[id].name;
-                    ImVec2 ts = ImGui::CalcTextSize(nm.c_str());
-                    std::string l1 = Fmt("Subfolders: %zu", folders[id].folders.size()), l2 = Fmt("Assets: %zu", folders[id].files.size());
-                    ImVec2 s1 = ImGui::CalcTextSize(l1.c_str()), s2 = ImGui::CalcTextSize(l2.c_str());
-                    // text block anchored to the bottom padding, the icon centred in the space above it
-                    float pad = 12 * u;
-                    float nameY = mx.y - pad - (ts.y + 6 * u + s1.y + 2 * u + s2.y);
-                    DrawBigFolder(dl, ImVec2(mn.x, mn.y + pad), ImVec2(mx.x, nameY - 4 * u));
-                    // long names stay inside the tile (left-aligned and clipped instead of centred over the neighbours)
-                    dl->PushClipRect(ImVec2(mn.x + 4 * u, mn.y), ImVec2(mx.x - 4 * u, mx.y), true);
-                    dl->AddText(ImVec2(mn.x + std::max(6 * u, (tw - ts.x) * 0.5f), nameY), IM_COL32(245, 245, 250, 255), nm.c_str());
-                    dl->PopClipRect();
-                    float ly = nameY + ts.y + 6 * u;
-                    dl->AddText(ImVec2(mn.x + (tw - s1.x) * 0.5f, ly), IM_COL32(200, 202, 215, 255), l1.c_str());
-                    dl->AddText(ImVec2(mn.x + (tw - s2.x) * 0.5f, ly + s1.y + 2 * u), IM_COL32(200, 202, 215, 255), l2.c_str());
-                    if (hov) ImGui::SetTooltip("%s", nm.c_str());
+                    bool selected = m_selFolder == id;
+                    dl->AddRectFilled(mn, mx, hov ? IM_COL32(60, 61, 76, 255) : IM_COL32(50, 50, 63, 255));
+                    const VfsFolder& fo = folders[id];
+                    // icon + name + two count lines, the whole block centred vertically
+                    float px = ImGui::GetFontSize() / base;   // pushed sizes are unscaled: convert to pixels
+                    float iconS = tw * 0.62f, nameH = base * 0.95f * px, subH = base * 0.75f * px;
+                    float blockH = iconS * 0.74f + 14 * u + nameH + 6 * u + subH * 2 + 2 * u;
+                    float y = mn.y + (th - blockH) * 0.5f;
+                    DrawBigFolder(dl, ImVec2((mn.x + mx.x) * 0.5f, y + iconS * 0.37f), iconS);
+                    y += iconS * 0.74f + 14 * u;
+                    ImGui::PushFont(boldFont, base * 0.95f);
+                    CardTextCentered(dl, mn.x + pad, mx.x - pad, y, textCol, fo.name);
+                    ImGui::PopFont();
+                    y += nameH + 6 * u;
+                    ImGui::PushFont(nullptr, base * 0.75f);
+                    CardTextCentered(dl, mn.x + pad, mx.x - pad, y, subCol, Fmt("Subfolders: %zu", fo.folders.size()));
+                    CardTextCentered(dl, mn.x + pad, mx.x - pad, y + subH + 2 * u, subCol, Fmt("Assets: %zu", fo.files.size()));
+                    ImGui::PopFont();
+                    if (selected) dl->AddRect(mn, mx, accent, 0, 0, 1.5f * u);
+                    if (hov) ImGui::SetTooltip("%s", fo.name.c_str());
+                    if (clicked) m_selFolder = id;
                     if (dblClicked) { m_folder = id; m_search[0] = 0; }
                     if (ImGui::BeginPopupContextItem()) {
                         if (ImGui::MenuItem("Open")) { m_folder = id; m_search[0] = 0; }
@@ -807,28 +949,29 @@ void App::DrawExplorer() {
                         ImGui::EndPopup();
                     }
                 } else {
+                    bool selected = m_selected == (i64)id;
                     std::string_view path = vfs.Path(id);
                     std::string_view fn = vfs.FileName(id);
                     size_t dot = fn.rfind('.');
-                    std::string base(dot == std::string_view::npos ? fn : fn.substr(0, dot));
+                    std::string name(dot == std::string_view::npos ? fn : fn.substr(0, dot));
                     std::string ext(dot == std::string_view::npos ? std::string_view() : fn.substr(dot + 1));
-                    float topH = th - (8 * u + ImGui::GetTextLineHeight() * 2 + 14 * u);   // name + ext/size rows below the preview
                     ImU32 tint = FileTint(fn);
-                    dl->AddRectFilled(mn, mx, hov ? IM_COL32(56, 59, 78, 255) : IM_COL32(46, 48, 64, 255));
-                    dl->AddRectFilled(mn, ImVec2(mx.x, mn.y + topH), IM_COL32(24, 25, 34, 255));
-                    DrawBigFile(dl, mn, ImVec2(mx.x, mn.y + topH), tint);
+                    const ImU32 previewBg = IM_COL32(31, 32, 41, 255);
+                    float topH = tw * 0.92f;   // square-ish preview area, then a 2px type-coloured line
+                    dl->AddRectFilled(mn, mx, hov ? IM_COL32(60, 62, 78, 255) : IM_COL32(50, 51, 65, 255));
+                    dl->AddRectFilled(mn, ImVec2(mx.x, mn.y + topH), previewBg);
+                    DrawFileGlyph(dl, ImVec2((mn.x + mx.x) * 0.5f, mn.y + topH * 0.5f), tw * 0.46f, fn, tint, previewBg);
                     dl->AddRectFilled(ImVec2(mn.x, mn.y + topH), ImVec2(mx.x, mn.y + topH + 2 * u), tint);
-                    {   // long names end with "..." (full path in the tooltip)
-                        ImVec2 a(mn.x + 8 * u, mn.y + topH + 6 * u), b(mx.x - 8 * u, a.y + ImGui::GetTextLineHeight());
-                        ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(245, 245, 250, 255));
-                        ImGui::RenderTextEllipsis(dl, a, b, b.x, base.c_str(), nullptr, nullptr);
-                        ImGui::PopStyleColor();
-                    }
+                    ImGui::PushFont(boldFont, base * 0.9f);
+                    CardTextTwoLines(dl, ImVec2(mn.x + pad, mn.y + topH + 2 * u + pad), tw - pad * 2, textCol, name);
+                    ImGui::PopFont();
+                    ImGui::PushFont(nullptr, base * 0.68f);
                     std::string sz = HumanSize(vfs.Entry(id).usize);
-                    float by = mx.y - ImGui::GetTextLineHeight() - 6 * u;
-                    dl->AddText(ImVec2(mn.x + 8 * u, by), IM_COL32(150, 153, 170, 255), ext.c_str());
-                    dl->AddText(ImVec2(mx.x - 8 * u - ImGui::CalcTextSize(sz.c_str()).x, by), IM_COL32(150, 153, 170, 255), sz.c_str());
-                    if (selected) dl->AddRect(mn, mx, IM_COL32(31, 107, 214, 255), 0, 0, 2.f);
+                    float by = mx.y - pad - ImGui::GetFontSize();
+                    CardText(dl, ImVec2(mn.x + pad, by), dimCol, ext.c_str());
+                    CardText(dl, ImVec2(mx.x - pad - ImGui::CalcTextSize(sz.c_str()).x, by), dimCol, sz.c_str());
+                    ImGui::PopFont();
+                    if (selected) dl->AddRect(mn, mx, accent, 0, 0, 1.5f * u);
                     if (clicked) m_selected = id;
                     if (dblClicked) OpenFile(id);
                     if (hov) ImGui::SetTooltip("%s", std::string(path).c_str());
@@ -1859,7 +2002,7 @@ void App::DrawExportProgress() {
 void App::DrawLog(float height) {
     LogSnapshot(m_log, m_logSeen);
     if (m_log.size() > 5000) m_log.erase(m_log.begin(), m_log.begin() + (m_log.size() - 4000));
-    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.125f, 0.13f, 0.18f, 1));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, IM_COL32(38, 38, 48, 255));
     ImGui::BeginChild("##log", ImVec2(0, height), ImGuiChildFlags_AlwaysUseWindowPadding, ImGuiWindowFlags_HorizontalScrollbar);
     ImGui::PushFont(monoFont, monoFont->LegacySize);   // size 0 would keep the UI size, which makes Consolas look oversized
     ImGuiListClipper clip;
@@ -1874,6 +2017,49 @@ void App::DrawLog(float height) {
         }
     if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 2) ImGui::SetScrollHereY(1.0f);
     ImGui::PopFont();
+    {   // bottom-right corner of the visible area: open the output folder, clear the log
+        // placed inside the visible content rect (scroll + padding aware) so they never grow the scrollable area
+        float u = ImGui::GetFontSize() / 16.f, bs = ImGui::GetFrameHeight();
+        ImGuiWindow* win = ImGui::GetCurrentWindow();
+        ImVec2 pad = ImGui::GetStyle().WindowPadding;
+        float x = win->InnerRect.Max.x - pad.x - bs;
+        float y = win->InnerRect.Max.y - pad.y - bs * 2 - 2 * u;
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        ImU32 ic = IM_COL32(225, 226, 235, 255);
+        auto button = [&](const char* id, float by, const char* tip) {
+            ImGui::SetCursorScreenPos(ImVec2(x, by));
+            bool r = ImGui::InvisibleButton(id, ImVec2(bs, bs));
+            if (ImGui::IsItemHovered()) {
+                dl->AddRectFilled(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), IM_COL32(59, 61, 74, 255), 3 * u);
+                ImGui::SetTooltip("%s", tip);
+            }
+            return r;
+        };
+        if (button("##openout", y, "Open the output folder")) {
+            CreateDirectories(m_settings.outputDir);
+            ShellExecuteW(nullptr, L"open", m_settings.outputDir.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+        }
+        {   // folder with an arrow
+            ImVec2 c(x + bs * 0.5f, y + bs * 0.5f);
+            float w = bs * 0.5f, h = bs * 0.38f;
+            dl->AddRectFilled(ImVec2(c.x - w * 0.5f, c.y - h * 0.5f - 2 * u), ImVec2(c.x - w * 0.1f, c.y - h * 0.5f), ic, 1.5f * u);
+            dl->AddRectFilled(ImVec2(c.x - w * 0.5f, c.y - h * 0.5f), ImVec2(c.x + w * 0.5f, c.y + h * 0.5f), ic, 1.5f * u);
+            ImU32 bg = IM_COL32(38, 38, 48, 255);
+            dl->AddLine(ImVec2(c.x - w * 0.18f, c.y + h * 0.05f), ImVec2(c.x + w * 0.22f, c.y + h * 0.05f), bg, 1.6f * u);
+            dl->AddTriangleFilled(ImVec2(c.x + w * 0.3f, c.y + h * 0.05f), ImVec2(c.x + w * 0.1f, c.y - h * 0.22f), ImVec2(c.x + w * 0.1f, c.y + h * 0.32f), bg);
+        }
+        float y2 = y + bs + 2 * u;
+        if (button("##clearlog", y2, "Clear the log")) m_log.clear();
+        {   // trash can
+            ImVec2 c(x + bs * 0.5f, y2 + bs * 0.5f);
+            float w = bs * 0.34f, h = bs * 0.4f;
+            dl->AddRectFilled(ImVec2(c.x - w * 0.65f, c.y - h * 0.62f), ImVec2(c.x + w * 0.65f, c.y - h * 0.48f), ic, 1 * u);
+            dl->AddRectFilled(ImVec2(c.x - w * 0.2f, c.y - h * 0.75f), ImVec2(c.x + w * 0.2f, c.y - h * 0.55f), ic, 1 * u);
+            dl->AddRectFilled(ImVec2(c.x - w * 0.5f, c.y - h * 0.38f), ImVec2(c.x + w * 0.5f, c.y + h * 0.6f), ic, 1.5f * u);
+            ImU32 bg = IM_COL32(38, 38, 48, 255);
+            for (int k = -1; k <= 1; k++) dl->AddLine(ImVec2(c.x + k * w * 0.22f, c.y - h * 0.2f), ImVec2(c.x + k * w * 0.22f, c.y + h * 0.42f), bg, 1.2f * u);
+        }
+    }
     ImGui::EndChild();
     ImGui::PopStyleColor();
 }

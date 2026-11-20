@@ -105,6 +105,7 @@ public:
     bool Loading() const;   // archives mounting, jobs queued or documents loading   // something animating / loading: keep rendering frames
 
     ImFont* monoFont = nullptr;
+    ImFont* boldFont = nullptr;
     int startTab = -1;   // --tab: initial left tab
     std::string startFolder;   // --folder: initial explorer folder (game path)
     std::vector<std::string> openOnStart;   // asset paths from the command line
@@ -161,6 +162,7 @@ private:
     double m_mountSeconds = 0;
 
     u32 m_folder = 0;
+    bool m_collapseTree = false;
     u32 m_treeFolder = 0;   // folder the tree last showed as current (a change elsewhere expands the tree to it)
     int m_leftTab = 1;   // 0 archives, 1 folders, 2 packages
     int m_selPak = -1;
@@ -170,6 +172,7 @@ private:
     bool m_selectExplorer = false;
     std::string m_explorerView;   // folder / search the explorer last showed (scroll resets when it changes)
     i64 m_selected = -1;
+    u32 m_selFolder = UINT32_MAX;   // folder card selected in the explorer
     char m_search[256] = {};
     std::string m_lastSearch;
     std::vector<u32> m_searchResults;
