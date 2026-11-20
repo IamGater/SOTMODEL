@@ -38,10 +38,19 @@ struct WorldSpline {
     u32 level = 0;
 };
 
+// One LandscapeComponent as a world-space mesh (vertex colours blended from its paint layers).
+struct WorldLandscape {
+    std::string name;   // Landscape actor . component
+    u32 level = 0;
+    MeshLod mesh;
+    Vec3 boundsMin, boundsMax;
+    std::vector<std::string> layers;   // paint layer names
+};
+
 struct WorldLevel {
     std::string path;    // game path of the .umap
     Mat4 transform = Mat4::Identity();   // level -> world
-    u32 actors = 0, meshComponents = 0, instances = 0, splines = 0, unresolved = 0;
+    u32 actors = 0, meshComponents = 0, instances = 0, splines = 0, unresolved = 0, landscapeComponents = 0;
 };
 
 struct WorldData {
@@ -49,6 +58,7 @@ struct WorldData {
     std::vector<WorldLevel> levels;
     std::vector<WorldMeshGroup> groups;
     std::vector<WorldSpline> splines;
+    std::vector<WorldLandscape> landscapes;
     std::vector<std::string> unresolved;   // "level: Actor.Component" of mesh components whose mesh could not be found
     Vec3 boundsMin{1e30f, 1e30f, 1e30f}, boundsMax{-1e30f, -1e30f, -1e30f};   // of instance origins
     size_t InstanceCount() const;
@@ -58,6 +68,11 @@ struct WorldOptions {
     bool sublevels = true;       // a persistent map also loads the .umap files under its folder (world composition)
     bool skipNonVisual = true;   // skip audio / tall-tale / arena sublevels and helper meshes (shapes, clouds, volumes)
     bool skeletal = true;        // include skeletal mesh components (shown in their reference pose)
+    bool landscape = true;       // build Landscape terrain meshes from the heightmaps
+    int landscapeStep = 1;
+    // mesh path filter: comma separated substrings (case insensitive); a mesh must match one of the plain terms (if any)
+    // and none of the '-' terms, e.g. "rock,-small"
+    std::string meshFilter;       // landscape vertex spacing in quads (2 or 4 = coarser, less memory)
     std::function<bool()> cancel;
     std::function<void(int done, int total, const std::string& level)> progress;
 };

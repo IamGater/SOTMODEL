@@ -1,5 +1,6 @@
 #include "ue/World.h"
 #include "core/Vfs.h"
+#include "ue/Texture.h"
 #include <unordered_map>
 #include <unordered_set>
 #include <map>
@@ -101,8 +102,9 @@ bool IsHelperMesh(const std::string& meshPath) {
     std::string p = ToLower(meshPath);
     if (p.rfind("/engine/", 0) == 0) return true;
     if (p.find("/atmospherics/") != std::string::npos || p.find("/clouds/") != std::string::npos) return true;
+    if (p.rfind("/game/maps/", 0) == 0 && p.find("/lod/") != std::string::npos) return true;   // HLOD stand-ins of whole levels / landscapes
     std::string n = StemOf(p);
-    for (auto pre : {"volumetric_", "shape_", "cmn_shape_", "wil_fish_", "cyl"})
+    for (auto pre : {"volumetric_", "shape_", "cmn_shape_", "wil_fish_", "cyl", "sm_proxy_"})   // sm_proxy_: merged HLOD stand-in of a whole level
         if (n.rfind(pre, 0) == 0) return true;
     if (n == "cube" || n == "quad_plane" || n == "sphere" || n == "plane") return true;
     return n.find("procanim") != std::string::npos || n.find("splineeditormesh") != std::string::npos;
@@ -129,6 +131,41 @@ bool ReadInstances(const Package& pkg, i32 exportIdx, size_t nativeStart, std::v
         return true;
     }
     return false;
+}
+
+// paint layer name -> preview colour (Athena terrain fallbacks: sand, mud, grass, rock, seabed, coral)
+u32 LayerColor(const std::string& layer) {
+    std::string l = ToLower(layer);
+    struct { const char* key; u32 rgb; } groups[] = {
+        {"rock_coral", 0x7A756C}, {"coral", 0x7A756C}, {"seabed", 0xCDBE9A}, {"sand", 0xEBE2CD}, {"grass", 0x5C8A3C},
+        {"dirt", 0x8A7B68}, {"mud", 0x8A7B68}, {"scree", 0x8A7B68}, {"rock", 0x8C8478}, {"cliff", 0x8C8478}, {"snow", 0xF0F0F4},
+    };
+    for (auto& g : groups)
+        if (l.find(g.key) != std::string::npos) return g.rgb;
+    return 0x9A9285;
+}
+
+bool PassesFilter(const std::string& meshPath, const std::string& filter) {
+    if (filter.empty()) return true;
+    std::string p = ToLower(meshPath);
+    bool anyInclude = false, included = false;
+    size_t a = 0;
+    while (a <= filter.size()) {
+        size_t b = filter.find(',', a);
+        if (b == std::string::npos) b = filter.size();
+        std::string t = ToLower(filter.substr(a, b - a));
+        a = b + 1;
+        while (!t.empty() && t.front() == ' ') t.erase(t.begin());
+        while (!t.empty() && t.back() == ' ') t.pop_back();
+        if (t.empty()) continue;
+        if (t[0] == '-') {
+            if (t.size() > 1 && p.find(t.substr(1)) != std::string::npos) return false;
+        } else {
+            anyInclude = true;
+            if (p.find(t) != std::string::npos) included = true;
+        }
+    }
+    return !anyInclude || included;
 }
 
 }   // namespace
@@ -226,6 +263,48 @@ struct WorldLoader::Impl {
         for (std::string prev; prev != s;) { prev = s; s = stripIndex(s); }
         if (auto it = meshByName.find(s); it != meshByName.end()) return it->second;
         return {};
+    }
+
+    // Stacking order (bottom -> top, lower case) of the paint layers of a landscape material: its master material's
+    // LandscapeLayerSwitch chain (each switch's LayerNotUsed leads to the layer below; the unique head is the top layer).
+    std::unordered_map<std::string, std::vector<std::string>> layerOrders;
+    const std::vector<std::string>& LayerOrder(const std::string& materialPath) {
+        auto [it, fresh] = layerOrders.try_emplace(ToLower(materialPath));
+        if (!fresh) return it->second;
+        std::string path = materialPath;
+        for (int depth = 0; depth < 8 && !path.empty(); depth++) {
+            auto pkg = cache.LoadPath(path);
+            if (!pkg) break;
+            i32 main = pkg->MainExport();
+            if (!main) break;
+            std::string cls = pkg->ExportClass(main - 1);
+            if (cls != "Material") {   // a material instance: follow Parent
+                PropertyList mp = pkg->ReadProperties(main - 1);
+                const PropValue* parent = FindValue(mp, "Parent");
+                path = parent ? ObjectPathOf(*pkg, *parent) : std::string();
+                continue;
+            }
+            std::unordered_map<i32, std::pair<std::string, i32>> sw;   // switch export -> (layer, switch below)
+            for (size_t e = 0; e < pkg->Exports().size(); e++) {
+                if (pkg->ExportClass(e) != "MaterialExpressionLandscapeLayerSwitch") continue;
+                PropertyList sp = pkg->ReadProperties(e);
+                const PropValue* nu = FindValue(sp, "LayerNotUsed");
+                const PropValue* ex = nu ? nu->Field("Expression") : nullptr;
+                sw[(i32)e + 1] = {ToLower(PropStr(sp, "ParameterName")), ex ? ex->ObjIndex() : 0};
+            }
+            std::unordered_set<i32> below;
+            for (auto& [k, v] : sw) below.insert(v.second);
+            std::vector<i32> heads;
+            for (auto& [k, v] : sw)
+                if (!below.count(k)) heads.push_back(k);
+            if (heads.size() == 1) {
+                std::unordered_set<i32> seen;
+                for (i32 cur = heads[0]; sw.count(cur) && seen.insert(cur).second; cur = sw[cur].second) it->second.push_back(sw[cur].first);
+                std::reverse(it->second.begin(), it->second.end());
+            }
+            break;
+        }
+        return it->second;
     }
 
     WorldMeshGroup& Group(WorldData& out, const std::string& mesh, const std::vector<std::string>& materials, bool skeletal) {
@@ -343,11 +422,183 @@ void WorldLoader::AddLevel(const Package& pkg, const Mat4& levelTransform, const
         Note(w);
     };
 
+    // ---- Landscape: one mesh per component from its heightmap (R<<8|G, 32768 = 0, 1/128 per unit) and paint-layer weightmaps
+    std::unordered_map<i32, std::shared_ptr<Image>> texCache;
+    auto Texture = [&](i32 idx) -> std::shared_ptr<Image> {
+        if (idx <= 0) return nullptr;
+        if (auto it = texCache.find(idx); it != texCache.end()) return it->second;
+        auto img = std::make_shared<Image>();
+        TextureInfo ti;
+        std::string err;
+        if (!ReadTextureInfo(pkg, idx - 1, ti, &err) || !DecodeTexture(pkg, ti, 0, 1 << 16, *img, &err)) {
+            LOGW("landscape texture %s: %s", pkg.ObjectName(idx).c_str(), err.c_str());
+            img = nullptr;
+        }
+        texCache[idx] = img;
+        return img;
+    };
+    auto AddLandscape = [&](size_t i) {
+        const PropertyList& P = Props(i);
+        int nsub = (int)PropInt(P, "NumSubsections", 1);
+        int subq = (int)PropInt(P, "SubsectionSizeQuads", 0);
+        int cq = (int)PropInt(P, "ComponentSizeQuads", nsub * subq);
+        if (subq <= 0 || cq <= 0) return;
+        auto hm = Texture(PropObj(P, "HeightmapTexture"));
+        if (!hm) return;
+        auto bias = [&](std::string_view prop, const Image& img, int& ox, int& oy) {
+            ox = oy = 0;
+            if (auto sb = FindValue(P, prop)) {
+                if (auto z = sb->Field("Z")) ox = (int)lroundf((float)z->AsFloat() * img.width);
+                if (auto w = sb->Field("W")) oy = (int)lroundf((float)w->AsFloat() * img.height);
+            }
+        };
+        int hx, hy;
+        bias("HeightmapScaleBias", *hm, hx, hy);
+        auto texel = [&](int vtx) { int s = std::min(vtx / subq, nsub - 1); return s * (subq + 1) + (vtx - s * subq); };
+        int step = std::max(1, opt.landscapeStep);
+        while (step > 1 && cq % step) step--;
+        int side = cq / step + 1;
+        // paint layers
+        struct Layer { std::shared_ptr<Image> img; int ch, ox, oy; u32 rgb; bool visibility; int rank; };
+        std::vector<Layer> layers;
+        const std::vector<std::string>* order = nullptr;
+        if (exps[i].outerIndex > 0) {
+            const PropValue* lm = FindValue(Props(exps[i].outerIndex - 1), "LandscapeMaterial");
+            std::string mpath = lm ? ObjectPathOf(pkg, *lm) : std::string();
+            if (!mpath.empty()) order = &m->LayerOrder(mpath);
+        }
+        WorldLandscape& L = out.landscapes.emplace_back();
+        if (const PropValue* wt = FindValue(P, "WeightmapTextures"); wt && wt->type == PropType::Array) {
+            std::vector<std::shared_ptr<Image>> wimg;
+            for (auto& t : wt->items) wimg.push_back(Texture(t.ObjIndex()));
+            if (const PropValue* al = FindValue(P, "WeightmapLayerAllocations"); al && al->type == PropType::Array)
+                for (auto& a : al->items) {
+                    if (!a.Fields()) continue;
+                    auto li = a.Field("LayerInfo");
+                    auto ti = a.Field("WeightmapTextureIndex");
+                    auto tc = a.Field("WeightmapTextureChannel");
+                    size_t t = ti ? (size_t)ti->AsInt() : 0;
+                    if (!li || t >= wimg.size() || !wimg[t]) continue;
+                    std::string name = pkg.ObjectName(li->ObjIndex());
+                    if (IEndsWith(name, "_LayerInfo")) name.resize(name.size() - 10);
+                    if (ToLower(name).find("grass_paint") != std::string::npos) continue;   // foliage density masks, not a surface
+                    // "DataLayer" is the landscape visibility layer: painted areas are holes
+                    int rank = -1;
+                    if (order) {
+                        auto f = std::find(order->begin(), order->end(), ToLower(name));
+                        if (f != order->end()) rank = (int)(f - order->begin());
+                    }
+                    Layer l{wimg[t], tc ? (int)tc->AsInt() & 3 : 0, 0, 0, LayerColor(name), IEquals(name, "DataLayer") || IEquals(name, "DataLayer__"), rank};
+                    bias("WeightmapScaleBias", *wimg[t], l.ox, l.oy);
+                    if (l.visibility) layers.insert(layers.begin(), l);
+                    else layers.push_back(l);
+                    L.layers.push_back(name);
+                }
+        }
+        // stacked layers bottom -> top after the visibility layer, then the ones the material does not stack
+        std::stable_sort(layers.begin(), layers.end(), [](const Layer& a, const Layer& b) {
+            auto key = [](const Layer& l) { return l.visibility ? -2 : l.rank < 0 ? 1 << 20 : l.rank; };
+            return key(a) < key(b);
+        });
+        std::vector<float> wv(layers.size());
+        Mat4 w = World(i) * levelTransform;
+        L.name = pkg.ObjectName(exps[i].outerIndex) + "." + exps[i].objectName;
+        L.level = levelIndex;
+        MeshLod& m = L.mesh;
+        m.positions.resize((size_t)side * side);
+        m.colors.resize(m.positions.size());
+        m.numUVs = 1;
+        m.uvs.resize(m.positions.size());
+        std::vector<u8> hole;
+        if (!layers.empty() && layers[0].visibility) hole.assign(m.positions.size(), 0);
+        Vec3 bmin{1e30f, 1e30f, 1e30f}, bmax{-1e30f, -1e30f, -1e30f};
+        for (int y = 0; y < side; y++)
+            for (int x = 0; x < side; x++) {
+                int vx = x * step, vy = y * step;
+                int tx = std::clamp(hx + texel(vx), 0, hm->width - 1), ty = std::clamp(hy + texel(vy), 0, hm->height - 1);
+                const u8* px = &hm->rgba[((size_t)ty * hm->width + tx) * 4];
+                float z = (float)((int)((px[0] << 8) | px[1]) - 32768) / 128.f;
+                Vec3 p = w.TransformPoint({(float)vx, (float)vy, z});
+                size_t k = (size_t)y * side + x;
+                m.positions[k] = p;
+                m.uvs[k] = {(float)vx / cq, (float)vy / cq};
+                bmin = {std::min(bmin.x, p.x), std::min(bmin.y, p.y), std::min(bmin.z, p.z)};
+                bmax = {std::max(bmax.x, p.x), std::max(bmax.y, p.y), std::max(bmax.z, p.z)};
+                for (size_t li = 0; li < layers.size(); li++) {
+                    const Layer& l = layers[li];
+                    int lx = std::clamp(l.ox + texel(vx), 0, l.img->width - 1), ly = std::clamp(l.oy + texel(vy), 0, l.img->height - 1);
+                    u8 raw = l.img->rgba[((size_t)ly * l.img->width + lx) * 4 + l.ch];
+                    if (l.visibility) hole[k] = raw;
+                    wv[li] = raw / 255.f;
+                }
+                float r = 0, g = 0, b = 0, sum = 0;
+                auto add = [&](u32 rgb, float wgt) {
+                    r += wgt * ((rgb >> 16) & 255); g += wgt * ((rgb >> 8) & 255); b += wgt * (rgb & 255);
+                    sum += wgt;
+                };
+                // the material lerps each stacked layer over the ones below by its own weight
+                int firstStacked = -1, lastStacked = -1;
+                for (size_t li = 0; li < layers.size(); li++)
+                    if (!layers[li].visibility && layers[li].rank >= 0) { if (firstStacked < 0) firstStacked = (int)li; lastStacked = (int)li; }
+                if (firstStacked >= 0) {
+                    float remaining = 1;
+                    for (int li = lastStacked; li >= firstStacked; li--) {
+                        add(layers[li].rgb, wv[li] * remaining);
+                        remaining *= 1 - wv[li];
+                    }
+                    add(layers[firstStacked].rgb, remaining);
+                }
+                for (size_t li = 0; li < layers.size(); li++)   // layers outside the stack: weighted as painted
+                    if (!layers[li].visibility && layers[li].rank < 0) add(layers[li].rgb, wv[li]);
+                if (sum < 1) {   // the base layer takes the remainder
+                    u32 base = 0x9A9285;
+                    for (auto& l : layers)
+                        if (!l.visibility) { base = l.rgb; break; }
+                    add(base, 1 - sum);
+                }
+                m.colors[k] = (u32)(r / sum) | ((u32)(g / sum) << 8) | ((u32)(b / sum) << 16) | 0xff000000u;
+            }
+        // normals from the height grid (world space)
+        m.normals.resize(m.positions.size());
+        for (int y = 0; y < side; y++)
+            for (int x = 0; x < side; x++) {
+                const Vec3& px0 = m.positions[(size_t)y * side + std::max(x - 1, 0)];
+                const Vec3& px1 = m.positions[(size_t)y * side + std::min(x + 1, side - 1)];
+                const Vec3& py0 = m.positions[(size_t)std::max(y - 1, 0) * side + x];
+                const Vec3& py1 = m.positions[(size_t)std::min(y + 1, side - 1) * side + x];
+                m.normals[(size_t)y * side + x] = Normalize(Cross(px1 - px0, py1 - py0));
+            }
+        m.indices.reserve((size_t)(side - 1) * (side - 1) * 6);
+        for (int y = 0; y + 1 < side; y++)
+            for (int x = 0; x + 1 < side; x++) {
+                u32 i00 = y * side + x, i10 = i00 + 1, i01 = i00 + side, i11 = i01 + 1;
+                if (!hole.empty() && (int)hole[i00] + hole[i10] + hole[i01] + hole[i11] >= 2 * 255) continue;
+                m.indices.insert(m.indices.end(), {i00, i11, i10, i00, i01, i11});
+            }
+        if (m.indices.empty()) {   // entirely a hole
+            out.landscapes.pop_back();
+            return;
+        }
+        MeshSection sec;
+        sec.numTriangles = (u32)m.indices.size() / 3;
+        sec.maxVertex = (u32)m.positions.size() - 1;
+        m.sections.push_back(sec);
+        L.boundsMin = bmin;
+        L.boundsMax = bmax;
+        out.boundsMin = {std::min(out.boundsMin.x, bmin.x), std::min(out.boundsMin.y, bmin.y), std::min(out.boundsMin.z, bmin.z)};
+        out.boundsMax = {std::max(out.boundsMax.x, bmax.x), std::max(out.boundsMax.y, bmax.y), std::max(out.boundsMax.z, bmax.z)};
+        lvl.landscapeComponents++;
+    };
+
     std::string levelName = StemOf(pkg.GamePath());
     for (size_t i = 0; i < n; i++) {
         if (opt.cancel && (i & 63) == 0 && opt.cancel()) return;
         const std::string& c = cls[i];
         if (exps[i].outerIndex > 0 && IEquals(exps[exps[i].outerIndex - 1].objectName, "PersistentLevel")) lvl.actors++;
+        if (IEquals(c, "LandscapeComponent")) {
+            if (opt.landscape) AddLandscape(i);
+            continue;
+        }
         if (!IsMeshComponentClass(c)) continue;
         if (exps[i].objectFlags & (RF_ClassDefaultObject | RF_ArchetypeObject)) continue;
         bool skeletal = IEquals(c, "SkeletalMeshComponent") || IEquals(c, "PoseableMeshComponent") || IEquals(c, "DestructibleComponent");
@@ -374,6 +625,7 @@ void WorldLoader::AddLevel(const Package& pkg, const Mat4& levelTransform, const
             }
         }
         if (opt.skipNonVisual && IsHelperMesh(mesh)) continue;
+        if (!PassesFilter(mesh, opt.meshFilter)) continue;
         Mat4 w = World(i) * levelTransform;
         std::vector<std::string> mats = MaterialsOf(v);
         float dist = DrawDistance(v);
@@ -475,6 +727,6 @@ bool WorldLoader::Load(std::string_view mapPath, const WorldOptions& opt, WorldD
         AddLevel(*pkg, Mat4::Identity(), opt, out);
     }
     if (opt.progress) opt.progress((int)levels.size(), (int)levels.size(), {});
-    if (out.InstanceCount() == 0) out.boundsMin = out.boundsMax = {};
+    if (out.InstanceCount() == 0 && out.landscapes.empty()) out.boundsMin = out.boundsMax = {};
     return true;
 }
