@@ -7,6 +7,7 @@
 #include <windows.h>
 #include <dwmapi.h>
 #include <d3d11.h>
+#include <functional>
 #include <dxgi1_2.h>
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
@@ -18,11 +19,21 @@ ComPtr<IDXGISwapChain1> g_swap;
 ComPtr<ID3D11RenderTargetView> g_rtv;
 UINT g_resizeW = 0, g_resizeH = 0;
 bool g_minimized = false;
+std::function<void(bool)> g_frame;   // renders one frame; called from WM_SIZE so resizing redraws live instead of stretching
+bool g_inFrame = false;
 
 void CreateRtv() {
     ComPtr<ID3D11Texture2D> back;
     g_swap->GetBuffer(0, IID_PPV_ARGS(&back));
     g_dev->CreateRenderTargetView(back.Get(), nullptr, &g_rtv);
+}
+
+void ResizeBuffers() {
+    if (!g_swap || !g_resizeW || !g_resizeH) return;
+    g_rtv.Reset();
+    g_swap->ResizeBuffers(0, g_resizeW, g_resizeH, DXGI_FORMAT_UNKNOWN, 0);
+    g_resizeW = g_resizeH = 0;
+    CreateRtv();
 }
 
 bool CreateDevice(HWND hwnd) {
@@ -58,10 +69,19 @@ LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
     case WM_SIZE:
         g_minimized = wParam == SIZE_MINIMIZED;
-        if (!g_minimized) { g_resizeW = LOWORD(lParam); g_resizeH = HIWORD(lParam); }
+        if (!g_minimized) {
+            g_resizeW = LOWORD(lParam);
+            g_resizeH = HIWORD(lParam);
+            if (g_frame && !g_inFrame) {
+                ResizeBuffers();
+                g_frame(true);
+            }
+        }
         return 0;
+    case WM_ERASEBKGND:
+        return 1;
     case WM_GETMINMAXINFO:
-        ((MINMAXINFO*)lParam)->ptMinTrackSize = {800, 500};
+        ((MINMAXINFO*)lParam)->ptMinTrackSize = {640, 420};
         return 0;
     case WM_SYSCOMMAND:
         if ((wParam & 0xfff0) == SC_KEYMENU) return 0;
@@ -79,13 +99,13 @@ void ApplyTheme(float scale) {
     ImGui::StyleColorsDark(&s);
     s.WindowRounding = 0;
     s.ChildRounding = 0;
-    s.FrameRounding = 3;
+    s.FrameRounding = 2;
     s.PopupRounding = 3;
     s.ScrollbarRounding = 3;
     s.GrabRounding = 3;
-    s.TabRounding = 3;
+    s.TabRounding = 0;
     s.WindowBorderSize = 0;
-    s.FrameBorderSize = 0;
+    s.FrameBorderSize = 1;
     s.WindowPadding = ImVec2(8, 8);
     s.FramePadding = ImVec2(7, 4);
     s.ItemSpacing = ImVec2(7, 5);
@@ -93,39 +113,40 @@ void ApplyTheme(float scale) {
     s.IndentSpacing = 16;
     ImVec4* c = s.Colors;
     auto rgb = [](int r, int g, int b, float a = 1.f) { return ImVec4(r / 255.f, g / 255.f, b / 255.f, a); };
-    c[ImGuiCol_Text] = rgb(225, 228, 235);
-    c[ImGuiCol_TextDisabled] = rgb(125, 132, 145);
-    c[ImGuiCol_WindowBg] = rgb(30, 33, 40);
-    c[ImGuiCol_ChildBg] = rgb(30, 33, 40);
-    c[ImGuiCol_PopupBg] = rgb(36, 39, 48, 0.98f);
-    c[ImGuiCol_Border] = rgb(52, 56, 68);
-    c[ImGuiCol_FrameBg] = rgb(42, 46, 56);
-    c[ImGuiCol_FrameBgHovered] = rgb(52, 57, 70);
-    c[ImGuiCol_FrameBgActive] = rgb(58, 64, 80);
-    c[ImGuiCol_TitleBg] = rgb(24, 26, 32);
-    c[ImGuiCol_TitleBgActive] = rgb(24, 26, 32);
-    c[ImGuiCol_MenuBarBg] = rgb(24, 26, 32);
-    c[ImGuiCol_ScrollbarBg] = rgb(30, 33, 40);
-    c[ImGuiCol_ScrollbarGrab] = rgb(62, 67, 80);
-    c[ImGuiCol_CheckMark] = rgb(80, 160, 255);
-    c[ImGuiCol_SliderGrab] = rgb(70, 140, 230);
-    c[ImGuiCol_SliderGrabActive] = rgb(90, 160, 255);
-    c[ImGuiCol_Button] = rgb(48, 53, 66);
-    c[ImGuiCol_ButtonHovered] = rgb(58, 110, 190);
-    c[ImGuiCol_ButtonActive] = rgb(50, 100, 175);
-    c[ImGuiCol_Header] = rgb(45, 80, 135);
-    c[ImGuiCol_HeaderHovered] = rgb(52, 92, 152);
-    c[ImGuiCol_HeaderActive] = rgb(58, 104, 170);
-    c[ImGuiCol_Separator] = rgb(52, 56, 68);
-    c[ImGuiCol_Tab] = rgb(36, 40, 49);
-    c[ImGuiCol_TabHovered] = rgb(58, 104, 170);
-    c[ImGuiCol_TabSelected] = rgb(46, 84, 140);
-    c[ImGuiCol_TabDimmed] = rgb(32, 35, 43);
-    c[ImGuiCol_TabDimmedSelected] = rgb(40, 60, 95);
-    c[ImGuiCol_TableHeaderBg] = rgb(36, 40, 49);
-    c[ImGuiCol_TableBorderStrong] = rgb(52, 56, 68);
-    c[ImGuiCol_TableBorderLight] = rgb(44, 48, 58);
-    c[ImGuiCol_TableRowBgAlt] = rgb(255, 255, 255, 0.025f);
+    // FModel dark theme: navy-grey panels, DodgerBlue-ish accent (#1F6BD6)
+    c[ImGuiCol_Text] = rgb(235, 236, 240);
+    c[ImGuiCol_TextDisabled] = rgb(140, 143, 158);
+    c[ImGuiCol_WindowBg] = rgb(37, 39, 52);
+    c[ImGuiCol_ChildBg] = rgb(37, 39, 52);
+    c[ImGuiCol_PopupBg] = rgb(43, 45, 60, 0.98f);
+    c[ImGuiCol_Border] = rgb(60, 63, 80);
+    c[ImGuiCol_FrameBg] = rgb(27, 29, 41);
+    c[ImGuiCol_FrameBgHovered] = rgb(44, 47, 63);
+    c[ImGuiCol_FrameBgActive] = rgb(50, 53, 71);
+    c[ImGuiCol_TitleBg] = rgb(30, 32, 44);
+    c[ImGuiCol_TitleBgActive] = rgb(30, 32, 44);
+    c[ImGuiCol_MenuBarBg] = rgb(37, 39, 52);
+    c[ImGuiCol_ScrollbarBg] = rgb(37, 39, 52, 0);
+    c[ImGuiCol_ScrollbarGrab] = rgb(70, 73, 92);
+    c[ImGuiCol_CheckMark] = rgb(31, 107, 214);
+    c[ImGuiCol_SliderGrab] = rgb(31, 107, 214);
+    c[ImGuiCol_SliderGrabActive] = rgb(60, 135, 240);
+    c[ImGuiCol_Button] = rgb(46, 49, 66);
+    c[ImGuiCol_ButtonHovered] = rgb(31, 107, 214);
+    c[ImGuiCol_ButtonActive] = rgb(25, 90, 185);
+    c[ImGuiCol_Header] = rgb(31, 107, 214);
+    c[ImGuiCol_HeaderHovered] = rgb(52, 56, 76);
+    c[ImGuiCol_HeaderActive] = rgb(31, 107, 214);
+    c[ImGuiCol_Separator] = rgb(60, 63, 80);
+    c[ImGuiCol_Tab] = rgb(32, 34, 46);
+    c[ImGuiCol_TabHovered] = rgb(58, 61, 80);
+    c[ImGuiCol_TabSelected] = rgb(58, 61, 80);
+    c[ImGuiCol_TabDimmed] = rgb(32, 34, 46);
+    c[ImGuiCol_TabDimmedSelected] = rgb(50, 53, 70);
+    c[ImGuiCol_TableHeaderBg] = rgb(33, 35, 48);
+    c[ImGuiCol_TableBorderStrong] = rgb(60, 63, 80);
+    c[ImGuiCol_TableBorderLight] = rgb(48, 51, 66);
+    c[ImGuiCol_TableRowBgAlt] = rgb(255, 255, 255, 0.02f);
     c[ImGuiCol_ModalWindowDimBg] = rgb(0, 0, 0, 0.5f);
     s.ScaleAllSizes(scale);
 }
@@ -158,8 +179,11 @@ int RunGui(const std::vector<std::string>& args) {
     std::vector<std::string> open;
     std::wstring screenshot;
     double delay = 4;
+    int forceW = 0, forceH = 0, startTab = -1;
     for (size_t i = 0; i < args.size(); i++) {
         if (args[i] == "--screenshot" && i + 1 < args.size()) screenshot = Widen(args[++i]);
+        else if (args[i] == "--size" && i + 1 < args.size()) sscanf(args[++i].c_str(), "%dx%d", &forceW, &forceH);
+        else if (args[i] == "--tab" && i + 1 < args.size()) startTab = atoi(args[++i].c_str());
         else if (args[i] == "--delay" && i + 1 < args.size()) delay = atof(args[++i].c_str());
         else open.push_back(args[i]);
     }
@@ -178,7 +202,12 @@ int RunGui(const std::vector<std::string>& args) {
         MessageBoxW(hwnd, L"Could not create a Direct3D 11 device.", L"SOTModel", MB_ICONERROR);
         return 1;
     }
-    ShowWindow(hwnd, SW_SHOWMAXIMIZED);
+    if (forceW > 0) {
+        SetWindowPos(hwnd, nullptr, 20, 20, forceW, forceH, SWP_NOZORDER);
+        ShowWindow(hwnd, SW_SHOWNORMAL);
+    } else {
+        ShowWindow(hwnd, SW_SHOWMAXIMIZED);
+    }
     UpdateWindow(hwnd);
 
     IMGUI_CHECKVERSION();
@@ -196,7 +225,7 @@ int RunGui(const std::vector<std::string>& args) {
     ImFontConfig cfg;
     cfg.OversampleH = 2;
     if (!io.Fonts->AddFontFromFileTTF((fonts + "segoeui.ttf").c_str(), 16.f * scale, &cfg)) io.Fonts->AddFontDefault();
-    ImFont* mono = io.Fonts->AddFontFromFileTTF((fonts + "consola.ttf").c_str(), 15.f * scale, &cfg);
+    ImFont* mono = io.Fonts->AddFontFromFileTTF((fonts + "consola.ttf").c_str(), 14.f * scale, &cfg);
 
     ImGui_ImplWin32_Init(hwnd);
     ImGui_ImplDX11_Init(g_dev.Get(), g_ctx.Get());
@@ -205,10 +234,29 @@ int RunGui(const std::vector<std::string>& args) {
         App app;
         app.monoFont = mono ? mono : io.Fonts->Fonts[0];
         app.openOnStart = open;
+        app.startTab = startTab;
         if (!app.Init(hwnd, g_dev.Get(), g_ctx.Get())) {
             MessageBoxW(hwnd, L"Renderer initialisation failed (see log).", L"SOTModel", MB_ICONERROR);
         }
         bool done = false;
+        int settled = 0;
+        g_frame =[&](bool present) {
+            if (g_inFrame) return;
+            g_inFrame = true;
+            ResizeBuffers();
+            ImGui_ImplDX11_NewFrame();
+            ImGui_ImplWin32_NewFrame();
+            ImGui::NewFrame();
+            app.Frame();
+            ImGui::Render();
+            const float clear[4] = {0.145f, 0.153f, 0.2f, 1};
+            ID3D11RenderTargetView* rtv = g_rtv.Get();
+            g_ctx->OMSetRenderTargets(1, &rtv, nullptr);
+            g_ctx->ClearRenderTargetView(rtv, clear);
+            ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+            if (present) g_swap->Present(0, 0);
+            g_inFrame = false;
+        };
         while (!done) {
             MSG msg;
             while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
@@ -220,29 +268,17 @@ int RunGui(const std::vector<std::string>& args) {
             if (g_minimized) { Sleep(50); continue; }
             // idle: sleep until input or a worker posts a result (keeps CPU/GPU use near zero)
             if (!app.Busy() && screenshot.empty()) MsgWaitForMultipleObjects(0, nullptr, FALSE, 500, QS_ALLINPUT);
-            if (g_resizeW && g_resizeH) {
-                g_rtv.Reset();
-                g_swap->ResizeBuffers(0, g_resizeW, g_resizeH, DXGI_FORMAT_UNKNOWN, 0);
-                g_resizeW = g_resizeH = 0;
-                CreateRtv();
-            }
-            ImGui_ImplDX11_NewFrame();
-            ImGui_ImplWin32_NewFrame();
-            ImGui::NewFrame();
-            app.Frame();
-            ImGui::Render();
-            const float clear[4] = {0.118f, 0.129f, 0.157f, 1};
-            ID3D11RenderTargetView* rtv = g_rtv.Get();
-            g_ctx->OMSetRenderTargets(1, &rtv, nullptr);
-            g_ctx->ClearRenderTargetView(rtv, clear);
-            ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
-            if (!screenshot.empty() && (GetTickCount64() - start) / 1000.0 >= delay && !app.Loading()) {
+            g_frame(false);
+            // a few settled frames first: tab bars lay out their tabs one frame after they appear
+            settled = app.Loading() ? 0 : settled + 1;
+            if (!screenshot.empty() && (GetTickCount64() - start) / 1000.0 >= delay && settled >= 3) {
                 SaveBackBuffer(screenshot);
                 break;
             }
             HRESULT hr = g_swap->Present(1, 0);
             if (hr == DXGI_STATUS_OCCLUDED) Sleep(16);
         }
+        g_frame = nullptr;   // it references `app`: WM_SIZE during shutdown must not render with a destroyed App
     }
 
     ImGui_ImplDX11_Shutdown();

@@ -70,6 +70,25 @@ static std::string HumanSize(u64 b) {
 
 static void CopyToClipboard(const std::string& s) { ImGui::SetClipboardText(s.c_str()); }
 
+static void DrawFolderIcon(ImDrawList* dl, ImVec2 c) {
+    float u = ImGui::GetFontSize() / 15.f;
+    ImU32 col = IM_COL32(232, 190, 90, 255);
+    dl->AddRectFilled(ImVec2(c.x, c.y - 5 * u), ImVec2(c.x + 6 * u, c.y - 2 * u), col, 1.5f * u);
+    dl->AddRectFilled(ImVec2(c.x, c.y - 3.5f * u), ImVec2(c.x + 14 * u, c.y + 5 * u), col, 1.5f * u);
+}
+
+// Toolbar flow layout: continues on the same line when the next item (width w) still fits, otherwise wraps (keeps toolbars usable in narrow windows)
+static void FlowNext(float w) {
+    float x = ImGui::GetItemRectMax().x + ImGui::GetStyle().ItemSpacing.x;
+    float right = ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x;
+    if (x + w <= right) ImGui::SameLine();
+}
+static bool FlowCheckbox(const char* label, bool* v, bool first = false) {
+    float w = ImGui::GetFrameHeight() + ImGui::GetStyle().ItemInnerSpacing.x + ImGui::CalcTextSize(label, nullptr, true).x;
+    if (!first) FlowNext(w);
+    return ImGui::Checkbox(label, v);
+}
+
 static std::string GamePathToPackage(std::string_view p) {
     // Athena/Content/X/y.uasset -> /Game/X/y
     std::string s(p);
@@ -149,7 +168,20 @@ bool App::Init(void* hwnd, ID3D11Device* dev, ID3D11DeviceContext* ctx) {
     }
     MeshLod sphere = MakeSphere(50, 64, 32);
     m_sphere = m_renderer->CreateMesh(sphere, {-50, -50, -50}, {50, 50, 50});
+    // sea level plane for map views (unit quad, scaled when drawn)
+    MeshLod quad;
+    quad.positions = {{-1, -1, 0}, {1, -1, 0}, {1, 1, 0}, {-1, 1, 0}};
+    quad.normals.assign(4, Vec3{0, 0, 1});
+    quad.indices = {0, 2, 1, 0, 3, 2};
+    m_water = m_renderer->CreateMesh(quad, {-1, -1, 0}, {1, 1, 0});
+    if (m_water) {
+        auto wm = std::make_shared<GpuMaterial>();
+        wm->color[0] = 0.02f; wm->color[1] = 0.11f; wm->color[2] = 0.16f;
+        wm->twoSided = true;
+        m_water->materials = {wm};
+    }
     LOGI("settings: %s", Narrow(Settings::Path()).c_str());
+    if (startTab >= 0) m_leftTab = startTab;
     StartMount();
     return true;
 }
@@ -212,12 +244,8 @@ void App::Frame() {
     else if (m_busyFrames > 0)
         m_busyFrames--;
 
-    if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_F)) m_focusSearch = true;
-    if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_W) && m_activeDoc) {
-        m_docs.erase(std::remove_if(m_docs.begin(), m_docs.end(), [&](auto& d) { return d->id == m_activeDoc; }), m_docs.end());
-        m_activeDoc = 0;
-        if (m_jobs->Pending() == 0 && m_assets) m_assets->Trim();
-    }
+    if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_F)) { m_focusSearch = true; m_leftTab = 2; }
+    if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_W) && m_activeDoc) CloseDocument(m_activeDoc);
 
     const ImGuiViewport* vp = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(vp->WorkPos);
@@ -230,55 +258,38 @@ void App::Frame() {
     DrawMenu();
 
     float statusH = ImGui::GetFrameHeight() + 2;
-    float logH = m_showLog ? ImGui::GetTextLineHeightWithSpacing() * 7 : 0;
     ImVec2 avail = ImGui::GetContentRegionAvail();
-    float mainH = avail.y - statusH - logH;
+    float mainH = avail.y - statusH - ImGui::GetStyle().ItemSpacing.y;   // the status bar ends flush with the window bottom
     float cellH = mainH - ImGui::GetStyle().CellPadding.y * 2;
 
-    if (ImGui::BeginTable("##layout", 3, ImGuiTableFlags_Resizable | ImGuiTableFlags_BordersInnerV, ImVec2(0, mainH))) {
-        ImGui::TableSetupColumn("left", ImGuiTableColumnFlags_WidthStretch, 0.22f);
-        ImGui::TableSetupColumn("files", ImGuiTableColumnFlags_WidthStretch, 0.26f);
-        ImGui::TableSetupColumn("docs", ImGuiTableColumnFlags_WidthStretch, 0.52f);
+    if (ImGui::BeginTable("##layout", 2, ImGuiTableFlags_Resizable | ImGuiTableFlags_BordersInnerV, ImVec2(0, mainH))) {
+        ImGui::TableSetupColumn("left", ImGuiTableColumnFlags_WidthStretch, 0.37f);
+        ImGui::TableSetupColumn("right", ImGuiTableColumnFlags_WidthStretch, 0.63f);
         ImGui::TableNextRow();
         ImGui::TableNextColumn();
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6, 6));
-        ImGui::BeginChild("##left", ImVec2(0, cellH), ImGuiChildFlags_AlwaysUseWindowPadding);
-        if (ImGui::BeginTabBar("##lefttabs")) {
-            if (ImGui::BeginTabItem("Folders")) {
-                ImGui::BeginChild("##tree");
-                if (m_mountState == MountState::Ready) {
-                    auto& folders = m_api->vfs.Folders();
-                    if (!folders.empty())
-                        for (u32 c : folders[0].folders) DrawFolderTree(c);
-                } else if (m_mountState == MountState::Mounting) {
-                    ImGui::TextDisabled("Loading archives...");
-                } else {
-                    ImGui::TextWrapped("Archives are not loaded. Open Settings to choose the game folder and AES keys.");
-                    if (!m_mountError.empty()) ImGui::TextColored(ImVec4(1, 0.45f, 0.4f, 1), "%s", m_mountError.c_str());
-                    if (ImGui::Button("Settings...")) m_showSettings = true;
-                }
-                ImGui::EndChild();
-                ImGui::EndTabItem();
-            }
-            if (ImGui::BeginTabItem("Archives")) {
-                DrawArchives();
-                ImGui::EndTabItem();
-            }
-            ImGui::EndTabBar();
-        }
-        ImGui::EndChild();
+        DrawLeftPanel(cellH);
         ImGui::TableNextColumn();
-        ImGui::BeginChild("##files", ImVec2(0, cellH), ImGuiChildFlags_AlwaysUseWindowPadding);
-        DrawFileList();
-        ImGui::EndChild();
-        ImGui::TableNextColumn();
-        ImGui::BeginChild("##docs", ImVec2(0, cellH), ImGuiChildFlags_AlwaysUseWindowPadding);
+        float split = 8;
+        if (m_logFrac <= 0) m_logFrac = 0.2f;
+        float logH = m_showLog ? std::clamp(m_logFrac * cellH, 48.f, std::max(48.f, cellH * 0.6f)) : 0;
+        // the splitter and the log are two more items: account for the spacing before each so the column does not overflow
+        float logBlock = m_showLog ? logH + split + ImGui::GetStyle().ItemSpacing.y * 2 : 0;
+        ImGui::BeginChild("##docs", ImVec2(0, std::max(1.f, cellH - logBlock)), ImGuiChildFlags_AlwaysUseWindowPadding);
         DrawDocuments();
         ImGui::EndChild();
+        if (m_showLog) {
+            ImGui::InvisibleButton("##logsplit", ImVec2(-FLT_MIN, split));
+            if (ImGui::IsItemActive()) m_logFrac = std::clamp((logH - ImGui::GetIO().MouseDelta.y) / std::max(1.f, cellH), 0.08f, 0.6f);
+            if (ImGui::IsItemHovered() || ImGui::IsItemActive()) ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
+            ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
+            ImVec2 c((a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f);
+            ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(c.x - 14, c.y - 1), ImVec2(c.x + 14, c.y + 1), IM_COL32(120, 124, 145, 255));
+            DrawLog(logH);
+        }
         ImGui::PopStyleVar();
         ImGui::EndTable();
     }
-    if (m_showLog) DrawLog();
     DrawStatusBar();
     ImGui::End();
 
@@ -286,20 +297,25 @@ void App::Frame() {
     DrawExportProgress();
 }
 
+void App::ReloadArchives() {
+    if (m_mountState == MountState::Mounting) return;
+    m_exportCancel = true;
+    CloseDocument(0);   // cancels map loads so WaitIdle does not block on them
+    m_jobs->WaitIdle();
+    m_assets.reset();
+    m_api->Unmount();
+    m_searchResults.clear();
+    m_lastSearch.clear();
+    m_pakSizes.clear();
+    m_selPak = -1;
+    m_folder = 0;
+    StartMount();
+}
+
 void App::DrawMenu() {
     if (!ImGui::BeginMenuBar()) return;
-    if (ImGui::BeginMenu("File")) {
-        if (ImGui::MenuItem("Settings...")) m_showSettings = true;
-        if (ImGui::MenuItem("Reload archives", nullptr, false, m_mountState != MountState::Mounting)) {
-            m_exportCancel = true;
-            m_jobs->WaitIdle();
-            m_docs.clear();
-            m_assets.reset();
-            m_api->Unmount();
-            m_searchResults.clear();
-            m_lastSearch.clear();
-            StartMount();
-        }
+    if (ImGui::BeginMenu("Directory")) {
+        if (ImGui::MenuItem("Reload archives", nullptr, false, m_mountState != MountState::Mounting)) ReloadArchives();
         if (ImGui::MenuItem("Open output folder")) {
             CreateDirectories(m_settings.outputDir);
             ShellExecuteW(nullptr, L"open", m_settings.outputDir.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
@@ -308,12 +324,20 @@ void App::DrawMenu() {
         if (ImGui::MenuItem("Exit")) m_quit = true;
         ImGui::EndMenu();
     }
-    if (ImGui::BeginMenu("View")) {
+    if (ImGui::BeginMenu("Packages")) {
+        bool ready = m_mountState == MountState::Ready;
+        if (ImGui::MenuItem("Export current folder (models / textures)", nullptr, false, ready)) ExportFiles(FolderFilesRecursive(m_folder), 0);
+        if (ImGui::MenuItem("Save current folder properties (.json)", nullptr, false, ready)) ExportFiles(FolderFilesRecursive(m_folder), 2);
+        if (ImGui::MenuItem("Search", "Ctrl+F", false, ready)) { m_focusSearch = true; m_leftTab = 2; }
+        ImGui::EndMenu();
+    }
+    if (ImGui::BeginMenu("Views")) {
         ImGui::MenuItem("Log", nullptr, &m_showLog);
-        if (ImGui::MenuItem("Close all tabs")) {
-            m_docs.clear();
-            if (m_jobs->Pending() == 0 && m_assets) m_assets->Trim();
-        }
+        if (ImGui::MenuItem("Close all tabs")) CloseDocument(0);
+        ImGui::EndMenu();
+    }
+    if (ImGui::BeginMenu("Settings")) {
+        if (ImGui::MenuItem("General...")) m_showSettings = true;
         ImGui::EndMenu();
     }
     if (ImGui::BeginMenu("Help")) {
@@ -341,14 +365,19 @@ std::vector<u32> App::FolderFilesRecursive(u32 folder) const {
 void App::DrawFolderTree(u32 idx) {
     auto& folders = m_api->vfs.Folders();
     const VfsFolder& f = folders[idx];
-    ImGuiTreeNodeFlags fl = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick | ImGuiTreeNodeFlags_SpanAvailWidth;
+    ImGuiTreeNodeFlags fl = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick | ImGuiTreeNodeFlags_SpanFullWidth;
     if (f.folders.empty()) fl |= ImGuiTreeNodeFlags_Leaf;
     if (m_folder == idx) fl |= ImGuiTreeNodeFlags_Selected;
     ImGui::PushID((int)idx);
-    bool open = ImGui::TreeNodeEx("##n", fl, "%s", f.name.c_str());
+    bool open = ImGui::TreeNodeEx("##n", fl, "      %s", f.name.c_str());
+    {
+        ImVec2 mn = ImGui::GetItemRectMin();
+        DrawFolderIcon(ImGui::GetWindowDrawList(), ImVec2(mn.x + ImGui::GetTreeNodeToLabelSpacing() - 2, mn.y + ImGui::GetFrameHeight() * 0.5f));
+    }
     if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen()) {
         m_folder = idx;
         m_search[0] = 0;
+        m_selectExplorer = true;   // show the folder's contents even when a document tab is in front
     }
     if (ImGui::BeginPopupContextItem()) {
         ImGui::TextDisabled("%s (%u files)", f.name.c_str(), f.totalFiles);
@@ -358,8 +387,6 @@ void App::DrawFolderTree(u32 idx) {
         if (ImGui::MenuItem("Export folder raw (.uasset)")) ExportFiles(FolderFilesRecursive(idx), 1);
         ImGui::EndPopup();
     }
-    ImGui::SameLine();
-    ImGui::TextDisabled("%u", f.totalFiles);
     if (open) {
         for (u32 c : f.folders) DrawFolderTree(c);
         ImGui::TreePop();
@@ -367,35 +394,141 @@ void App::DrawFolderTree(u32 idx) {
     ImGui::PopID();
 }
 
+static void SeparatorLabel(const char* label) {
+    ImGui::PushStyleVar(ImGuiStyleVar_SeparatorTextAlign, ImVec2(0.5f, 0.5f));
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.95f, 0.97f, 1));
+    ImGui::SeparatorText(label);
+    ImGui::PopStyleColor();
+    ImGui::PopStyleVar();
+}
+
+// value on the left, caption right-aligned (FModel's INFORMATION block)
+static void InfoRow(const std::string& value, const char* caption) {
+    float w = ImGui::GetContentRegionAvail().x;
+    float x0 = ImGui::GetCursorPosX();
+    ImVec2 cs = ImGui::CalcTextSize(caption);
+    ImGui::TextUnformatted(value.c_str());
+    ImGui::SameLine(x0 + std::max(w - cs.x, ImGui::CalcTextSize(value.c_str()).x + 12));
+    ImGui::TextUnformatted(caption);
+}
+
 void App::DrawArchives() {
     if (m_mountState != MountState::Ready) {
-        ImGui::TextDisabled("No archives loaded");
+        ImGui::TextDisabled(m_mountState == MountState::Mounting ? "Loading archives..." : "No archives loaded");
         return;
     }
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted("Loading Mode");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    if (ImGui::BeginCombo("##loadmode", "All")) {
+        ImGui::Selectable("All", true);
+        ImGui::EndCombo();
+    }
+    if (ImGui::Button("Load", ImVec2(-FLT_MIN, 0))) ReloadArchives();
+    SeparatorLabel("GAME ARCHIVES");
     auto& paks = m_api->vfs.Paks();
-    ImGui::TextDisabled("%zu archives, %zu files", paks.size(), m_api->vfs.FileCount());
-    if (ImGui::BeginTable("##paks", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable | ImGuiTableFlags_BordersInnerV)) {
-        ImGui::TableSetupScrollFreeze(0, 1);
-        ImGui::TableSetupColumn("Archive");
-        ImGui::TableSetupColumn("Files", ImGuiTableColumnFlags_WidthFixed, 60);
-        ImGui::TableSetupColumn("Key", ImGuiTableColumnFlags_WidthFixed, 40);
-        ImGui::TableHeadersRow();
+    if (m_pakSizes.size() != paks.size()) m_pakSizes.assign(paks.size(), UINT64_MAX);
+    if (ImGui::BeginChild("##paklist")) {
         ImGuiListClipper clip;
-        clip.Begin((int)paks.size());
+        clip.Begin((int)paks.size(), ImGui::GetTextLineHeightWithSpacing() + 4);
         while (clip.Step())
             for (int i = clip.DisplayStart; i < clip.DisplayEnd; i++) {
-                ImGui::TableNextRow();
-                ImGui::TableNextColumn();
-                ImGui::TextUnformatted(paks[i]->name.c_str());
-                ImGui::TableNextColumn();
-                ImGui::Text("%u", paks[i]->fileCount);
-                ImGui::TableNextColumn();
-                int k = paks[i]->keyIndex;
-                if (k >= 0) ImGui::Text("#%d", k);
-                else ImGui::TextDisabled("-");
+                if (m_pakSizes[i] == UINT64_MAX) {
+                    WIN32_FILE_ATTRIBUTE_DATA fad = {};
+                    m_pakSizes[i] = GetFileAttributesExW(paks[i]->path.c_str(), GetFileExInfoStandard, &fad) ? ((u64)fad.nFileSizeHigh << 32 | fad.nFileSizeLow) : 0;
+                }
+                ImGui::PushID(i);
+                ImVec2 p = ImGui::GetCursorScreenPos();
+                float lh = ImGui::GetTextLineHeight();
+                if (ImGui::Selectable("##pak", m_selPak == i, ImGuiSelectableFlags_SpanAllColumns, ImVec2(0, lh + 4))) m_selPak = i;
+                ImDrawList* dl = ImGui::GetWindowDrawList();
+                // small green "file" icon
+                dl->AddRectFilled(ImVec2(p.x + 6, p.y + 2), ImVec2(p.x + 6 + lh * 0.8f, p.y + 2 + lh), IM_COL32(90, 190, 90, 255), 2);
+                dl->AddRectFilled(ImVec2(p.x + 6 + lh * 0.2f, p.y + 2 + lh * 0.3f), ImVec2(p.x + 6 + lh * 0.6f, p.y + 2 + lh * 0.7f), IM_COL32(230, 245, 230, 255));
+                float rowW = ImGui::GetContentRegionAvail().x, szW = ImGui::CalcTextSize("0000.0 MB").x;
+                dl->PushClipRect(ImVec2(p.x, p.y), ImVec2(p.x + rowW - szW - 12, p.y + lh + 4), true);
+                dl->AddText(ImVec2(p.x + 8 + lh, p.y + 2), ImGui::GetColorU32(ImGuiCol_Text), paks[i]->name.c_str());
+                dl->PopClipRect();
+                std::string sz = HumanSize(m_pakSizes[i]);
+                dl->AddText(ImVec2(p.x + rowW - ImGui::CalcTextSize(sz.c_str()).x - 4, p.y + 2), ImGui::GetColorU32(ImGuiCol_Text), sz.c_str());
+                ImGui::PopID();
             }
-        ImGui::EndTable();
     }
+    ImGui::EndChild();
+}
+
+void App::DrawLeftPanel(float height) {
+    ImGui::BeginChild("##left", ImVec2(0, height), ImGuiChildFlags_AlwaysUseWindowPadding);
+    const VfsFolder* cur = nullptr;
+    size_t packages = 0;
+    if (m_mountState == MountState::Ready) {
+        cur = &m_api->vfs.Folders()[m_folder];
+        packages = cur->files.size();
+    }
+    // three equal tabs
+    {
+        std::string labels[3] = {"Archives", "Folders", Fmt("%zu Packages", packages)};
+        float w = ImGui::GetContentRegionAvail().x / 3.f, h = ImGui::GetFrameHeight() + 6;
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        ImVec2 p0 = ImGui::GetCursorScreenPos();
+        ImGuiStyle& st = ImGui::GetStyle();
+        for (int i = 0; i < 3; i++) {
+            ImVec2 p(p0.x + w * i, p0.y);
+            ImGui::SetCursorScreenPos(p);
+            ImGui::PushID(i);
+            if (ImGui::InvisibleButton("##t", ImVec2(w, h))) m_leftTab = i;
+            ImGui::PopID();
+            bool sel = m_leftTab == i;
+            dl->AddRectFilled(p, ImVec2(p.x + w, p.y + h), sel ? IM_COL32(58, 61, 80, 255) : ImGui::IsItemHovered() ? IM_COL32(44, 47, 63, 255) : IM_COL32(32, 34, 46, 255));
+            ImVec2 ts = ImGui::CalcTextSize(labels[i].c_str());
+            dl->AddText(ImVec2(p.x + (w - ts.x) * 0.5f, p.y + (h - ts.y) * 0.5f), ImGui::GetColorU32(ImGuiCol_Text), labels[i].c_str());
+        }
+        ImGui::SetCursorScreenPos(ImVec2(p0.x, p0.y + h + st.ItemSpacing.y));
+    }
+    bool showInfo = height > ImGui::GetFontSize() * 28;
+    float infoH = showInfo ? ImGui::GetTextLineHeightWithSpacing() * 5 + ImGui::GetFrameHeight() + 12 : 0;
+    ImGui::BeginChild("##leftbody", ImVec2(0, ImGui::GetContentRegionAvail().y - infoH));
+    if (m_leftTab == 0) {
+        DrawArchives();
+    } else if (m_leftTab == 1) {
+        if (m_mountState == MountState::Ready) {
+            auto& folders = m_api->vfs.Folders();
+            if (!folders.empty()) {
+                ImGui::TextDisabled("'%s' has %zu folders and %zu packages", m_folder ? cur->name.c_str() : "/", cur->folders.size(), cur->files.size());
+                ImGui::Separator();
+                ImGui::BeginChild("##tree");
+                for (u32 c : folders[0].folders) DrawFolderTree(c);
+                ImGui::EndChild();
+            }
+        } else if (m_mountState == MountState::Mounting) {
+            ImGui::TextDisabled("Loading archives...");
+        } else {
+            ImGui::TextWrapped("Archives are not loaded. Open Settings to choose the game folder and AES keys.");
+            if (!m_mountError.empty()) ImGui::TextColored(ImVec4(1, 0.45f, 0.4f, 1), "%s", m_mountError.c_str());
+            if (ImGui::Button("Settings...")) m_showSettings = true;
+        }
+    } else {
+        DrawFileList();
+    }
+    ImGui::EndChild();
+    if (showInfo) SeparatorLabel("INFORMATION");
+    if (showInfo && m_mountState == MountState::Ready) {
+        auto& paks = m_api->vfs.Paks();
+        if (m_leftTab == 0 && m_selPak >= 0 && m_selPak < (int)paks.size()) {
+            auto& pk = *paks[m_selPak];
+            InfoRow(pk.mountPoint.empty() ? "/" : pk.mountPoint, "Mount Point");
+            InfoRow(Fmt("%u", pk.fileCount), "File Count");
+            InfoRow(pk.keyIndex >= 0 ? "True" : "False", "Is Encrypted");
+            InfoRow(Fmt("%u", pk.version), "Archive Version");
+        } else {
+            InfoRow(Fmt("%zu", cur->files.size()), "Packages Count");
+            InfoRow(Fmt("%zu", cur->folders.size()), "Folders Count");
+            InfoRow(Fmt("%u", cur->totalFiles), "Total Files");
+            InfoRow(Fmt("%zu", paks.size()), "Archives");
+        }
+    }
+    ImGui::EndChild();
 }
 
 void App::UpdateSearch() {
@@ -437,6 +570,223 @@ void App::UpdateSearch() {
         }
     }
     std::sort(m_searchResults.begin(), m_searchResults.end(), [&](u32 a, u32 b) { return vfs.Path(a) < vfs.Path(b); });
+}
+
+void App::DrawFileMenu(u32 e, bool searching) {
+    const Vfs& vfs = m_api->vfs;
+    auto& folders = vfs.Folders();
+    bool pkg = IsPackageFile(vfs.Path(e));
+    m_selected = e;
+    if (ImGui::MenuItem("Open", nullptr, false, pkg)) OpenFile(e);
+    if (ImGui::MenuItem("Export (model / texture)", nullptr, false, pkg)) ExportFiles({e}, 0);
+    if (ImGui::MenuItem("Save properties (.json)", nullptr, false, pkg)) ExportFiles({e}, 2);
+    if (ImGui::MenuItem("Export raw")) ExportFiles({e}, 1);
+    ImGui::Separator();
+    if (ImGui::MenuItem("Copy path")) CopyToClipboard(std::string(vfs.Path(e)));
+    if (ImGui::MenuItem("Copy /Game path")) CopyToClipboard(GamePathToPackage(vfs.Path(e)));
+    if (searching && ImGui::MenuItem("Show in folder")) {
+        // walk the tree along the path components
+        std::string_view p = vfs.Path(e);
+        u32 cur = 0;
+        size_t pos = 0;
+        for (;;) {
+            size_t sl = p.find('/', pos);
+            if (sl == std::string_view::npos) break;
+            std::string_view part = p.substr(pos, sl - pos);
+            u32 next = UINT32_MAX;
+            for (u32 c : folders[cur].folders) if (IEquals(folders[c].name, part)) { next = c; break; }
+            if (next == UINT32_MAX) break;
+            cur = next;
+            pos = sl + 1;
+        }
+        m_folder = cur;
+        m_search[0] = 0;
+        m_selectExplorer = true;
+    }
+}
+
+// FModel "new explorer": tiles for folders and packages of the selected folder (or the search results)
+static ImU32 FileTint(std::string_view name) {
+    if (IEndsWith(name, ".umap")) return IM_COL32(255, 165, 0, 255);
+    if (IEndsWith(name, ".uasset")) return IM_COL32(30, 144, 255, 255);
+    if (IEndsWith(name, ".ubulk") || IEndsWith(name, ".uexp")) return IM_COL32(147, 112, 219, 255);
+    return IM_COL32(255, 235, 0, 255);
+}
+
+static void DrawBigFolder(ImDrawList* dl, ImVec2 mn, ImVec2 mx) {
+    float w = mx.x - mn.x, h = mx.y - mn.y;
+    float fw = w * 0.62f, fh = fw * 0.72f;
+    ImVec2 p(mn.x + (w - fw) * 0.5f, mn.y + (h - fh) * 0.5f);
+    dl->AddRectFilled(p, ImVec2(p.x + fw * 0.42f, p.y + fh * 0.3f), IM_COL32(215, 170, 100, 255), fw * 0.06f);
+    dl->AddRectFilled(ImVec2(p.x, p.y + fh * 0.12f), ImVec2(p.x + fw, p.y + fh), IM_COL32(236, 196, 140, 255), fw * 0.08f);
+    dl->AddRectFilled(ImVec2(p.x, p.y + fh * 0.12f), ImVec2(p.x + fw, p.y + fh * 0.22f), IM_COL32(222, 178, 112, 255), fw * 0.05f, ImDrawFlags_RoundCornersTop);
+}
+
+static void DrawBigFile(ImDrawList* dl, ImVec2 mn, ImVec2 mx, ImU32 col) {
+    float w = mx.x - mn.x, h = mx.y - mn.y;
+    float fw = w * 0.42f, fh = fw * 1.25f, c = fw * 0.3f;
+    ImVec2 p(mn.x + (w - fw) * 0.5f, mn.y + (h - fh) * 0.5f);
+    dl->AddRectFilled(p, ImVec2(p.x + fw, p.y + fh), col, 3);
+    dl->AddTriangleFilled(ImVec2(p.x + fw - c, p.y), ImVec2(p.x + fw, p.y), ImVec2(p.x + fw, p.y + c), IM_COL32(24, 25, 34, 255));
+    for (int r = 0; r < 3; r++)
+        for (int k = 0; k < 2; k++) {
+            float gx = p.x + fw * 0.2f + k * fw * 0.33f, gy = p.y + fh * 0.45f + r * fh * 0.17f;
+            dl->AddRectFilled(ImVec2(gx, gy), ImVec2(gx + fw * 0.27f, gy + fh * 0.13f), IM_COL32(24, 25, 34, 255));
+        }
+}
+
+void App::DrawExplorer() {
+    if (m_mountState != MountState::Ready) {
+        ImGui::TextDisabled("%s", m_mountState == MountState::Mounting ? "Loading archives..." : "Archives are not loaded");
+        return;
+    }
+    const Vfs& vfs = m_api->vfs;
+    auto& folders = vfs.Folders();
+    float u = ImGui::GetFontSize() / 16.f;
+    // search bar
+    {
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(34 * u, 8 * u));
+        float availX = ImGui::GetContentRegionAvail().x;
+        float rightW = std::min(170 * u, availX * 0.3f);
+        ImGui::SetNextItemWidth(std::max(80 * u, availX - rightW - 48 * u));
+        ImVec2 p0 = ImGui::GetCursorScreenPos();
+        ImGui::InputTextWithHint("##xsearch", "Search by name...", m_search, sizeof(m_search));
+        ImGui::PopStyleVar();
+        float fh = ImGui::GetItemRectSize().y;
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        ImVec2 mc(p0.x + 17 * u, p0.y + fh * 0.5f - 1);
+        ImU32 ic = IM_COL32(210, 212, 225, 255);
+        dl->AddCircle(mc, 5 * u, ic, 0, 1.6f);
+        dl->AddLine(ImVec2(mc.x + 3.6f * u, mc.y + 3.6f * u), ImVec2(mc.x + 8 * u, mc.y + 8 * u), ic, 1.8f);
+        ImGui::SameLine(0, 0);
+        if (ImGui::Button("x##xclear", ImVec2(32 * u, fh))) m_search[0] = 0;
+        ImGui::SameLine(0, 10 * u);
+        ImGui::SetNextItemWidth(rightW);
+        const char* kinds[] = {"All", "Packages", "Other files"};
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10 * u, 8 * u));
+        ImGui::Combo("##xfilter", &m_explorerFilter, kinds, 3);
+        ImGui::PopStyleVar();
+    }
+    UpdateSearch();
+    bool searching = m_search[0] != 0;
+    const std::vector<u32>& allFiles = searching ? m_searchResults : folders[m_folder].files;
+
+    // breadcrumb
+    if (searching) {
+        ImGui::TextDisabled("%zu result(s)%s", m_searchResults.size(), m_searchTruncated ? " (truncated)" : "");
+    } else {
+        std::vector<u32> chain;
+        for (u32 f = m_folder; f != UINT32_MAX && f != 0; f = folders[f].parent) chain.push_back(f);
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+        if (ImGui::SmallButton("/")) m_folder = 0;
+        for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
+            ImGui::SameLine(0, 2);
+            ImGui::TextDisabled(">");
+            ImGui::SameLine(0, 2);
+            ImGui::PushID((int)*it);
+            if (ImGui::SmallButton(folders[*it].name.c_str())) m_folder = *it;
+            ImGui::PopID();
+        }
+        ImGui::PopStyleColor();
+    }
+
+    // items: folders first, then files filtered by type
+    std::vector<u32> subfolders;
+    if (!searching && m_explorerFilter != 2) subfolders = folders[m_folder].folders;
+    std::vector<u32> files;
+    files.reserve(allFiles.size());
+    for (u32 e : allFiles) {
+        bool pkg = IsPackageFile(vfs.Path(e));
+        if (m_explorerFilter == 1 && !pkg) continue;
+        if (m_explorerFilter == 2 && pkg) continue;
+        files.push_back(e);
+    }
+    float tw = 160 * u, th = 240 * u, gx = 44 * u, gy = 16 * u;
+    ImGui::BeginChild("##tiles", ImVec2(0, 0), ImGuiChildFlags_None);
+    // back to the top when another folder (or another search) is shown
+    std::string viewKey = searching ? std::string(m_search) : Fmt("#%u", m_folder);
+    if (viewKey != m_explorerView) {
+        m_explorerView = viewKey;
+        ImGui::SetScrollY(0);
+    }
+    float availW = ImGui::GetContentRegionAvail().x;
+    int cols = std::max(1, (int)((availW + gx) / (tw + gx)));
+    int total = (int)(subfolders.size() + files.size());
+    int rows = (total + cols - 1) / cols;
+    float startX = ImGui::GetCursorPosX() + std::max(0.f, (availW - (cols * (tw + gx) - gx)) * 0.5f);
+    float y0 = ImGui::GetCursorPosY();
+    ImGuiListClipper clip;
+    clip.Begin(rows, th + gy);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    while (clip.Step())
+        for (int row = clip.DisplayStart; row < clip.DisplayEnd; row++)
+            for (int cI = 0; cI < cols; cI++) {
+                int idx = row * cols + cI;
+                if (idx >= total) break;
+                ImGui::SetCursorPos(ImVec2(startX + cI * (tw + gx), y0 + row * (th + gy)));
+                ImVec2 mn = ImGui::GetCursorScreenPos(), mx(mn.x + tw, mn.y + th);
+                ImGui::PushID(idx);
+                bool isFolder = idx < (int)subfolders.size();
+                u32 id = isFolder ? subfolders[idx] : files[idx - subfolders.size()];
+                bool selected = !isFolder && m_selected == (i64)id;
+                ImGui::InvisibleButton("##tile", ImVec2(tw, th));
+                bool hov = ImGui::IsItemHovered();
+                // buttons report clicks on release, so a double click has to be read from the press itself
+                bool clicked = ImGui::IsItemClicked(ImGuiMouseButton_Left);
+                bool dblClicked = hov && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
+                if (isFolder) {
+                    dl->AddRectFilled(mn, mx, hov ? IM_COL32(56, 59, 78, 255) : IM_COL32(46, 48, 64, 255));
+                    DrawBigFolder(dl, mn, ImVec2(mx.x, mn.y + th * 0.68f));
+                    const std::string& nm = folders[id].name;
+                    ImVec2 ts = ImGui::CalcTextSize(nm.c_str());
+                    // long names stay inside the tile (left-aligned and clipped instead of centred over the neighbours)
+                    dl->PushClipRect(ImVec2(mn.x + 4 * u, mn.y), ImVec2(mx.x - 4 * u, mx.y), true);
+                    dl->AddText(ImVec2(mn.x + std::max(6 * u, (tw - ts.x) * 0.5f), mn.y + th * 0.68f + 4 * u), IM_COL32(245, 245, 250, 255), nm.c_str());
+                    dl->PopClipRect();
+                    std::string l1 = Fmt("Subfolders: %zu", folders[id].folders.size()), l2 = Fmt("Assets: %zu", folders[id].files.size());
+                    ImVec2 s1 = ImGui::CalcTextSize(l1.c_str()), s2 = ImGui::CalcTextSize(l2.c_str());
+                    float ly = mn.y + th * 0.68f + 4 * u + ts.y + 10 * u;
+                    dl->AddText(ImVec2(mn.x + (tw - s1.x) * 0.5f, ly), IM_COL32(200, 202, 215, 255), l1.c_str());
+                    dl->AddText(ImVec2(mn.x + (tw - s2.x) * 0.5f, ly + s1.y + 2 * u), IM_COL32(200, 202, 215, 255), l2.c_str());
+                    if (hov) ImGui::SetTooltip("%s", nm.c_str());
+                    if (dblClicked) { m_folder = id; m_search[0] = 0; }
+                    if (ImGui::BeginPopupContextItem()) {
+                        if (ImGui::MenuItem("Open")) { m_folder = id; m_search[0] = 0; }
+                        if (ImGui::MenuItem("Export folder (models / textures)")) ExportFiles(FolderFilesRecursive(id), 0);
+                        if (ImGui::MenuItem("Save folder properties (.json)")) ExportFiles(FolderFilesRecursive(id), 2);
+                        ImGui::EndPopup();
+                    }
+                } else {
+                    std::string_view path = vfs.Path(id);
+                    std::string_view fn = vfs.FileName(id);
+                    size_t dot = fn.rfind('.');
+                    std::string base(dot == std::string_view::npos ? fn : fn.substr(0, dot));
+                    std::string ext(dot == std::string_view::npos ? std::string_view() : fn.substr(dot + 1));
+                    float topH = th * 0.76f;
+                    ImU32 tint = FileTint(fn);
+                    dl->AddRectFilled(mn, mx, hov ? IM_COL32(56, 59, 78, 255) : IM_COL32(46, 48, 64, 255));
+                    dl->AddRectFilled(mn, ImVec2(mx.x, mn.y + topH), IM_COL32(24, 25, 34, 255));
+                    DrawBigFile(dl, mn, ImVec2(mx.x, mn.y + topH), tint);
+                    dl->AddRectFilled(ImVec2(mn.x, mn.y + topH), ImVec2(mx.x, mn.y + topH + 2 * u), tint);
+                    dl->PushClipRect(ImVec2(mn.x + 6 * u, mn.y + topH), ImVec2(mx.x - 6 * u, mx.y), true);
+                    dl->AddText(ImVec2(mn.x + 8 * u, mn.y + topH + 8 * u), IM_COL32(245, 245, 250, 255), base.c_str());
+                    dl->PopClipRect();
+                    std::string sz = HumanSize(vfs.Entry(id).usize);
+                    float by = mx.y - ImGui::GetTextLineHeight() - 6 * u;
+                    dl->AddText(ImVec2(mn.x + 8 * u, by), IM_COL32(150, 153, 170, 255), ext.c_str());
+                    dl->AddText(ImVec2(mx.x - 8 * u - ImGui::CalcTextSize(sz.c_str()).x, by), IM_COL32(150, 153, 170, 255), sz.c_str());
+                    if (selected) dl->AddRect(mn, mx, IM_COL32(31, 107, 214, 255), 0, 0, 2.f);
+                    if (clicked) m_selected = id;
+                    if (dblClicked) OpenFile(id);
+                    if (hov) ImGui::SetTooltip("%s", std::string(path).c_str());
+                    if (ImGui::BeginPopupContextItem()) {
+                        DrawFileMenu(id, searching);
+                        ImGui::EndPopup();
+                    }
+                }
+                ImGui::PopID();
+            }
+    ImGui::EndChild();
 }
 
 void App::DrawFileList() {
@@ -492,6 +842,8 @@ void App::DrawFileList() {
                 u32 fi = subfolders[row];
                 ImGui::PushID(-(int)fi - 1);
                 ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.8f, 0.45f, 1));
+                DrawFolderIcon(ImGui::GetWindowDrawList(), ImVec2(ImGui::GetCursorScreenPos().x + 2, ImGui::GetCursorScreenPos().y + ImGui::GetTextLineHeight() * 0.5f + 1));
+                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetFontSize() * 1.3f);
                 if (ImGui::Selectable(folders[fi].name.c_str(), false, ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowDoubleClick) &&
                     ImGui::IsMouseDoubleClicked(0))
                     m_folder = fi;
@@ -522,32 +874,7 @@ void App::DrawFileList() {
             if (!pkg) ImGui::PopStyleColor();
             if (ImGui::IsItemFocused() && ImGui::IsKeyPressed(ImGuiKey_Enter)) OpenFile(e);
             if (ImGui::BeginPopupContextItem()) {
-                m_selected = e;
-                if (ImGui::MenuItem("Open", nullptr, false, pkg)) OpenFile(e);
-                if (ImGui::MenuItem("Export (model / texture)", nullptr, false, pkg)) ExportFiles({e}, 0);
-                if (ImGui::MenuItem("Save properties (.json)", nullptr, false, pkg)) ExportFiles({e}, 2);
-                if (ImGui::MenuItem("Export raw")) ExportFiles({e}, 1);
-                ImGui::Separator();
-                if (ImGui::MenuItem("Copy path")) CopyToClipboard(std::string(vfs.Path(e)));
-                if (ImGui::MenuItem("Copy /Game path")) CopyToClipboard(GamePathToPackage(vfs.Path(e)));
-                if (searching && ImGui::MenuItem("Show in folder")) {
-                    // walk the tree along the path components
-                    std::string_view p = vfs.Path(e);
-                    u32 cur = 0;
-                    size_t pos = 0;
-                    for (;;) {
-                        size_t sl = p.find('/', pos);
-                        if (sl == std::string_view::npos) break;
-                        std::string_view part = p.substr(pos, sl - pos);
-                        u32 next = UINT32_MAX;
-                        for (u32 c : folders[cur].folders) if (IEquals(folders[c].name, part)) { next = c; break; }
-                        if (next == UINT32_MAX) break;
-                        cur = next;
-                        pos = sl + 1;
-                    }
-                    m_folder = cur;
-                    m_search[0] = 0;
-                }
+                DrawFileMenu(e, searching);
                 ImGui::EndPopup();
             }
             ImGui::TableNextColumn();
@@ -699,9 +1026,59 @@ void App::LoadDocument(std::shared_ptr<Document> d) {
             } else {
                 d->error = "material: " + err;
             }
+        } else if (main && IsWorldClass(d->className)) {
+            d->isWorld = true;
+            d->preferred = DocView::World;
         }
         d->loading = false;
+        if (d->isWorld) LoadWorld(d);
         Post([] {});
+    });
+}
+
+// Worker: the map with its sublevels -> WorldData -> GPU scene. Progress and the result are posted to the UI thread.
+void App::LoadWorld(std::shared_ptr<Document> d) {
+    d->worldLoading = true;
+    d->worldDone = d->worldTotal = 0;
+    d->worldStage = "levels";
+    m_jobs->Push([this, d] {
+        auto world = std::make_shared<WorldData>();
+        WorldLoader loader(*m_api->cache);
+        WorldOptions opt;
+        opt.landscapeStep = 1;
+        opt.cancel = [d] { return d->cancel.load(); };
+        opt.progress = [this, d](int done, int total, const std::string& level) {
+            std::string stage = level.empty() ? "levels" : level.substr(level.find_last_of('/') + 1);
+            Post([d, done, total, stage] { d->worldDone = done; d->worldTotal = total; d->worldStage = "level " + stage; });
+        };
+        std::string err;
+        bool ok = loader.Load(d->gamePath, opt, *world, &err);
+        std::shared_ptr<WorldScene> scene;
+        if (ok && !d->cancel) {
+            scene = std::make_shared<WorldScene>(*m_renderer, *m_assets, *m_api->cache);
+            scene->Build(*world, [d] { return d->cancel.load(); }, [this, d](int done, int total) {
+                Post([d, done, total] { d->worldDone = done; d->worldTotal = total; d->worldStage = "meshes"; });
+            });
+            for (auto& l : world->landscapes) {   // uploaded: the CPU copy is no longer needed
+                l.mesh = MeshLod{};
+            }
+        }
+        Post([this, d, world, scene, ok, err] {
+            d->worldLoading = false;
+            if (!ok) { d->error = "world: " + err; return; }
+            d->world = world;
+            d->worldScene = scene;
+            if (scene) {
+                d->camera.Frame(scene->FocusMin(), scene->FocusMax());
+                d->camera.yaw = -135;
+                d->camera.pitch = -35;
+                d->camera.nearZ = 10;
+                d->camera.flySpeed = 3000;
+            }
+            d->draw.grid = false;
+            LOGI("world %s: %zu levels, %zu mesh instances, %zu landscape components, %u meshes missing", d->name.c_str(), world->levels.size(),
+                 world->InstanceCount(), world->landscapes.size(), scene ? scene->MissingMeshes() : 0);
+        });
     });
 }
 
@@ -720,15 +1097,13 @@ void App::RebuildMeshLod(Document& d) {
 }
 
 void App::DrawDocuments() {
-    if (m_docs.empty()) {
-        ImVec2 a = ImGui::GetContentRegionAvail();
-        const char* msg = m_mountState == MountState::Ready ? "Double-click a file to open it" : "Loading...";
-        ImVec2 ts = ImGui::CalcTextSize(msg);
-        ImGui::SetCursorPos(ImVec2((a.x - ts.x) * 0.5f, a.y * 0.45f));
-        ImGui::TextDisabled("%s", msg);
-        return;
-    }
     if (!ImGui::BeginTabBar("##docs", ImGuiTabBarFlags_Reorderable | ImGuiTabBarFlags_FittingPolicyScroll | ImGuiTabBarFlags_TabListPopupButton)) return;
+    if (ImGui::BeginTabItem("Explorer###explorer", nullptr, ImGuiTabItemFlags_NoCloseButton | (m_selectExplorer ? ImGuiTabItemFlags_SetSelected : 0))) {
+        m_activeDoc = 0;
+        DrawExplorer();
+        ImGui::EndTabItem();
+    }
+    m_selectExplorer = false;
     u64 close = 0;
     for (auto& dp : m_docs) {
         Document& d = *dp;
@@ -745,11 +1120,16 @@ void App::DrawDocuments() {
     }
     m_selectDoc = 0;
     ImGui::EndTabBar();
-    if (close) {
-        m_docs.erase(std::remove_if(m_docs.begin(), m_docs.end(), [&](auto& d) { return d->id == close; }), m_docs.end());
-        if (m_activeDoc == close) m_activeDoc = 0;
-        if (m_jobs->Pending() == 0 && m_assets) m_assets->Trim();
-    }
+    if (close) CloseDocument(close);
+}
+
+// Closes one tab (id) or all of them (0); background loads of the closed documents (maps) are cancelled.
+void App::CloseDocument(u64 id) {
+    for (auto& dp : m_docs)
+        if (!id || dp->id == id) dp->cancel = true;
+    m_docs.erase(std::remove_if(m_docs.begin(), m_docs.end(), [&](auto& d) { return !id || d->id == id; }), m_docs.end());
+    if (!id || m_activeDoc == id) m_activeDoc = 0;
+    if (m_jobs->Pending() == 0 && m_assets) m_assets->Trim();
 }
 
 void App::DrawDocument(Document& d) {
@@ -757,10 +1137,9 @@ void App::DrawDocument(Document& d) {
         ImGui::TextDisabled("Loading %s ...", d.gamePath.c_str());
         return;
     }
-    // header
+    // header: class + actions on one line, the path below it (wraps instead of overlapping the buttons)
+    ImGui::AlignTextToFramePadding();
     ImGui::TextColored(ImVec4(0.45f, 0.7f, 1, 1), "%s", d.className.empty() ? "?" : d.className.c_str());
-    ImGui::SameLine();
-    ImGui::TextDisabled("%s", d.gamePath.c_str());
     float bw = ImGui::CalcTextSize("Export").x + ImGui::CalcTextSize("Save JSON").x + ImGui::CalcTextSize("Copy path").x + ImGui::GetStyle().FramePadding.x * 6 +
                ImGui::GetStyle().ItemSpacing.x * 2;
     ImGui::SameLine(std::max(ImGui::GetCursorPosX(), ImGui::GetContentRegionMax().x - bw));
@@ -769,6 +1148,9 @@ void App::DrawDocument(Document& d) {
     if (ImGui::SmallButton("Save JSON")) ExportFiles({d.entry}, 2);
     ImGui::SameLine();
     if (ImGui::SmallButton("Copy path")) CopyToClipboard(GamePathToPackage(d.gamePath));
+    ImGui::PushTextWrapPos(0);
+    ImGui::TextDisabled("%s", d.gamePath.c_str());
+    ImGui::PopTextWrapPos();
     if (!d.error.empty()) ImGui::TextColored(ImVec4(1, 0.5f, 0.4f, 1), "%s", d.error.c_str());
 
     if (!ImGui::BeginTabBar("##views")) return;
@@ -778,6 +1160,7 @@ void App::DrawDocument(Document& d) {
     };
     if (d.texture && tab("Texture", DocView::Texture)) { DrawTexture(d); ImGui::EndTabItem(); }
     if (d.hasMesh && tab("Model", DocView::Model)) { DrawModel(d); ImGui::EndTabItem(); }
+    if (d.isWorld && tab("World", DocView::World)) { DrawWorld(d); ImGui::EndTabItem(); }
     if (d.anim && tab("Animation", DocView::Animation)) { DrawAnimation(d); ImGui::EndTabItem(); }
     if (d.hasMaterial && tab("Material", DocView::Material)) { DrawMaterial(d); ImGui::EndTabItem(); }
     if (tab("Properties", DocView::Properties)) { DrawProperties(d); ImGui::EndTabItem(); }
@@ -931,12 +1314,22 @@ void App::DrawTexture(Document& d) {
     }
 }
 
-static void DrawViewport(Renderer& r, Document& d, ImVec2 size, bool allowFly) {
-    if (size.x < 8 || size.y < 8 || !d.gpuMesh) return;
+// Space left for a 3D viewport, but never shorter than a usable minimum: in small windows the tab scrolls instead of the viewport vanishing.
+static ImVec2 MinViewportAvail() {
+    ImVec2 a = ImGui::GetContentRegionAvail();
+    a.y = std::max(a.y, ImGui::GetFontSize() * 14);
+    return a;
+}
+
+// Camera input over an image-sized button (LMB orbit, RMB look + WASD/QE fly, MMB pan, wheel zoom, F calls `frame`),
+// then renders `scene` into the viewport.
+static void DrawViewportScene(Renderer& r, Camera& cam, const DrawOptions& draw, ImVec2 size, bool allowFly, const std::function<void()>& frame,
+                              const std::function<void()>& scene) {
+    if (size.x < 8 || size.y < 8) return;
     ImGuiIO& io = ImGui::GetIO();
     ImVec2 p0 = ImGui::GetCursorScreenPos();
     ImGui::InvisibleButton("##viewport", size, ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight | ImGuiButtonFlags_MouseButtonMiddle);
-    Camera& cam = d.camera;
+    ImGui::SetItemKeyOwner(ImGuiKey_MouseWheelY);   // the wheel zooms; it must not also scroll the tab when that has a scrollbar
     bool hovered = ImGui::IsItemHovered(), active = ImGui::IsItemActive();
     if (hovered && io.MouseWheel != 0) cam.distance = std::max(cam.nearZ * 2, cam.distance * powf(0.85f, io.MouseWheel));
     Vec3 fwd = cam.Forward();
@@ -968,20 +1361,27 @@ static void DrawViewport(Renderer& r, Document& d, ImVec2 size, bool allowFly) {
         eye = eye + mv * speed;
         cam.target = eye + fwd * cam.distance;
     }
-    if (hovered && ImGui::IsKeyPressed(ImGuiKey_F, false)) cam.Frame(d.gpuMesh->boundsMin, d.gpuMesh->boundsMax);
+    if (hovered && ImGui::IsKeyPressed(ImGuiKey_F, false)) frame();
 
-    r.BeginFrame((int)size.x, (int)size.y, cam, d.draw);
-    if (d.draw.grid) {
-        float rad = std::max(1.f, d.gpuMesh->radius);
-        float cell = powf(10.f, floorf(log10f(rad)));
-        r.DrawGrid(cell / 10, 50);
-    }
-    Mat4 id = Mat4::Identity();
-    r.DrawMesh(*d.gpuMesh, &id, 1);
-    if (!d.boneLines.empty()) r.DrawLines(d.boneLines, 0xff40d0ffu);
+    r.BeginFrame((int)size.x, (int)size.y, cam, draw);
+    scene();
     r.EndFrame();
     ImDrawList* dl = ImGui::GetWindowDrawList();
     dl->AddImage((ImTextureID)(intptr_t)r.Output(), p0, ImVec2(p0.x + size.x, p0.y + size.y));
+}
+
+static void DrawViewport(Renderer& r, Document& d, ImVec2 size, bool allowFly) {
+    if (!d.gpuMesh) return;
+    DrawViewportScene(r, d.camera, d.draw, size, allowFly, [&] { d.camera.Frame(d.gpuMesh->boundsMin, d.gpuMesh->boundsMax); }, [&] {
+        if (d.draw.grid) {
+            float rad = std::max(1.f, d.gpuMesh->radius);
+            float cell = powf(10.f, floorf(log10f(rad)));
+            r.DrawGrid(cell / 10, 50);
+        }
+        Mat4 id = Mat4::Identity();
+        r.DrawMesh(*d.gpuMesh, &id, 1);
+        if (!d.boneLines.empty()) r.DrawLines(d.boneLines, 0xff40d0ffu);
+    });
 }
 
 void App::DrawModel(Document& d) {
@@ -997,28 +1397,25 @@ void App::DrawModel(Document& d) {
                 }
             ImGui::EndCombo();
         }
-        ImGui::SameLine();
     }
-    ImGui::Checkbox("Textures", &d.draw.textures);
-    ImGui::SameLine();
-    ImGui::Checkbox("Normal maps", &d.draw.normalMaps);
-    ImGui::SameLine();
-    ImGui::Checkbox("Vertex colors", &d.draw.vertexColors);
-    ImGui::SameLine();
-    ImGui::Checkbox("Wireframe", &d.draw.wireframe);
-    ImGui::SameLine();
-    ImGui::Checkbox("Grid", &d.draw.grid);
-    ImGui::SameLine();
-    ImGui::Checkbox("Cull", &d.draw.backfaceCulling);
-    ImGui::SameLine();
+    FlowCheckbox("Textures", &d.draw.textures, m.lods.size() <= 1);   // FlowNext decides whether it fits next to the LOD combo
+    FlowCheckbox("Normal maps", &d.draw.normalMaps);
+    FlowCheckbox("Vertex colors", &d.draw.vertexColors);
+    FlowCheckbox("Wireframe", &d.draw.wireframe);
+    FlowCheckbox("Grid", &d.draw.grid);
+    FlowCheckbox("Cull", &d.draw.backfaceCulling);
+    FlowNext(ImGui::CalcTextSize("Frame").x + ImGui::GetStyle().FramePadding.x * 2);
     if (ImGui::Button("Frame")) d.camera.Frame(d.gpuMesh->boundsMin, d.gpuMesh->boundsMax);
 
     const MeshLod& l = m.lods[std::clamp(d.lod, 0, (int)m.lods.size() - 1)];
+    ImGui::PushTextWrapPos(0);
     ImGui::TextDisabled("%u vertices, %zu triangles, %d UV set(s), %zu section(s) | %.1f x %.1f x %.1f cm", l.VertexCount(), l.indices.size() / 3, l.numUVs,
                         l.sections.size(), m.boundsMax.x - m.boundsMin.x, m.boundsMax.y - m.boundsMin.y, m.boundsMax.z - m.boundsMin.z);
-    float matW = std::min(320.f, ImGui::GetContentRegionAvail().x * 0.3f);
-    ImVec2 avail = ImGui::GetContentRegionAvail();
-    DrawViewport(*m_renderer, d, ImVec2(avail.x - matW - ImGui::GetStyle().ItemSpacing.x, avail.y), true);
+    ImGui::PopTextWrapPos();
+    ImVec2 avail = MinViewportAvail();
+    float matW = avail.x > 560 ? std::min(320.f, avail.x * 0.3f) : 0.f;   // the material list is dropped in narrow windows
+    DrawViewport(*m_renderer, d, ImVec2(matW > 0 ? avail.x - matW - ImGui::GetStyle().ItemSpacing.x : avail.x, avail.y), true);
+    if (matW <= 0) return;
     ImGui::SameLine();
     ImGui::BeginChild("##mats", ImVec2(matW, avail.y));
     ImGui::TextDisabled("Materials");
@@ -1027,7 +1424,9 @@ void App::DrawModel(Document& d) {
         ImGui::PushID((int)i);
         ImGui::Text("[%zu] %s", i, s.name.c_str());
         if (!s.materialPath.empty()) {
+            ImGui::PushTextWrapPos(0);
             ImGui::TextDisabled("%s", s.materialPath.c_str());
+            ImGui::PopTextWrapPos();
             if (ImGui::IsItemClicked()) {
                 i64 e = m_api->ResolveFile(s.materialPath);
                 if (e >= 0) OpenFile((u32)e);
@@ -1101,7 +1500,132 @@ void App::DrawAnimation(Document& d) {
                 d.boneLines.push_back(world[i].Translation());
             }
     }
-    DrawViewport(*m_renderer, d, ImGui::GetContentRegionAvail(), true);
+    DrawViewport(*m_renderer, d, MinViewportAvail(), true);
+}
+
+void App::DrawWorld(Document& d) {
+    if (d.worldLoading || !d.worldScene) {
+        if (d.worldLoading) {
+            float f = d.worldTotal > 0 ? (float)d.worldDone / d.worldTotal : 0.f;
+            ImGui::TextDisabled("Loading map: %s", d.worldStage.c_str());
+            ImGui::ProgressBar(f, ImVec2(std::min(480.f, ImGui::GetContentRegionAvail().x), 0), Fmt("%d / %d", d.worldDone, d.worldTotal).c_str());
+            m_busyFrames = 3;
+        } else if (ImGui::Button("Load scene")) {
+            for (auto& sp : m_docs)
+                if (sp.get() == &d) { d.cancel = false; LoadWorld(sp); break; }
+        }
+        return;
+    }
+    WorldData& w = *d.world;
+    WorldScene& sc = *d.worldScene;
+    // toolbar
+    FlowCheckbox("Meshes", &d.worldDraw.meshes, true);
+    FlowCheckbox("Landscape", &d.worldDraw.landscape);
+    FlowCheckbox("Water", &d.worldWater);
+    FlowCheckbox("Textures", &d.draw.textures);
+    FlowCheckbox("Wireframe", &d.draw.wireframe);
+    FlowNext(130);
+    ImGui::SetNextItemWidth(130);
+    ImGui::SliderFloat("##dd", &d.worldDraw.drawDistanceScale, 0, 4, d.worldDraw.drawDistanceScale > 0 ? "draw dist x%.2f" : "draw dist: all");
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Scales the game's per-mesh draw distances (0 = draw everything)");
+    FlowNext(120);
+    ImGui::SetNextItemWidth(120);
+    float cullPx = d.worldDraw.minScreenSize * 1000;
+    if (ImGui::SliderFloat("##cull", &cullPx, 0, 10, "small cull %.1f")) d.worldDraw.minScreenSize = cullPx / 1000;
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Skips instances smaller than this (per mille of the view height)");
+    FlowNext(120);
+    ImGui::SetNextItemWidth(120);
+    ImGui::SliderFloat("##fly", &d.camera.flySpeed, 200, 50000, "fly %.0f cm/s", ImGuiSliderFlags_Logarithmic);
+    // Camera::Frame derives the near plane from the bounds (metres for a whole map), which would clip everything close by
+    auto frameWorld = [&] {
+        d.camera.Frame(sc.FocusMin(), sc.FocusMax());
+        d.camera.nearZ = 10;
+        d.camera.flySpeed = 3000;
+    };
+    FlowNext(ImGui::CalcTextSize("Frame").x + ImGui::GetStyle().FramePadding.x * 2);
+    if (ImGui::Button("Frame")) frameWorld();
+    const auto& st = sc.Stats();
+    ImGui::PushTextWrapPos(0);
+    ImGui::TextDisabled("%zu levels | %zu instances of %zu meshes, %zu landscape patches | drawn: %u instances, %u meshes, %u patches, %.2fM tris | %s GPU",
+                        w.levels.size(), w.InstanceCount(), w.groups.size(), w.landscapes.size(), st.instancesDrawn, st.meshesDrawn, st.landscapesDrawn,
+                        m_renderer->DrawnTriangles() / 1e6, HumanSize(sc.GpuBytes()).c_str());
+    ImGui::PopTextWrapPos();
+
+    ImVec2 avail = MinViewportAvail();
+    float side = avail.x > 640 ? std::min(360.f, avail.x * 0.3f) : 0.f;   // the outliner is dropped in narrow windows
+    Camera& cam = d.camera;
+    DrawViewportScene(*m_renderer, cam, d.draw, ImVec2(side > 0 ? avail.x - side - ImGui::GetStyle().ItemSpacing.x : avail.x, avail.y), true, frameWorld, [&] {
+        sc.Draw(cam, avail.y, d.worldDraw);
+        if (d.worldWater && m_water) {
+            Vec3 c = cam.Eye();
+            float half = std::max(Length(sc.BoundsMax() - sc.BoundsMin()), 2e6f);
+            Mat4 m = Mat4::FromTRS({c.x, c.y, 0}, {0, 0, 0, 1}, {half, half, 1});
+            m_renderer->DrawMesh(*m_water, &m, 1);
+        }
+    });
+    if (side <= 0) return;
+    ImGui::SameLine();
+    ImGui::BeginChild("##outliner", ImVec2(side, avail.y));
+    if (ImGui::BeginTabBar("##outl")) {
+        if (ImGui::BeginTabItem("Meshes")) {
+            ImGui::SetNextItemWidth(-1);
+            ImGui::InputTextWithHint("##wf", "filter meshes", d.worldFilter, sizeof(d.worldFilter));
+            std::string f = ToLower(d.worldFilter);
+            if (ImGui::BeginTable("##wm", 2, ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV)) {
+                ImGui::TableSetupScrollFreeze(0, 1);
+                ImGui::TableSetupColumn("Mesh");
+                ImGui::TableSetupColumn("#", ImGuiTableColumnFlags_WidthFixed, 48);
+                ImGui::TableHeadersRow();
+                for (size_t gi = 0; gi < w.groups.size(); gi++) {
+                    auto& g = w.groups[gi];
+                    if (!f.empty() && ToLower(g.mesh).find(f) == std::string::npos) continue;
+                    ImGui::TableNextRow();
+                    ImGui::TableNextColumn();
+                    ImGui::PushID((int)gi);
+                    std::string name = g.mesh.substr(g.mesh.find_last_of('.') + 1);
+                    if (ImGui::Selectable(name.c_str(), false, ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowDoubleClick)) {
+                        if (ImGui::IsMouseDoubleClicked(0) && !g.instances.empty()) {   // fly to the first instance
+                            Vec3 t = g.instances[0].transform.Translation();
+                            cam.target = t;
+                            cam.distance = 1500;
+                        }
+                    }
+                    if (ImGui::BeginPopupContextItem()) {
+                        if (ImGui::MenuItem("Open mesh")) {
+                            i64 e = m_api->ResolveFile(g.mesh);
+                            if (e >= 0) OpenFile((u32)e);
+                        }
+                        if (ImGui::MenuItem("Copy path")) CopyToClipboard(g.mesh);
+                        ImGui::EndPopup();
+                    }
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("%s%s\nDouble-click: fly to it, right-click: open", g.mesh.c_str(), g.materials.empty() ? "" : "\n(material overrides)");
+                    ImGui::TableNextColumn();
+                    ImGui::TextDisabled("%zu", g.instances.size());
+                    ImGui::PopID();
+                }
+                ImGui::EndTable();
+            }
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Levels")) {
+            for (auto& l : w.levels) {
+                ImGui::TextUnformatted(l.path.substr(l.path.find_last_of('/') + 1).c_str());
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", l.path.c_str());
+                ImGui::TextDisabled("   %u actors, %u instances%s%s", l.actors, l.instances,
+                                    l.landscapeComponents ? Fmt(", %u landscape", l.landscapeComponents).c_str() : "",
+                                    l.unresolved ? Fmt(", %u unresolved", l.unresolved).c_str() : "");
+            }
+            if (!w.unresolved.empty()) {
+                ImGui::Separator();
+                ImGui::TextDisabled("Unresolved components (%zu)", w.unresolved.size());
+                for (size_t i = 0; i < w.unresolved.size() && i < 200; i++) ImGui::TextDisabled("  %s", w.unresolved[i].c_str());
+            }
+            ImGui::EndTabItem();
+        }
+        ImGui::EndTabBar();
+    }
+    ImGui::EndChild();
 }
 
 void App::DrawMaterial(Document& d) {
@@ -1264,22 +1788,21 @@ void App::DrawExportProgress() {
 
 // ---------------------------------------------------------------- log / status / settings
 
-void App::DrawLog() {
+void App::DrawLog(float height) {
     LogSnapshot(m_log, m_logSeen);
     if (m_log.size() > 5000) m_log.erase(m_log.begin(), m_log.begin() + (m_log.size() - 4000));
-    ImGui::Separator();
-    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.09f, 0.1f, 0.12f, 1));
-    ImGui::BeginChild("##log", ImVec2(0, ImGui::GetContentRegionAvail().y - (ImGui::GetFrameHeight() + 2 + ImGui::GetStyle().ItemSpacing.y * 2)), ImGuiChildFlags_AlwaysUseWindowPadding);
-    ImGui::PushFont(monoFont, 0);
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.125f, 0.13f, 0.18f, 1));
+    ImGui::BeginChild("##log", ImVec2(0, height), ImGuiChildFlags_AlwaysUseWindowPadding, ImGuiWindowFlags_HorizontalScrollbar);
+    ImGui::PushFont(monoFont, monoFont->LegacySize);   // size 0 would keep the UI size, which makes Consolas look oversized
     ImGuiListClipper clip;
     clip.Begin((int)m_log.size());
     while (clip.Step())
         for (int i = clip.DisplayStart; i < clip.DisplayEnd; i++) {
             auto& l = m_log[i];
-            ImVec4 c = l.level == LogLevel::Error ? ImVec4(1, 0.45f, 0.4f, 1) : l.level == LogLevel::Warn ? ImVec4(1, 0.8f, 0.4f, 1) : ImVec4(0.75f, 0.78f, 0.84f, 1);
-            ImGui::PushStyleColor(ImGuiCol_Text, c);
+            ImVec4 tag = l.level == LogLevel::Error ? ImVec4(1, 0.4f, 0.4f, 1) : l.level == LogLevel::Warn ? ImVec4(1, 0.75f, 0.3f, 1) : ImVec4(0.45f, 0.62f, 1, 1);
+            ImGui::TextColored(tag, "[%s]", l.level == LogLevel::Error ? "ERR" : l.level == LogLevel::Warn ? "WRN" : "INF");
+            ImGui::SameLine();
             ImGui::TextUnformatted(l.text.c_str());
-            ImGui::PopStyleColor();
         }
     if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 2) ImGui::SetScrollHereY(1.0f);
     ImGui::PopFont();
@@ -1288,27 +1811,30 @@ void App::DrawLog() {
 }
 
 void App::DrawStatusBar() {
-    ImGui::Separator();
-    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 8);
-    switch (m_mountState) {
-    case MountState::Mounting: ImGui::TextColored(ImVec4(0.5f, 0.75f, 1, 1), "Loading archives..."); break;
-    case MountState::Failed: ImGui::TextColored(ImVec4(1, 0.45f, 0.4f, 1), "Not loaded: %s", m_mountError.c_str()); break;
-    case MountState::Ready:
-        ImGui::TextDisabled("%zu archives | %zu files | mounted in %.2f s", m_api->vfs.Paks().size(), m_api->vfs.FileCount(), m_mountSeconds);
-        break;
-    default: break;
-    }
-    ImGui::SameLine();
+    // FModel-style bar: blue when idle, orange while busy, red on failure
+    ImVec2 p = ImGui::GetCursorScreenPos();
+    float h = ImGui::GetFrameHeight() + 2, w = ImGui::GetContentRegionAvail().x;
+    bool busy = m_mountState == MountState::Mounting || m_jobs->Pending() > 0;
+    ImU32 col = m_mountState == MountState::Failed ? IM_COL32(190, 55, 50, 255) : busy ? IM_COL32(200, 115, 20, 255) : IM_COL32(31, 107, 214, 255);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->AddRectFilled(p, ImVec2(p.x + w, p.y + h), col);
+    std::string left = m_mountState == MountState::Mounting ? "Loading archives..." : m_mountState == MountState::Failed ? "Not loaded: " + m_mountError : busy ? "Working..." : "Completed";
+    std::string right;
+    if (m_mountState == MountState::Ready) right = Fmt("%zu archives | %zu files | ", m_api->vfs.Paks().size(), m_api->vfs.FileCount());
     PROCESS_MEMORY_COUNTERS_EX pmc = {};
     pmc.cb = sizeof(pmc);
-    if (GetProcessMemoryInfo(GetCurrentProcess(), (PROCESS_MEMORY_COUNTERS*)&pmc, sizeof(pmc)))
-        ImGui::TextDisabled("| RAM %s", HumanSize(pmc.PrivateUsage).c_str());
-    if (m_assets) {
-        ImGui::SameLine();
-        ImGui::TextDisabled("| textures %s", HumanSize(m_assets->TextureBytes()).c_str());
-    }
-    ImGui::SameLine();
-    ImGui::TextDisabled("| output: %s", Narrow(m_settings.outputDir).c_str());
+    if (GetProcessMemoryInfo(GetCurrentProcess(), (PROCESS_MEMORY_COUNTERS*)&pmc, sizeof(pmc))) right += "RAM " + HumanSize(pmc.PrivateUsage);
+    if (m_assets) right += " | textures " + HumanSize(m_assets->TextureBytes());
+    float ty = p.y + (h - ImGui::GetFontSize()) * 0.5f;
+    float rightX = p.x + w - ImGui::CalcTextSize(right.c_str()).x - 10;
+    float leftW = ImGui::CalcTextSize(left.c_str()).x;
+    if (rightX < p.x + 8 + leftW + 20) right.clear();   // narrow window: the status (e.g. a mount error) wins over the stats
+    dl->PushClipRect(p, ImVec2(right.empty() ? p.x + w - 4 : rightX - 12, p.y + h), true);
+    dl->AddText(ImVec2(p.x + 8, ty), IM_COL32(255, 255, 255, 240), left.c_str());
+    dl->PopClipRect();
+    if (!right.empty()) dl->AddText(ImVec2(rightX, ty), IM_COL32(255, 255, 255, 240), right.c_str());
+    if (m_mountState == MountState::Failed && ImGui::IsMouseHoveringRect(p, ImVec2(p.x + w, p.y + h))) ImGui::SetTooltip("%s", m_mountError.c_str());
+    ImGui::Dummy(ImVec2(w, h));
 }
 
 static bool BrowseFolder(char* buf, size_t size, const wchar_t* title) {

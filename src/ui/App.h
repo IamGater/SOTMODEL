@@ -1,6 +1,7 @@
 #pragma once
 #include "app/Api.h"
 #include "render/GpuAssets.h"
+#include "render/WorldScene.h"
 #include "ue/Material.h"
 #include "ue/Mesh.h"
 #include "ue/AnimPose.h"
@@ -30,7 +31,7 @@ private:
     bool m_stop = false;
 };
 
-enum class DocView { Properties, Texture, Model, Material, Animation };
+enum class DocView { Properties, Texture, Model, Material, Animation, World };
 
 struct Document {
     u64 id = 0;
@@ -71,6 +72,18 @@ struct Document {
     bool animPlaying = true, animLoop = true, showBones = false;
     std::vector<Vec3> boneLines;   // bone segments for the viewport (world space)
 
+    // world (.umap)
+    bool isWorld = false;
+    std::atomic<bool> cancel{false};          // set when the tab closes: stops background loading
+    std::shared_ptr<WorldData> world;
+    std::shared_ptr<WorldScene> worldScene;
+    WorldDrawOptions worldDraw;
+    bool worldWater = true, worldLoading = false;
+    int worldDone = 0, worldTotal = 0;
+    std::string worldStage;
+    char worldFilter[128] = {};
+    int worldOutliner = 0;   // 0 meshes, 1 levels
+
     // material
     bool hasMaterial = false;
     MaterialInfo material;
@@ -92,6 +105,7 @@ public:
     bool Loading() const;   // archives mounting, jobs queued or documents loading   // something animating / loading: keep rendering frames
 
     ImFont* monoFont = nullptr;
+    int startTab = -1;   // --tab: initial left tab
     std::vector<std::string> openOnStart;   // asset paths from the command line
 
 private:
@@ -107,9 +121,16 @@ private:
     void DrawModel(Document& d);
     void DrawMaterial(Document& d);
     void DrawAnimation(Document& d);
+    void DrawWorld(Document& d);
+    void LoadWorld(std::shared_ptr<Document> d);
     void LoadAnimationMesh(std::shared_ptr<Document> d, std::string meshPath);
     bool LoadAnimationMeshNow(Document& d, const std::string& meshPath);
-    void DrawLog();
+    void DrawLog(float height);
+    void DrawLeftPanel(float height);
+    void DrawExplorer();
+    void DrawFileMenu(u32 entry, bool searching);
+    void ReloadArchives();
+    void CloseDocument(u64 id);   // 0 = all
     void DrawSettings();
     void DrawStatusBar();
     void DrawExportProgress();
@@ -128,7 +149,7 @@ private:
     std::unique_ptr<JobPool> m_jobs;
     std::unique_ptr<Renderer> m_renderer;
     std::unique_ptr<GpuAssets> m_assets;
-    std::shared_ptr<GpuMesh> m_sphere;
+    std::shared_ptr<GpuMesh> m_sphere, m_water;
     void* m_hwnd = nullptr;
 
     std::mutex m_postMutex;
@@ -139,6 +160,13 @@ private:
     double m_mountSeconds = 0;
 
     u32 m_folder = 0;
+    int m_leftTab = 1;   // 0 archives, 1 folders, 2 packages
+    int m_selPak = -1;
+    std::vector<u64> m_pakSizes;
+    float m_logFrac = 0.2f;   // log pane height as a fraction of the window
+    int m_explorerFilter = 0;   // 0 all, 1 packages, 2 other files
+    bool m_selectExplorer = false;
+    std::string m_explorerView;   // folder / search the explorer last showed (scroll resets when it changes)
     i64 m_selected = -1;
     char m_search[256] = {};
     std::string m_lastSearch;
