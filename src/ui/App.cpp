@@ -390,11 +390,20 @@ void App::DrawFolderTree(u32 idx) {
     if (f.folders.empty()) fl |= ImGuiTreeNodeFlags_Leaf;
     if (m_folder == idx) fl |= ImGuiTreeNodeFlags_Selected;
     ImGui::PushID((int)idx);
+    // reveal the current folder when it was changed elsewhere (explorer, breadcrumb, "Show in folder"): open its ancestors
+    bool reveal = m_treeFolder != m_folder;
+    if (reveal && idx != m_folder) {
+        for (u32 p = folders[m_folder].parent; p != UINT32_MAX && p != 0; p = folders[p].parent)
+            if (p == idx) { ImGui::SetNextItemOpen(true); break; }
+    }
+    // the item rect spans the full row (SpanFullWidth): take the indented x from the cursor before the node
+    float nodeX = ImGui::GetCursorScreenPos().x;
     bool open = ImGui::TreeNodeEx("##n", fl, "      %s", f.name.c_str());
     {
-        ImVec2 mn = ImGui::GetItemRectMin();
-        DrawFolderIcon(ImGui::GetWindowDrawList(), ImVec2(mn.x + ImGui::GetTreeNodeToLabelSpacing() - 2, mn.y + ImGui::GetFrameHeight() * 0.5f));
+        ImVec2 mn = ImGui::GetItemRectMin(), mx = ImGui::GetItemRectMax();
+        DrawFolderIcon(ImGui::GetWindowDrawList(), ImVec2(nodeX + ImGui::GetTreeNodeToLabelSpacing() - 2, (mn.y + mx.y) * 0.5f));
     }
+    if (reveal && idx == m_folder && !ImGui::IsItemVisible()) ImGui::SetScrollHereY(0.3f);
     if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen()) {
         m_folder = idx;
         m_search[0] = 0;
@@ -520,6 +529,7 @@ void App::DrawLeftPanel(float height) {
                 ImGui::Separator();
                 ImGui::BeginChild("##tree");
                 for (u32 c : folders[0].folders) DrawFolderTree(c);
+                m_treeFolder = m_folder;
                 ImGui::EndChild();
             }
         } else if (m_mountState == MountState::Mounting) {

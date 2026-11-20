@@ -160,6 +160,7 @@ private:
     double m_mountSeconds = 0;
 
     u32 m_folder = 0;
+    u32 m_treeFolder = 0;   // folder the tree last showed as current (a change elsewhere expands the tree to it)
     int m_leftTab = 1;   // 0 archives, 1 folders, 2 packages
     int m_selPak = -1;
     std::vector<u64> m_pakSizes;
