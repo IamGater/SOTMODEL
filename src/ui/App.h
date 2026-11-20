@@ -165,7 +165,7 @@ private:
     int m_leftTab = 1;   // 0 archives, 1 folders, 2 packages
     int m_selPak = -1;
     std::vector<u64> m_pakSizes;
-    float m_logFrac = 0.2f;   // log pane height as a fraction of the window
+    float m_logFrac = 0.16f;   // log pane height as a fraction of the window
     int m_explorerFilter = 0;   // 0 all, 1 packages, 2 other files
     bool m_selectExplorer = false;
     std::string m_explorerView;   // folder / search the explorer last showed (scroll resets when it changes)

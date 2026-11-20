@@ -669,7 +669,7 @@ static void DrawBigFolder(ImDrawList* dl, ImVec2 mn, ImVec2 mx) {
 
 static void DrawBigFile(ImDrawList* dl, ImVec2 mn, ImVec2 mx, ImU32 col) {
     float w = mx.x - mn.x, h = mx.y - mn.y;
-    float fw = std::min(w * 0.42f, h * 0.7f / 1.25f), fh = fw * 1.25f, c = fw * 0.3f;
+    float fw = std::min(w * 0.3f, h * 0.6f / 1.25f), fh = fw * 1.25f, c = fw * 0.3f;
     ImVec2 p(mn.x + (w - fw) * 0.5f, mn.y + (h - fh) * 0.5f);
     dl->AddRectFilled(p, ImVec2(p.x + fw, p.y + fh), col, 3);
     dl->AddTriangleFilled(ImVec2(p.x + fw - c, p.y), ImVec2(p.x + fw, p.y), ImVec2(p.x + fw, p.y + c), IM_COL32(24, 25, 34, 255));
@@ -690,27 +690,25 @@ void App::DrawExplorer() {
     float u = ImGui::GetFontSize() / 16.f;
     // search bar
     {
-        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(34 * u, 8 * u));
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(26 * u, ImGui::GetStyle().FramePadding.y));
         float availX = ImGui::GetContentRegionAvail().x;
-        float rightW = std::min(170 * u, availX * 0.3f);
-        ImGui::SetNextItemWidth(std::max(80 * u, availX - rightW - 48 * u));
+        float rightW = std::min(120 * u, availX * 0.3f);
+        ImGui::SetNextItemWidth(std::max(80 * u, availX - rightW - 34 * u));
         ImVec2 p0 = ImGui::GetCursorScreenPos();
         ImGui::InputTextWithHint("##xsearch", "Search by name...", m_search, sizeof(m_search));
         ImGui::PopStyleVar();
         float fh = ImGui::GetItemRectSize().y;
         ImDrawList* dl = ImGui::GetWindowDrawList();
-        ImVec2 mc(p0.x + 17 * u, p0.y + fh * 0.5f - 1);
+        ImVec2 mc(p0.x + 12 * u, p0.y + fh * 0.5f - 1.5f * u);
         ImU32 ic = IM_COL32(210, 212, 225, 255);
-        dl->AddCircle(mc, 5 * u, ic, 0, 1.6f);
-        dl->AddLine(ImVec2(mc.x + 3.6f * u, mc.y + 3.6f * u), ImVec2(mc.x + 8 * u, mc.y + 8 * u), ic, 1.8f);
+        dl->AddCircle(mc, 4.5f * u, ic, 0, 1.5f);
+        dl->AddLine(ImVec2(mc.x + 3.6f * u, mc.y + 3.6f * u), ImVec2(mc.x + 7 * u, mc.y + 7 * u), ic, 1.6f);
         ImGui::SameLine(0, 0);
-        if (ImGui::Button("x##xclear", ImVec2(32 * u, fh))) m_search[0] = 0;
-        ImGui::SameLine(0, 10 * u);
+        if (ImGui::Button("x##xclear", ImVec2(fh, fh))) m_search[0] = 0;
+        ImGui::SameLine(0, 6 * u);
         ImGui::SetNextItemWidth(rightW);
         const char* kinds[] = {"All", "Packages", "Other files"};
-        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10 * u, 8 * u));
         ImGui::Combo("##xfilter", &m_explorerFilter, kinds, 3);
-        ImGui::PopStyleVar();
     }
     UpdateSearch();
     bool searching = m_search[0] != 0;
@@ -723,6 +721,7 @@ void App::DrawExplorer() {
         std::vector<u32> chain;
         for (u32 f = m_folder; f != UINT32_MAX && f != 0; f = folders[f].parent) chain.push_back(f);
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.f);   // plain text links, no boxes
         if (ImGui::SmallButton("/")) m_folder = 0;
         for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
             ImGui::SameLine(0, 2);
@@ -732,6 +731,7 @@ void App::DrawExplorer() {
             if (ImGui::SmallButton(folders[*it].name.c_str())) m_folder = *it;
             ImGui::PopID();
         }
+        ImGui::PopStyleVar();
         ImGui::PopStyleColor();
     }
 
@@ -754,10 +754,10 @@ void App::DrawExplorer() {
         ImGui::SetScrollY(0);
     }
     // left-aligned grid with one gap size on every side; tiles stretch so each row fills the width exactly
-    float gap = 12 * u, minTw = 150 * u;
+    float gap = 10 * u, minTw = 124 * u;
     float availW = ImGui::GetContentRegionAvail().x - gap * 2;
     int cols = std::max(1, (int)((availW + gap) / (minTw + gap)));
-    float tw = std::max(60 * u, (availW - gap * (cols - 1)) / cols), th = 200 * u, gx = gap, gy = gap;
+    float tw = std::max(60 * u, (availW - gap * (cols - 1)) / cols), th = 156 * u, gx = gap, gy = gap;
     int total = (int)(subfolders.size() + files.size());
     int rows = (total + cols - 1) / cols;
     float startX = ImGui::GetCursorPosX() + gap;
@@ -818,9 +818,12 @@ void App::DrawExplorer() {
                     dl->AddRectFilled(mn, ImVec2(mx.x, mn.y + topH), IM_COL32(24, 25, 34, 255));
                     DrawBigFile(dl, mn, ImVec2(mx.x, mn.y + topH), tint);
                     dl->AddRectFilled(ImVec2(mn.x, mn.y + topH), ImVec2(mx.x, mn.y + topH + 2 * u), tint);
-                    dl->PushClipRect(ImVec2(mn.x + 6 * u, mn.y + topH), ImVec2(mx.x - 6 * u, mx.y), true);
-                    dl->AddText(ImVec2(mn.x + 8 * u, mn.y + topH + 6 * u), IM_COL32(245, 245, 250, 255), base.c_str());
-                    dl->PopClipRect();
+                    {   // long names end with "..." (full path in the tooltip)
+                        ImVec2 a(mn.x + 8 * u, mn.y + topH + 6 * u), b(mx.x - 8 * u, a.y + ImGui::GetTextLineHeight());
+                        ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(245, 245, 250, 255));
+                        ImGui::RenderTextEllipsis(dl, a, b, b.x, base.c_str(), nullptr, nullptr);
+                        ImGui::PopStyleColor();
+                    }
                     std::string sz = HumanSize(vfs.Entry(id).usize);
                     float by = mx.y - ImGui::GetTextLineHeight() - 6 * u;
                     dl->AddText(ImVec2(mn.x + 8 * u, by), IM_COL32(150, 153, 170, 255), ext.c_str());
