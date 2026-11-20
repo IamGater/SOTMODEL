@@ -2,6 +2,8 @@
 #include "core/Json.h"
 #include "ue/Mesh.h"
 #include "ue/Material.h"
+#include "render/Offscreen.h"
+#include "export/Png.h"
 
 static void WriteMaterialJson(JsonWriter& w, const MaterialInfo& m) {
     w.BeginObject();
@@ -122,6 +124,50 @@ void RegisterMeshTools(Api& api) {
                       w.EndObject();
                       ApiResult r;
                       r.json = w.Take();
+                      return r;
+                  }});
+
+    api.Register({"preview_mesh",
+                  "Render a mesh (with its textures) to a PNG image so it can be looked at. yaw/pitch orbit the camera in degrees "
+                  "(yaw -135 pitch -20 is a 3/4 front view; yaw 0 looks along +X). Use 'save_to' to also write the PNG.",
+                  R"({"type":"object","properties":{"path":{"type":"string"},"width":{"type":"integer","default":768},"height":{"type":"integer","default":768},)"
+                  R"("yaw":{"type":"number","default":-135},"pitch":{"type":"number","default":-20},"lod":{"type":"integer","default":0},)"
+                  R"("textures":{"type":"boolean","default":true},"wireframe":{"type":"boolean","default":false},"grid":{"type":"boolean","default":true},"save_to":{"type":"string"}},"required":["path"]})",
+                  "path",
+                  [](Api& a, const JsonValue& args) {
+                      std::string err;
+                      auto pkg = a.LoadPackage(args.GetStr("path"), &err);
+                      if (!pkg) return ApiResult::Error(err);
+                      i32 main = pkg->MainExport();
+                      MeshData m;
+                      if (!main || !ReadMesh(*pkg, main - 1, m, &err)) return ApiResult::Error(err.empty() ? "not a mesh" : err);
+                      PreviewRequest req;
+                      req.width = (int)args.GetNum("width", 768);
+                      req.height = (int)args.GetNum("height", 768);
+                      req.yaw = (float)args.GetNum("yaw", -135);
+                      req.pitch = (float)args.GetNum("pitch", -20);
+                      req.lod = (int)args.GetNum("lod", 0);
+                      req.draw.textures = args.GetBool("textures", true);
+                      req.draw.wireframe = args.GetBool("wireframe", false);
+                      req.draw.grid = args.GetBool("grid", true);
+                      Image img;
+                      if (!RenderMeshPreview(*a.cache, m, req, img, &err)) return ApiResult::Error(err);
+                      ApiResult r;
+                      ApiImage im;
+                      im.mime = "image/png";
+                      im.data = EncodePng(img.rgba.data(), img.width, img.height);
+                      std::string save = args.GetStr("save_to");
+                      if (!save.empty()) WriteWholeFile(Widen(save), im.data.data(), im.data.size());
+                      JsonWriter w;
+                      w.BeginObject();
+                      w.KV("path", pkg->GamePath());
+                      w.KV("lodCount", (i64)m.lods.size());
+                      w.KV("triangles", (i64)(m.lods[std::clamp(req.lod, 0, (int)m.lods.size() - 1)].indices.size() / 3));
+                      w.KV("sizeCm", Fmt("%.1f x %.1f x %.1f", m.boundsMax.x - m.boundsMin.x, m.boundsMax.y - m.boundsMin.y, m.boundsMax.z - m.boundsMin.z));
+                      if (!save.empty()) w.KV("savedTo", save);
+                      w.EndObject();
+                      r.json = w.Take();
+                      r.images.push_back(std::move(im));
                       return r;
                   }});
 

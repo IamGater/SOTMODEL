@@ -63,6 +63,9 @@ or `/Game/Models/Props/Common/cmn_barrel_debris_02_a.cmn_barrel_debris_02_a`.
 | `get_package` | cheap overview: exports + classes, dependencies, decoded native summaries |
 | `get_properties` | full FModel-style JSON (optionally one export) |
 | `preview_texture` | decoded texture as a PNG image + format info |
+| `get_mesh_info` | LODs, sections, material slots, bounds (and bones for skeletal meshes) |
+| `preview_mesh` | renders a mesh with its textures to a PNG (`yaw`/`pitch` orbit, `wireframe`, `lod`) |
+| `get_material` | material instance chain with every texture / scalar / vector parameter resolved |
 | `export` | write files: textures (PNG/DDS), meshes (glTF/OBJ), animations, JSON |
 
 Typical flow: `search` → `get_package` → `get_properties` / `preview_*` → `export`.
