@@ -83,10 +83,31 @@ static void FlowNext(float w) {
     float right = ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x;
     if (x + w <= right) ImGui::SameLine();
 }
-static bool FlowCheckbox(const char* label, bool* v, bool first = false) {
-    float w = ImGui::GetFrameHeight() + ImGui::GetStyle().ItemInnerSpacing.x + ImGui::CalcTextSize(label, nullptr, true).x;
+// Compact viewer toolbar: tight frames, no borders. Wrap the toolbar in Begin/EndToolbar.
+static void BeginToolbar() {
+    float u = ImGui::GetFontSize() / 16.f;
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8 * u, 3 * u));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4 * u, 4 * u));
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.f);
+}
+static void EndToolbar() { ImGui::PopStyleVar(3); }
+
+// On/off chip: a small button that is filled with the accent colour while enabled (replaces bulky checkboxes in toolbars)
+static bool FlowToggle(const char* label, bool* v, bool first = false) {
+    float w = ImGui::CalcTextSize(label, nullptr, true).x + ImGui::GetStyle().FramePadding.x * 2;
     if (!first) FlowNext(w);
-    return ImGui::Checkbox(label, v);
+    bool on = *v;
+    ImGui::PushStyleColor(ImGuiCol_Button, on ? ImVec4(0.12f, 0.42f, 0.84f, 0.85f) : ImVec4(0.18f, 0.19f, 0.26f, 1));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, on ? ImVec4(0.16f, 0.48f, 0.92f, 1) : ImVec4(0.23f, 0.24f, 0.32f, 1));
+    ImGui::PushStyleColor(ImGuiCol_Text, on ? ImVec4(1, 1, 1, 1) : ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+    bool pressed = ImGui::Button(label);
+    ImGui::PopStyleColor(3);
+    if (pressed) *v = !*v;
+    return pressed;
+}
+static bool FlowButton(const char* label) {
+    FlowNext(ImGui::CalcTextSize(label, nullptr, true).x + ImGui::GetStyle().FramePadding.x * 2);
+    return ImGui::Button(label);
 }
 
 static std::string GamePathToPackage(std::string_view p) {
@@ -615,7 +636,7 @@ static ImU32 FileTint(std::string_view name) {
 
 static void DrawBigFolder(ImDrawList* dl, ImVec2 mn, ImVec2 mx) {
     float w = mx.x - mn.x, h = mx.y - mn.y;
-    float fw = w * 0.62f, fh = fw * 0.72f;
+    float fw = std::min(w * 0.62f, h * 0.8f / 0.72f), fh = fw * 0.72f;   // fits wide (stretched) tiles too
     ImVec2 p(mn.x + (w - fw) * 0.5f, mn.y + (h - fh) * 0.5f);
     dl->AddRectFilled(p, ImVec2(p.x + fw * 0.42f, p.y + fh * 0.3f), IM_COL32(215, 170, 100, 255), fw * 0.06f);
     dl->AddRectFilled(ImVec2(p.x, p.y + fh * 0.12f), ImVec2(p.x + fw, p.y + fh), IM_COL32(236, 196, 140, 255), fw * 0.08f);
@@ -624,7 +645,7 @@ static void DrawBigFolder(ImDrawList* dl, ImVec2 mn, ImVec2 mx) {
 
 static void DrawBigFile(ImDrawList* dl, ImVec2 mn, ImVec2 mx, ImU32 col) {
     float w = mx.x - mn.x, h = mx.y - mn.y;
-    float fw = w * 0.42f, fh = fw * 1.25f, c = fw * 0.3f;
+    float fw = std::min(w * 0.42f, h * 0.7f / 1.25f), fh = fw * 1.25f, c = fw * 0.3f;
     ImVec2 p(mn.x + (w - fw) * 0.5f, mn.y + (h - fh) * 0.5f);
     dl->AddRectFilled(p, ImVec2(p.x + fw, p.y + fh), col, 3);
     dl->AddTriangleFilled(ImVec2(p.x + fw - c, p.y), ImVec2(p.x + fw, p.y), ImVec2(p.x + fw, p.y + c), IM_COL32(24, 25, 34, 255));
@@ -701,7 +722,6 @@ void App::DrawExplorer() {
         if (m_explorerFilter == 2 && pkg) continue;
         files.push_back(e);
     }
-    float tw = 160 * u, th = 240 * u, gx = 44 * u, gy = 16 * u;
     ImGui::BeginChild("##tiles", ImVec2(0, 0), ImGuiChildFlags_None);
     // back to the top when another folder (or another search) is shown
     std::string viewKey = searching ? std::string(m_search) : Fmt("#%u", m_folder);
@@ -709,12 +729,15 @@ void App::DrawExplorer() {
         m_explorerView = viewKey;
         ImGui::SetScrollY(0);
     }
-    float availW = ImGui::GetContentRegionAvail().x;
-    int cols = std::max(1, (int)((availW + gx) / (tw + gx)));
+    // left-aligned grid with one gap size on every side; tiles stretch so each row fills the width exactly
+    float gap = 12 * u, minTw = 150 * u;
+    float availW = ImGui::GetContentRegionAvail().x - gap * 2;
+    int cols = std::max(1, (int)((availW + gap) / (minTw + gap)));
+    float tw = std::max(60 * u, (availW - gap * (cols - 1)) / cols), th = 200 * u, gx = gap, gy = gap;
     int total = (int)(subfolders.size() + files.size());
     int rows = (total + cols - 1) / cols;
-    float startX = ImGui::GetCursorPosX() + std::max(0.f, (availW - (cols * (tw + gx) - gx)) * 0.5f);
-    float y0 = ImGui::GetCursorPosY();
+    float startX = ImGui::GetCursorPosX() + gap;
+    float y0 = ImGui::GetCursorPosY() + gap;
     ImGuiListClipper clip;
     clip.Begin(rows, th + gy);
     ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -736,16 +759,19 @@ void App::DrawExplorer() {
                 bool dblClicked = hov && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
                 if (isFolder) {
                     dl->AddRectFilled(mn, mx, hov ? IM_COL32(56, 59, 78, 255) : IM_COL32(46, 48, 64, 255));
-                    DrawBigFolder(dl, mn, ImVec2(mx.x, mn.y + th * 0.68f));
                     const std::string& nm = folders[id].name;
                     ImVec2 ts = ImGui::CalcTextSize(nm.c_str());
-                    // long names stay inside the tile (left-aligned and clipped instead of centred over the neighbours)
-                    dl->PushClipRect(ImVec2(mn.x + 4 * u, mn.y), ImVec2(mx.x - 4 * u, mx.y), true);
-                    dl->AddText(ImVec2(mn.x + std::max(6 * u, (tw - ts.x) * 0.5f), mn.y + th * 0.68f + 4 * u), IM_COL32(245, 245, 250, 255), nm.c_str());
-                    dl->PopClipRect();
                     std::string l1 = Fmt("Subfolders: %zu", folders[id].folders.size()), l2 = Fmt("Assets: %zu", folders[id].files.size());
                     ImVec2 s1 = ImGui::CalcTextSize(l1.c_str()), s2 = ImGui::CalcTextSize(l2.c_str());
-                    float ly = mn.y + th * 0.68f + 4 * u + ts.y + 10 * u;
+                    // text block anchored to the bottom padding, the icon centred in the space above it
+                    float pad = 12 * u;
+                    float nameY = mx.y - pad - (ts.y + 6 * u + s1.y + 2 * u + s2.y);
+                    DrawBigFolder(dl, ImVec2(mn.x, mn.y + pad), ImVec2(mx.x, nameY - 4 * u));
+                    // long names stay inside the tile (left-aligned and clipped instead of centred over the neighbours)
+                    dl->PushClipRect(ImVec2(mn.x + 4 * u, mn.y), ImVec2(mx.x - 4 * u, mx.y), true);
+                    dl->AddText(ImVec2(mn.x + std::max(6 * u, (tw - ts.x) * 0.5f), nameY), IM_COL32(245, 245, 250, 255), nm.c_str());
+                    dl->PopClipRect();
+                    float ly = nameY + ts.y + 6 * u;
                     dl->AddText(ImVec2(mn.x + (tw - s1.x) * 0.5f, ly), IM_COL32(200, 202, 215, 255), l1.c_str());
                     dl->AddText(ImVec2(mn.x + (tw - s2.x) * 0.5f, ly + s1.y + 2 * u), IM_COL32(200, 202, 215, 255), l2.c_str());
                     if (hov) ImGui::SetTooltip("%s", nm.c_str());
@@ -762,14 +788,14 @@ void App::DrawExplorer() {
                     size_t dot = fn.rfind('.');
                     std::string base(dot == std::string_view::npos ? fn : fn.substr(0, dot));
                     std::string ext(dot == std::string_view::npos ? std::string_view() : fn.substr(dot + 1));
-                    float topH = th * 0.76f;
+                    float topH = th - (8 * u + ImGui::GetTextLineHeight() * 2 + 14 * u);   // name + ext/size rows below the preview
                     ImU32 tint = FileTint(fn);
                     dl->AddRectFilled(mn, mx, hov ? IM_COL32(56, 59, 78, 255) : IM_COL32(46, 48, 64, 255));
                     dl->AddRectFilled(mn, ImVec2(mx.x, mn.y + topH), IM_COL32(24, 25, 34, 255));
                     DrawBigFile(dl, mn, ImVec2(mx.x, mn.y + topH), tint);
                     dl->AddRectFilled(ImVec2(mn.x, mn.y + topH), ImVec2(mx.x, mn.y + topH + 2 * u), tint);
                     dl->PushClipRect(ImVec2(mn.x + 6 * u, mn.y + topH), ImVec2(mx.x - 6 * u, mx.y), true);
-                    dl->AddText(ImVec2(mn.x + 8 * u, mn.y + topH + 8 * u), IM_COL32(245, 245, 250, 255), base.c_str());
+                    dl->AddText(ImVec2(mn.x + 8 * u, mn.y + topH + 6 * u), IM_COL32(245, 245, 250, 255), base.c_str());
                     dl->PopClipRect();
                     std::string sz = HumanSize(vfs.Entry(id).usize);
                     float by = mx.y - ImGui::GetTextLineHeight() - 6 * u;
@@ -1137,20 +1163,33 @@ void App::DrawDocument(Document& d) {
         ImGui::TextDisabled("Loading %s ...", d.gamePath.c_str());
         return;
     }
-    // header: class + actions on one line, the path below it (wraps instead of overlapping the buttons)
+    // header, one line: class, the path (clipped, full path in the tooltip), actions on the right
+    BeginToolbar();
+    ImGuiStyle& st = ImGui::GetStyle();
+    float bw = ImGui::CalcTextSize("Export").x + ImGui::CalcTextSize("Save JSON").x + ImGui::CalcTextSize("Copy path").x + st.FramePadding.x * 6 + st.ItemSpacing.x * 2;
+    float x0 = ImGui::GetCursorPosX(), right = ImGui::GetContentRegionMax().x;
     ImGui::AlignTextToFramePadding();
     ImGui::TextColored(ImVec4(0.45f, 0.7f, 1, 1), "%s", d.className.empty() ? "?" : d.className.c_str());
-    float bw = ImGui::CalcTextSize("Export").x + ImGui::CalcTextSize("Save JSON").x + ImGui::CalcTextSize("Copy path").x + ImGui::GetStyle().FramePadding.x * 6 +
-               ImGui::GetStyle().ItemSpacing.x * 2;
-    ImGui::SameLine(std::max(ImGui::GetCursorPosX(), ImGui::GetContentRegionMax().x - bw));
-    if (ImGui::SmallButton("Export")) ExportFiles({d.entry}, 0);
+    ImGui::SameLine(0, 10 * ImGui::GetFontSize() / 16.f);
+    float pathW = right - bw - st.ItemSpacing.x * 2 - ImGui::GetCursorPosX();
+    if (pathW > 40) {
+        ImVec2 p = ImGui::GetCursorScreenPos();
+        float th = ImGui::GetFrameHeight();
+        ImGui::Dummy(ImVec2(pathW, th));
+        ImGui::PushStyleColor(ImGuiCol_Text, st.Colors[ImGuiCol_TextDisabled]);
+        ImGui::RenderTextEllipsis(ImGui::GetWindowDrawList(), ImVec2(p.x, p.y + st.FramePadding.y), ImVec2(p.x + pathW, p.y + th), p.x + pathW,
+                                  d.gamePath.c_str(), nullptr, nullptr);
+        ImGui::PopStyleColor();
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", d.gamePath.c_str());
+        ImGui::SameLine();
+    }
+    ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(), std::max(x0, right - bw)));
+    if (ImGui::Button("Export")) ExportFiles({d.entry}, 0);
     ImGui::SameLine();
-    if (ImGui::SmallButton("Save JSON")) ExportFiles({d.entry}, 2);
+    if (ImGui::Button("Save JSON")) ExportFiles({d.entry}, 2);
     ImGui::SameLine();
-    if (ImGui::SmallButton("Copy path")) CopyToClipboard(GamePathToPackage(d.gamePath));
-    ImGui::PushTextWrapPos(0);
-    ImGui::TextDisabled("%s", d.gamePath.c_str());
-    ImGui::PopTextWrapPos();
+    if (ImGui::Button("Copy path")) CopyToClipboard(GamePathToPackage(d.gamePath));
+    EndToolbar();
     if (!d.error.empty()) ImGui::TextColored(ImVec4(1, 0.5f, 0.4f, 1), "%s", d.error.c_str());
 
     if (!ImGui::BeginTabBar("##views")) return;
@@ -1386,8 +1425,9 @@ static void DrawViewport(Renderer& r, Document& d, ImVec2 size, bool allowFly) {
 
 void App::DrawModel(Document& d) {
     auto& m = *d.mesh;
+    BeginToolbar();
     if (m.lods.size() > 1) {
-        ImGui::SetNextItemWidth(90);
+        ImGui::SetNextItemWidth(80 * ImGui::GetFontSize() / 16.f);
         std::string cur = Fmt("LOD %d", d.lod);
         if (ImGui::BeginCombo("##lod", cur.c_str())) {
             for (int i = 0; i < (int)m.lods.size(); i++)
@@ -1398,14 +1438,14 @@ void App::DrawModel(Document& d) {
             ImGui::EndCombo();
         }
     }
-    FlowCheckbox("Textures", &d.draw.textures, m.lods.size() <= 1);   // FlowNext decides whether it fits next to the LOD combo
-    FlowCheckbox("Normal maps", &d.draw.normalMaps);
-    FlowCheckbox("Vertex colors", &d.draw.vertexColors);
-    FlowCheckbox("Wireframe", &d.draw.wireframe);
-    FlowCheckbox("Grid", &d.draw.grid);
-    FlowCheckbox("Cull", &d.draw.backfaceCulling);
-    FlowNext(ImGui::CalcTextSize("Frame").x + ImGui::GetStyle().FramePadding.x * 2);
-    if (ImGui::Button("Frame")) d.camera.Frame(d.gpuMesh->boundsMin, d.gpuMesh->boundsMax);
+    FlowToggle("Textures", &d.draw.textures, m.lods.size() <= 1);   // FlowNext decides whether it fits next to the LOD combo
+    FlowToggle("Normal maps", &d.draw.normalMaps);
+    FlowToggle("Vertex colors", &d.draw.vertexColors);
+    FlowToggle("Wireframe", &d.draw.wireframe);
+    FlowToggle("Grid", &d.draw.grid);
+    FlowToggle("Cull", &d.draw.backfaceCulling);
+    if (FlowButton("Frame")) d.camera.Frame(d.gpuMesh->boundsMin, d.gpuMesh->boundsMax);
+    EndToolbar();
 
     const MeshLod& l = m.lods[std::clamp(d.lod, 0, (int)m.lods.size() - 1)];
     ImGui::PushTextWrapPos(0);
@@ -1519,11 +1559,12 @@ void App::DrawWorld(Document& d) {
     WorldData& w = *d.world;
     WorldScene& sc = *d.worldScene;
     // toolbar
-    FlowCheckbox("Meshes", &d.worldDraw.meshes, true);
-    FlowCheckbox("Landscape", &d.worldDraw.landscape);
-    FlowCheckbox("Water", &d.worldWater);
-    FlowCheckbox("Textures", &d.draw.textures);
-    FlowCheckbox("Wireframe", &d.draw.wireframe);
+    BeginToolbar();
+    FlowToggle("Meshes", &d.worldDraw.meshes, true);
+    FlowToggle("Landscape", &d.worldDraw.landscape);
+    FlowToggle("Water", &d.worldWater);
+    FlowToggle("Textures", &d.draw.textures);
+    FlowToggle("Wireframe", &d.draw.wireframe);
     FlowNext(130);
     ImGui::SetNextItemWidth(130);
     ImGui::SliderFloat("##dd", &d.worldDraw.drawDistanceScale, 0, 4, d.worldDraw.drawDistanceScale > 0 ? "draw dist x%.2f" : "draw dist: all");
@@ -1542,8 +1583,8 @@ void App::DrawWorld(Document& d) {
         d.camera.nearZ = 10;
         d.camera.flySpeed = 3000;
     };
-    FlowNext(ImGui::CalcTextSize("Frame").x + ImGui::GetStyle().FramePadding.x * 2);
-    if (ImGui::Button("Frame")) frameWorld();
+    if (FlowButton("Frame")) frameWorld();
+    EndToolbar();
     const auto& st = sc.Stats();
     ImGui::PushTextWrapPos(0);
     ImGui::TextDisabled("%zu levels | %zu instances of %zu meshes, %zu landscape patches | drawn: %u instances, %u meshes, %u patches, %.2fM tris | %s GPU",
