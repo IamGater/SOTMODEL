@@ -1,5 +1,6 @@
 #pragma once
 #include "core/Common.h"
+#include <atomic>
 #include "core/JsonValue.h"
 #include "core/Vfs.h"
 #include "ue/Package.h"
@@ -34,6 +35,8 @@ class Api {
 public:
     explicit Api(Settings& settings);
     bool EnsureMounted(std::string* error = nullptr);
+    bool Mounted() const { return m_mounted; }
+    void Unmount();   // callers must make sure no other thread is using vfs/cache
     const std::vector<ApiTool>& Tools() const { return m_tools; }
     const ApiTool* FindTool(std::string_view name) const;
     ApiResult Call(std::string_view tool, const JsonValue& args);
@@ -54,7 +57,7 @@ private:
     void RegisterCoreTools();
     void RegisterAssetTools();
     std::vector<ApiTool> m_tools;
-    bool m_mounted = false;
+    std::atomic<bool> m_mounted{false};
     std::mutex m_mountMutex;
     friend void RegisterMeshTools(Api&);
 };

@@ -34,6 +34,12 @@ Output is JSON on stdout. Images are written to files (`out=<file.png>`, default
 and reported as `{"image": "<path>"}`. From PowerShell pipe the output (`| Out-String`) so the shell waits for the
 process (the exe is a GUI-subsystem program).
 
+## 3. GUI automation
+
+`SOTModel.exe <asset path> ...` opens the given assets in tabs. Adding `--screenshot <file.png> [--delay <s>]`
+renders the window off-screen-safe (from the app's own back buffer), saves it once loading settles and exits —
+handy for checking what the viewer shows without screen capture.
+
 ## Configuration
 
 `%APPDATA%\SOTModel\Settings.ini` (written by the UI). Missing values are imported automatically from an

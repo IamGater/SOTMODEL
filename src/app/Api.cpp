@@ -64,6 +64,13 @@ bool Api::EnsureMounted(std::string* error) {
     return true;
 }
 
+void Api::Unmount() {
+    std::lock_guard lk(m_mountMutex);
+    cache.reset();
+    vfs.Clear();
+    m_mounted = false;
+}
+
 const ApiTool* Api::FindTool(std::string_view name) const {
     for (auto& t : m_tools) if (t.name == name) return &t;
     return nullptr;
