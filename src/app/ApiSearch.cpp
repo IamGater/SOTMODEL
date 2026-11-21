@@ -3,6 +3,8 @@
 #include "app/Api.h"
 #include "core/Json.h"
 #include "ue/DataTable.h"
+#include "app/DepGraph.h"
+#include "app/RefIndex.h"
 
 namespace {
 
@@ -56,6 +58,54 @@ void RegisterSearchTools(Api& api) {
                       int limit = (int)args.GetNum("limit", 500);
                       if (refs)
                           for (size_t i = 0; i < refs->size() && (int)i < limit; i++) w.Str(std::string(a.vfs.Path((*refs)[i])));
+                      w.EndArray();
+                      w.EndObject();
+                      ApiResult r;
+                      r.json = w.Take();
+                      return r;
+                  }});
+
+    api.Register({"get_dependency_graph",
+                  "Dependency graph around a package: its referencers (packages importing it, from the reference index) and its references "
+                  "(packages it imports, with the class of the imported object), 'depth' levels out. Nodes carry path, class, side "
+                  "(-1 referencer, 0 root, 1 reference), depth and how many neighbours the per-node 'limit' left out; edges are "
+                  "[importer, imported] node indices. direction = both | referencers | references.",
+                  R"({"type":"object","properties":{"path":{"type":"string"},"depth":{"type":"integer","default":1},"direction":{"type":"string","default":"both"},"limit":{"type":"integer","default":40},"max_nodes":{"type":"integer","default":400},"build":{"type":"boolean","default":true}},"required":["path"]})",
+                  "path",
+                  [](Api& a, const JsonValue& args) {
+                      i64 e = a.ResolveFile(args.GetStr("path"));
+                      if (e < 0) return ApiResult::Error("not found: " + args.GetStr("path"));
+                      std::string dir = ToLower(args.GetStr("direction", "both"));
+                      bool wantIn = dir != "references", wantOut = dir != "referencers";
+                      std::string err;
+                      ReferenceIndex* idx = nullptr;
+                      if (wantIn && !(idx = a.EnsureReferences(args.GetBool("build", true), &err))) return ApiResult::Error(err);
+                      DepGraph g = BuildDepGraph(a.vfs, *a.cache, idx, (u32)e, (int)args.GetNum("depth", 1), wantIn, wantOut,
+                                                 (int)args.GetNum("limit", 40), (int)args.GetNum("max_nodes", 400));
+                      JsonWriter w;
+                      w.BeginObject();
+                      w.KV("root", g.nodes[0].path);
+                      w.Key("nodes");
+                      w.BeginArray();
+                      for (auto& n : g.nodes) {
+                          w.BeginObject();
+                          w.KV("path", n.path);
+                          if (!n.cls.empty()) w.KV("class", n.cls);
+                          w.KV("side", n.side);
+                          w.KV("depth", n.depth);
+                          if (n.hiddenReferencers) w.KV("moreReferencers", n.hiddenReferencers);
+                          if (n.hiddenReferences) w.KV("moreReferences", n.hiddenReferences);
+                          w.EndObject();
+                      }
+                      w.EndArray();
+                      w.Key("edges");
+                      w.BeginArray();
+                      for (auto& [from, to] : g.edges) {
+                          w.BeginArray();
+                          w.Int(from);
+                          w.Int(to);
+                          w.EndArray();
+                      }
                       w.EndArray();
                       w.EndObject();
                       ApiResult r;

@@ -213,9 +213,11 @@ void App::StartMount() {
             for (auto& p0 : openOnStart) {
                 bool shaders = p0.rfind("shaders:", 0) == 0;   // --shaders <path>: open its compiled shaders
                 bool hlsl = p0.rfind("hlsl:", 0) == 0;         // --material-hlsl <path>: its graph as HLSL
-                std::string p = shaders ? p0.substr(8) : hlsl ? p0.substr(5) : p0;
+                bool refs = p0.rfind("refs:", 0) == 0;         // --references <path>: its dependency graph
+                std::string p = shaders ? p0.substr(8) : (hlsl || refs) ? p0.substr(5) : p0;
                 i64 e = m_api->ResolveFile(p);
-                if (e >= 0 && shaders) DecompileShadersTab((u32)e);
+                if (e >= 0 && refs) FindReferences((u32)e);
+                else if (e >= 0 && shaders) DecompileShadersTab((u32)e);
                 else if (e >= 0 && hlsl) MaterialHlslTab((u32)e);
                 else if (e >= 0) OpenFile((u32)e);
                 else LOGW("not found: %s", p.c_str());

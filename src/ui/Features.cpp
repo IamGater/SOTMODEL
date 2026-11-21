@@ -295,7 +295,7 @@ void App::DrawReferencesTab() {
         ImGui::TextUnformatted(std::string(vfs.Path(m_refTarget)).c_str());
     }
     if (m_selected >= 0 && (size_t)m_selected < vfs.FileCount() && IsPackageFile(vfs.Path((u32)m_selected)) && (u32)m_selected != m_refTarget) {
-        if (ImGui::Button("Use the selected package")) { m_refTarget = (u32)m_selected; StartReferenceIndex(); }
+        if (ImGui::Button("Use the selected package")) { NavigateReferences((u32)m_selected); StartReferenceIndex(); }
     }
     if (!m_refReady) {
         if (!m_refBuilding) StartReferenceIndex();
@@ -306,6 +306,13 @@ void App::DrawReferencesTab() {
         return;
     }
     if (m_refTarget == UINT32_MAX) return;
+    if (ImGui::RadioButton("Graph", m_refGraphView)) m_refGraphView = true;
+    ImGui::SameLine();
+    if (ImGui::RadioButton("List", !m_refGraphView)) m_refGraphView = false;
+    if (m_refGraphView) {
+        DrawDependencyGraph();
+        return;
+    }
     static const std::vector<u32> none;
     const std::vector<u32>* found = m_api->references ? m_api->references->Referencers(m_refTarget) : nullptr;
     const std::vector<u32>& refs = found ? *found : none;

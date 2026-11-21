@@ -1,5 +1,6 @@
 #pragma once
 #include "app/Api.h"
+#include "app/DepGraph.h"
 #include "render/GpuAssets.h"
 #include "render/WorldScene.h"
 #include "ue/Material.h"
@@ -231,6 +232,8 @@ private:
     void FindReferences(u32 entry);
     void StartReferenceIndex();
     void DrawReferencesTab();
+    void DrawDependencyGraph();   // DepGraphView.cpp
+    void NavigateReferences(u32 entry);   // re-centre the References tab on a package (keeps a back history)
     void DrawLocalizationTab();
     void DrawBackupWindow();
     void CompareBackup(const std::wstring& file);
@@ -310,6 +313,12 @@ private:
     std::atomic<int> m_refDone{0}, m_refTotal{0};
     bool m_refReady = false, m_refBuilding = false;
     u32 m_refTarget = UINT32_MAX;
+    // References tab graph view (app/DepGraph.h): built in a job for (target, depth), click a node to walk to it
+    bool m_refGraphView = true;
+    int m_refDepth = 1;
+    std::shared_ptr<DepGraph> m_depGraph;
+    u64 m_depGraphKey = 0, m_depGraphPendingKey = 0;
+    std::vector<u32> m_refHistory;
     // explorer texture thumbnails
     struct Thumb { int state = 0; std::shared_ptr<GpuTexture> tex; };   // 0 none, 1 pending, 2 ready, 3 not a texture
     std::unordered_map<u32, Thumb> m_thumbs;

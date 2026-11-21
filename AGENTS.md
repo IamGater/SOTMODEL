@@ -40,7 +40,8 @@ process (the exe is a GUI-subsystem program).
 renders the window off-screen-safe (from the app's own back buffer), saves it once loading settles and exits —
 handy for checking what the viewer shows without screen capture. `--shaders <path>` opens the compiled shaders
 of a material package or of `Engine/Content/GlobalShaderCache-PCD3D_SM5.bin` instead; `--material-hlsl <path>`
-opens a material's graph translated to HLSL next to its node graph.
+opens a material's graph translated to HLSL next to its node graph; `--references <path>` opens the References tab
+on the package's dependency graph.
 
 ## Configuration
 
@@ -98,6 +99,7 @@ or `/Game/Models/Props/Common/cmn_barrel_debris_02_a.cmn_barrel_debris_02_a`.
 | `search_localization` | the game's translated strings (.locres) by text / key in any shipped language (en, de-DE, ru-RU, zh-CN, ...) |
 | `get_localized_text` | one FText (namespace + key) in every language |
 | `find_references` | packages that import the given one (meshes using a material, maps placing a Blueprint, ...); index built once, then cached |
+| `get_dependency_graph` | nodes (path, class, side -1 referencer / 0 root / 1 reference, depth, how many the per-node `limit` left out) and [importer, imported] edges around a package, `depth` levels out; `direction` both / referencers / references |
 | `search_content` | packages by main class, by what they use (`uses`), by property name / value (structs, arrays and DataTable rows searched) |
 | `get_material` | material instance chain with every texture / scalar / vector parameter resolved |
 | `export` | write files: textures (PNG/DDS), meshes (glTF/OBJ), animations (glTF with skeleton + skinned mesh), JSON; `raw=true` writes any file as stored. Meshes as glb carry their simple collision as a separate `Collision` node (`UCX_<mesh>`, `collision=false` to skip) |
@@ -149,6 +151,10 @@ Typical flow: `search` → `get_package` → `get_properties` / `preview_*` → 
   fields) is found by scanning for count + known expression FName. Layout: one float4 per vector expression, then the
   scalars packed 4 per float4. The cb slot comes from FMaterialShader's MaterialUniformBuffer (u16 BaseIndex + u32
   bIsBound) 12 bytes after the shader resource on SoT (a u32, a zero u32, a u32 come first).
+- Dependency graph (app/DepGraph.cpp): references come from the package's own import table (`/Game/...` Package
+  imports; the class is that of the object imported from it), referencers from the ReferenceIndex (class = the
+  referencer's main export). GUI: References tab > Graph (referencers left, references right, Depth 1-3); click a node
+  to centre on it (Back returns), double-click opens it, right-click for the file menu, right / middle drag pans.
 - Morph targets (UMorphTarget): after the tagged properties a 4-byte object-guid flag, the strip flags (2 bytes), then per
   LOD `{PositionDelta, TangentZDelta, SourceIdx}` (28 bytes, SourceIdx = render vertex). SoT's `MeshPatchAsset` exports
   in the same packages are a different (custom) thing.
