@@ -146,20 +146,22 @@ App::App() { m_settings.Load(); }
 
 App::~App() {
     m_exportCancel = true;
+    m_shutdown = true;   // stops the reference indexer
+    for (auto& t : m_refThreads) t.join();
     m_jobs.reset();   // joins workers before the renderer / api go away
     m_docs.clear();
     m_assets.reset();
 }
 
 bool App::Busy() const {
-    if (m_busyFrames > 0 || m_mountState == MountState::Mounting || m_exporting) return true;
+    if (m_busyFrames > 0 || m_mountState == MountState::Mounting || m_exporting || m_refBuilding) return true;
     if (m_jobs && m_jobs->Pending() > 0) return true;
     for (auto& d : m_docs) if (d->loading) return true;
     return false;
 }
 
 bool App::Loading() const {
-    if (m_mountState == MountState::Mounting || (m_jobs && m_jobs->Pending() > 0)) return true;
+    if (m_mountState == MountState::Mounting || m_refBuilding || (m_jobs && m_jobs->Pending() > 0)) return true;
     for (auto& d : m_docs) if (d->loading) return true;
     return false;
 }
@@ -263,6 +265,12 @@ void App::ReloadArchives() {
     if (m_mountState == MountState::Mounting) return;
     m_exportCancel = true;
     CloseDocument(0);   // cancels map loads so WaitIdle does not block on them
+    m_shutdown = true;  // the reference indexer reads the archives too
+    for (auto& t : m_refThreads) t.join();
+    m_refThreads.clear();
+    m_shutdown = false;
+    m_refIndex.clear();
+    m_refReady = m_refBuilding = false;
     m_jobs->WaitIdle();
     m_assets.reset();
     m_api->Unmount();
@@ -277,6 +285,11 @@ void App::ReloadArchives() {
     m_filterBuf[0] = 0;
     m_selected = -1;
     m_selFolder = UINT32_MAX;
+    {
+        std::lock_guard lk(m_thumbMutex);
+        m_thumbs.clear();
+        m_thumbPending = 0;
+    }
     StartMount();
 }
 
@@ -291,47 +304,6 @@ std::vector<u32> App::FolderFilesRecursive(u32 folder) const {
         stack.insert(stack.end(), f[i].folders.rbegin(), f[i].folders.rend());
     }
     return out;
-}
-
-void App::UpdateSearch() {
-    std::string q = m_search;
-    if (q == m_lastSearch) return;
-    m_lastSearch = q;
-    m_searchResults.clear();
-    m_searchTruncated = false;
-    if (q.empty() || m_mountState != MountState::Ready) return;
-    // space separated terms, all must match (case-insensitive); '*' / '?' switch to wildcard mode
-    std::vector<std::string> terms;
-    bool wildcard = q.find_first_of("*?") != std::string::npos;
-    if (!wildcard) {
-        size_t p = 0;
-        std::string lq = ToLower(q);
-        while (p < lq.size()) {
-            size_t e = lq.find(' ', p);
-            if (e == std::string::npos) e = lq.size();
-            if (e > p) terms.push_back(lq.substr(p, e - p));
-            p = e + 1;
-        }
-    }
-    const Vfs& vfs = m_api->vfs;
-    const size_t limit = 20000;
-    std::string lower;
-    for (u32 i = 0; i < vfs.FileCount(); i++) {
-        std::string_view path = vfs.Path(i);
-        bool ok;
-        if (wildcard) ok = WildcardMatch(q, path) || WildcardMatch(q, vfs.FileName(i));
-        else {
-            lower.assign(path);
-            for (auto& c : lower) c = (char)tolower((unsigned char)c);
-            ok = true;
-            for (auto& t : terms) if (lower.find(t) == std::string::npos) { ok = false; break; }
-        }
-        if (ok) {
-            if (m_searchResults.size() >= limit) { m_searchTruncated = true; break; }
-            m_searchResults.push_back(i);
-        }
-    }
-    std::sort(m_searchResults.begin(), m_searchResults.end(), [&](u32 a, u32 b) { return vfs.Path(a) < vfs.Path(b); });
 }
 
 static void SplitLines(Document& d) {

@@ -1,0 +1,617 @@
+// FModel features on top of the main window: package metadata, archives info, find references (background index of
+// package imports, cached on disk), favourite directories, search options, explorer texture thumbnails, copy image and
+// backups (file list snapshots compared against the current archives).
+#include "ui/App.h"
+#include "ui/UiCommon.h"
+#include "core/Json.h"
+#include "ue/Texture.h"
+#include "imgui.h"
+#include <windows.h>
+#include <shellapi.h>
+#include <regex>
+#include <ctime>
+
+// ------------------------------------------------------------------ documents holding plain text
+
+void App::PlaceDocument(std::shared_ptr<Document> d, bool newTab) {
+    auto it = std::find_if(m_docs.begin(), m_docs.end(), [&](auto& x) { return x->id == m_activeDoc; });
+    if (!newTab && it != m_docs.end()) {
+        d->id = (*it)->id;
+        (*it)->cancel = true;
+        *it = d;
+    } else if (newTab && it != m_docs.end() && (*it)->newTab) {
+        d->id = (*it)->id;
+        *it = d;
+    } else {
+        if (m_docs.size() >= 25) return;
+        d->id = m_nextDocId++;
+        m_docs.push_back(d);
+    }
+    m_activeDoc = d->id;
+    m_explorerVisible = false;
+}
+
+void App::OpenTextTab(const std::string& title, std::string text, u32 entry, bool newTab) {
+    auto d = std::make_shared<Document>();
+    d->entry = entry;
+    d->name = title;
+    d->gamePath = entry != UINT32_MAX && entry < m_api->vfs.FileCount() ? std::string(m_api->vfs.Path(entry)) : title;
+    d->json = std::move(text);
+    d->lines.push_back(0);
+    for (u32 i = 0; i < (u32)d->json.size(); i++) if (d->json[i] == '\n') d->lines.push_back(i + 1);
+    d->loading = false;
+    PlaceDocument(d, newTab);
+}
+
+static std::string Hex(u64 v) { return Fmt("0x%llX", (unsigned long long)v); }
+
+// Show Metadata: the package header (summary, name / import / export maps) instead of the properties
+void App::ShowMetadata(u32 entry, bool newTab) {
+    if (m_mountState != MountState::Ready) return;
+    std::string title = std::string(m_api->vfs.FileName(entry)) + " (Metadata)";
+    m_jobs->Push([this, entry, newTab, title] {
+        std::string err;
+        auto pkg = m_api->cache->Load(entry, &err);
+        JsonWriter w;
+        if (!pkg) {
+            w.BeginObject();
+            w.KV("Error", err);
+            w.EndObject();
+        } else {
+            const auto& s = pkg->Summary();
+            w.BeginObject();
+            w.Key("Summary");
+            w.BeginObject();
+            w.KV("LegacyFileVersion", (i64)s.legacyVersion);
+            w.KV("FileVersionUE3", (i64)s.ue3Version);
+            w.KV("FileVersionUE4", (i64)s.ue4Version);
+            w.KV("FileVersionLicenseeUE4", (i64)s.licenseeVersion);
+            w.KV("TotalHeaderSize", (i64)s.totalHeaderSize);
+            w.KV("PackageFlags", Hex(s.packageFlags));
+            w.KV("NameCount", (i64)s.nameCount);
+            w.KV("NameOffset", (i64)s.nameOffset);
+            w.KV("ImportCount", (i64)s.importCount);
+            w.KV("ImportOffset", (i64)s.importOffset);
+            w.KV("ExportCount", (i64)s.exportCount);
+            w.KV("ExportOffset", (i64)s.exportOffset);
+            w.KV("DependsOffset", (i64)s.dependsOffset);
+            w.KV("BulkDataStartOffset", (i64)s.bulkDataStartOffset);
+            w.KV("Guid", Fmt("%08X%08X%08X%08X", s.guid.a, s.guid.b, s.guid.c, s.guid.d));
+            w.KV("PackageName", pkg->PackageName());
+            w.KV("Size", (i64)pkg->Data().size());
+            w.EndObject();
+            w.Key("NameMap");
+            w.BeginArray();
+            for (auto& n : pkg->Names()) w.Str(n);
+            w.EndArray();
+            w.Key("ImportMap");
+            w.BeginArray();
+            for (size_t i = 0; i < pkg->Imports().size(); i++) {
+                const auto& im = pkg->Imports()[i];
+                w.BeginObject();
+                w.KV("Index", (i64)(-(i64)i - 1));
+                w.KV("ObjectName", im.objectName);
+                w.KV("ClassPackage", im.classPackage);
+                w.KV("ClassName", im.className);
+                if (im.outerIndex) w.KV("Outer", pkg->FullPath(im.outerIndex));
+                w.KV("FullPath", pkg->FullPath(-(i32)i - 1));
+                w.EndObject();
+            }
+            w.EndArray();
+            w.Key("ExportMap");
+            w.BeginArray();
+            for (size_t i = 0; i < pkg->Exports().size(); i++) {
+                const auto& ex = pkg->Exports()[i];
+                w.BeginObject();
+                w.KV("Index", (i64)i + 1);
+                w.KV("ObjectName", ex.objectName);
+                w.KV("Class", pkg->ExportClass(i));
+                if (ex.superIndex) w.KV("Super", pkg->FullPath(ex.superIndex));
+                if (ex.outerIndex) w.KV("Outer", pkg->FullPath(ex.outerIndex));
+                w.KV("ObjectFlags", Hex(ex.objectFlags));
+                w.KV("SerialSize", (i64)ex.serialSize);
+                w.KV("SerialOffset", (i64)ex.serialOffset);
+                w.EndObject();
+            }
+            w.EndArray();
+            w.EndObject();
+        }
+        std::string text = w.Take();
+        Post([this, entry, newTab, title, text] { OpenTextTab(title, text, entry, newTab); });
+    });
+}
+
+// Directory > Archives Info: every mounted archive as JSON
+void App::ShowArchivesInfo() {
+    if (m_mountState != MountState::Ready) return;
+    JsonWriter w;
+    w.BeginArray();
+    for (auto& p : m_api->vfs.Paks()) {
+        WIN32_FILE_ATTRIBUTE_DATA fad = {};
+        u64 size = GetFileAttributesExW(p->path.c_str(), GetFileExInfoStandard, &fad) ? ((u64)fad.nFileSizeHigh << 32 | fad.nFileSizeLow) : 0;
+        w.BeginObject();
+        w.KV("Name", p->name);
+        w.KV("Path", Narrow(p->path));
+        w.KV("MountPoint", p->mountPoint);
+        w.KV("Version", (i64)p->version);
+        w.KV("FileCount", (i64)p->fileCount);
+        w.KV("PatchLevel", (i64)p->patchLevel);
+        w.KV("IsEncrypted", p->keyIndex >= 0);
+        w.KV("Size", HumanSize(size));
+        w.EndObject();
+    }
+    w.EndArray();
+    OpenTextTab("Archives Info", w.Take(), UINT32_MAX, true);
+}
+
+// ------------------------------------------------------------------ folders / favourites
+
+u32 App::FolderByPath(std::string_view p) const {
+    auto& folders = m_api->vfs.Folders();
+    u32 cur = 0;
+    size_t pos = 0;
+    while (pos < p.size()) {
+        size_t sl = std::min(p.find('/', pos), p.size());
+        std::string_view part = p.substr(pos, sl - pos);
+        u32 next = UINT32_MAX;
+        for (u32 c : folders[cur].folders) if (IEquals(folders[c].name, part)) { next = c; break; }
+        if (next == UINT32_MAX) break;
+        cur = next;
+        pos = sl + 1;
+    }
+    return cur;
+}
+
+static std::string PathOfFolder(const std::vector<VfsFolder>& folders, u32 f) {
+    std::string out;
+    for (; f != UINT32_MAX && f != 0; f = folders[f].parent) out = folders[f].name + (out.empty() ? "" : "/") + out;
+    return out;
+}
+
+bool App::IsFavorite(u32 folder) const {
+    if (m_mountState != MountState::Ready || !folder) return false;
+    std::string p = PathOfFolder(m_api->vfs.Folders(), folder);
+    for (auto& f : m_settings.favoriteDirs) if (IEquals(f, p)) return true;
+    return false;
+}
+
+void App::ToggleFavorite(u32 folder) {
+    if (m_mountState != MountState::Ready || !folder) return;
+    std::string p = PathOfFolder(m_api->vfs.Folders(), folder);
+    auto& v = m_settings.favoriteDirs;
+    auto it = std::find_if(v.begin(), v.end(), [&](auto& f) { return IEquals(f, p); });
+    if (it != v.end()) v.erase(it);
+    else v.push_back(p);
+    m_settings.Save();
+}
+
+// ------------------------------------------------------------------ search (Packages > Search)
+
+void App::UpdateSearch() {
+    std::string key = Fmt("%s|%d|%d", m_search, (int)m_searchMatchCase, (int)m_searchRegex);
+    if (key == m_lastSearch) return;
+    m_lastSearch = key;
+    m_searchResults.clear();
+    m_searchTruncated = false;
+    m_searchError.clear();
+    std::string q = m_search;
+    if (q.empty() || m_mountState != MountState::Ready) return;
+    const Vfs& vfs = m_api->vfs;
+    const size_t limit = 20000;
+    auto add = [&](u32 i) {
+        if (m_searchResults.size() >= limit) { m_searchTruncated = true; return false; }
+        m_searchResults.push_back(i);
+        return true;
+    };
+    if (m_searchRegex) {
+        std::regex re;
+        try {
+            re = std::regex(q, m_searchMatchCase ? std::regex::ECMAScript : std::regex::ECMAScript | std::regex::icase);
+        } catch (const std::exception& e) {
+            m_searchError = e.what();
+            return;
+        }
+        for (u32 i = 0; i < vfs.FileCount(); i++) {
+            std::string_view p = vfs.Path(i);
+            if (std::regex_search(p.begin(), p.end(), re) && !add(i)) break;
+        }
+    } else {
+        // space separated terms, all must match; '*' / '?' switch to wildcard mode
+        bool wildcard = q.find_first_of("*?") != std::string::npos;
+        std::vector<std::string> terms;
+        std::string lq = m_searchMatchCase ? q : ToLower(q);
+        for (size_t p = 0; p < lq.size();) {
+            size_t e = lq.find(' ', p);
+            if (e == std::string::npos) e = lq.size();
+            if (e > p) terms.push_back(lq.substr(p, e - p));
+            p = e + 1;
+        }
+        std::string buf;
+        for (u32 i = 0; i < vfs.FileCount(); i++) {
+            std::string_view path = vfs.Path(i);
+            bool ok;
+            if (wildcard) ok = WildcardMatch(q, path) || WildcardMatch(q, vfs.FileName(i));
+            else {
+                buf.assign(path);
+                if (!m_searchMatchCase) for (auto& c : buf) c = (char)tolower((unsigned char)c);
+                ok = true;
+                for (auto& t : terms) if (buf.find(t) == std::string::npos) { ok = false; break; }
+            }
+            if (ok && !add(i)) break;
+        }
+    }
+    std::sort(m_searchResults.begin(), m_searchResults.end(), [&](u32 a, u32 b) { return vfs.Path(a) < vfs.Path(b); });
+}
+
+// ------------------------------------------------------------------ find references
+
+static std::wstring DataDir() {
+    std::wstring p = Settings::Path();
+    return p.substr(0, p.find_last_of(L'\\'));
+}
+
+// identifies the mounted archive set, so a cached index is only reused for the same game files
+static u64 ArchiveSignature(const Vfs& vfs) {
+    u64 h = 1469598103934665603ull;
+    auto mix = [&](const void* p, size_t n) { for (size_t i = 0; i < n; i++) { h ^= ((const u8*)p)[i]; h *= 1099511628211ull; } };
+    u64 count = vfs.FileCount();
+    mix(&count, sizeof(count));
+    for (auto& p : vfs.Paks()) {
+        mix(p->name.data(), p->name.size());
+        mix(&p->fileCount, sizeof(p->fileCount));
+    }
+    return h;
+}
+
+void App::StartReferenceIndex() {
+    if (m_refReady || m_refBuilding || m_mountState != MountState::Ready) return;
+    const Vfs& vfs = m_api->vfs;
+    u64 sig = ArchiveSignature(vfs);
+    std::wstring cache = DataDir() + L"\\References.bin";
+    // cached: "SOTREF1" sig targets{entry count refs...}
+    Bytes data;
+    if (ReadWholeFile(cache, data) && data.size() >= 20 && memcmp(data.data(), "SOTREF1", 7) == 0 && *(const u64*)(data.data() + 8) == sig) {
+        size_t pos = 16;
+        u32 n = *(const u32*)(data.data() + pos);
+        pos += 4;
+        for (u32 i = 0; i < n && pos + 8 <= data.size(); i++) {
+            u32 target = *(const u32*)(data.data() + pos), cnt = *(const u32*)(data.data() + pos + 4);
+            pos += 8;
+            if (pos + cnt * 4ull > data.size()) break;
+            auto& v = m_refIndex[target];
+            v.assign((const u32*)(data.data() + pos), (const u32*)(data.data() + pos) + cnt);
+            pos += cnt * 4ull;
+        }
+        m_refReady = true;
+        LOGI("references: loaded the index of %zu packages from cache", m_refIndex.size());
+        return;
+    }
+    std::vector<u32> packages;
+    for (u32 i = 0; i < vfs.FileCount(); i++) if (IsPackageFile(vfs.Path(i))) packages.push_back(i);
+    m_refBuilding = true;
+    m_refDone = 0;
+    m_refTotal = (int)packages.size();
+    const int workers = 2;   // the job pool stays free for documents
+    m_refWorkers = workers;
+    auto shared = std::make_shared<std::vector<u32>>(std::move(packages));
+    LOGI("references: indexing imports of %d packages (once, then cached)...", m_refTotal.load());
+    for (int w = 0; w < workers; w++)
+        m_refThreads.emplace_back([this, shared, w, workers, sig, cache] {
+            const Vfs& vfs = m_api->vfs;
+            std::unordered_map<u32, std::vector<u32>> local;
+            for (size_t k = w; k < shared->size() && !m_shutdown; k += workers) {
+                u32 e = (*shared)[k];
+                Bytes bytes;
+                Package pkg;
+                if (vfs.Read(e, bytes) && pkg.Load(std::move(bytes), std::string(vfs.Path(e)))) {
+                    for (auto& im : pkg.Imports()) {
+                        if (im.outerIndex != 0 || im.className != "Package" || !IStartsWith(im.objectName, "/Game/")) continue;
+                        i64 t = vfs.FindPackage(im.objectName);
+                        if (t >= 0 && (u32)t != e) local[(u32)t].push_back(e);
+                    }
+                }
+                m_refDone++;
+            }
+            {
+                std::lock_guard lk(m_refMutex);
+                for (auto& [t, v] : local) {
+                    auto& dst = m_refIndex[t];
+                    dst.insert(dst.end(), v.begin(), v.end());
+                }
+            }
+            if (--m_refWorkers == 0 && !m_shutdown) {
+                Bytes out(16);
+                memcpy(out.data(), "SOTREF1", 8);
+                memcpy(out.data() + 8, &sig, 8);
+                {
+                    std::lock_guard lk(m_refMutex);
+                    u32 n = (u32)m_refIndex.size();
+                    out.insert(out.end(), (u8*)&n, (u8*)&n + 4);
+                    for (auto& [t, v] : m_refIndex) {
+                        std::sort(v.begin(), v.end());
+                        v.erase(std::unique(v.begin(), v.end()), v.end());
+                        u32 cnt = (u32)v.size();
+                        out.insert(out.end(), (const u8*)&t, (const u8*)&t + 4);
+                        out.insert(out.end(), (u8*)&cnt, (u8*)&cnt + 4);
+                        out.insert(out.end(), (const u8*)v.data(), (const u8*)(v.data() + v.size()));
+                    }
+                }
+                CreateDirectories(DataDir());
+                WriteWholeFile(cache, out.data(), out.size());
+                Post([this] {
+                    m_refBuilding = false;
+                    m_refReady = true;
+                    LOGI("references: index ready (%zu referenced packages)", m_refIndex.size());
+                });
+            }
+        });
+}
+
+void App::FindReferences(u32 entry) {
+    if (m_mountState != MountState::Ready) return;
+    m_refTarget = entry;
+    m_showSearch = true;
+    m_searchTab = 1;
+    StartReferenceIndex();
+}
+
+void App::DrawReferencesTab() {
+    const Vfs& vfs = m_api->vfs;
+    if (m_refTarget == UINT32_MAX || m_refTarget >= vfs.FileCount()) {
+        ImGui::TextWrapped("Right-click a package and choose \"Find References\", or select one and press the button below.");
+    } else {
+        ImGui::TextUnformatted(std::string(vfs.Path(m_refTarget)).c_str());
+    }
+    if (m_selected >= 0 && (size_t)m_selected < vfs.FileCount() && IsPackageFile(vfs.Path((u32)m_selected)) && (u32)m_selected != m_refTarget) {
+        if (ImGui::Button("Use the selected package")) { m_refTarget = (u32)m_selected; StartReferenceIndex(); }
+    }
+    if (!m_refReady) {
+        if (!m_refBuilding) StartReferenceIndex();
+        int done = m_refDone, total = std::max(1, m_refTotal.load());
+        ImGui::TextDisabled("Indexing package imports (first time only, then cached)...");
+        ImGui::ProgressBar((float)done / total, ImVec2(-FLT_MIN, 0), Fmt("%d / %d", done, total).c_str());
+        m_busyFrames = 3;
+        return;
+    }
+    if (m_refTarget == UINT32_MAX) return;
+    static const std::vector<u32> none;
+    auto it = m_refIndex.find(m_refTarget);
+    const std::vector<u32>& refs = it == m_refIndex.end() ? none : it->second;
+    ImGui::TextDisabled("%zu package(s) reference it", refs.size());
+    if (ImGui::BeginTable("##refs", 2, ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable | ImGuiTableFlags_BordersInnerV)) {
+        ImGui::TableSetupScrollFreeze(0, 1);
+        ImGui::TableSetupColumn("Path", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn("Size", ImGuiTableColumnFlags_WidthFixed, ImGui::GetFontSize() * 4.5f);
+        ImGui::TableHeadersRow();
+        ImGuiListClipper clip;
+        clip.Begin((int)refs.size());
+        while (clip.Step())
+            for (int i = clip.DisplayStart; i < clip.DisplayEnd; i++) {
+                u32 e = refs[i];
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::PushID((int)e);
+                std::string path(vfs.Path(e));
+                if (ImGui::Selectable(path.c_str(), m_selected == (i64)e, ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowDoubleClick)) {
+                    m_selected = e;
+                    if (ImGui::IsMouseDoubleClicked(0)) {
+                        SelectFolder(FolderByPath(path.substr(0, path.rfind('/'))));
+                        m_selected = e;
+                        OpenFile(e);
+                    }
+                }
+                if (ImGui::BeginPopupContextItem("##rctx")) {
+                    DrawFileMenu(e);
+                    ImGui::EndPopup();
+                }
+                ImGui::TableNextColumn();
+                ImGui::TextDisabled("%s", HumanSize(vfs.Entry(e).usize).c_str());
+                ImGui::PopID();
+            }
+        ImGui::EndTable();
+    }
+}
+
+// ------------------------------------------------------------------ explorer texture thumbnails
+
+std::shared_ptr<GpuTexture> App::Thumbnail(u32 entry) {
+    std::lock_guard lk(m_thumbMutex);
+    auto it = m_thumbs.find(entry);
+    if (it != m_thumbs.end()) return it->second.state == 2 ? it->second.tex : nullptr;
+    if (m_thumbPending >= 6) return nullptr;   // a few at a time: documents keep loading
+    m_thumbs[entry].state = 1;
+    m_thumbPending++;
+    m_jobs->Push([this, entry] {
+        std::shared_ptr<GpuTexture> tex;
+        std::string err;
+        if (auto pkg = m_api->cache->Load(entry, &err)) {
+            i32 main = pkg->MainExport();
+            TextureInfo info;
+            Image img;
+            if (main && IsTextureClass(pkg->ExportClass(main - 1)) && ReadTextureInfo(*pkg, main - 1, info, &err) && DecodeTexture(*pkg, info, -1, 160, img, &err))
+                tex = m_renderer->CreateTexture(img, info.srgb, false);
+        }
+        {
+            std::lock_guard lk(m_thumbMutex);
+            auto& t = m_thumbs[entry];
+            t.state = tex ? 2 : 3;
+            t.tex = tex;
+            m_thumbPending--;
+        }
+        Post([] {});
+    });
+    return nullptr;
+}
+
+// ------------------------------------------------------------------ copy image (texture inspector)
+
+void App::CopyTextureImage(std::shared_ptr<Document> d) {
+    if (!d || !d->pkg) return;
+    m_jobs->Push([this, d] {
+        Image img;
+        std::string err;
+        if (!DecodeTexture(*d->pkg, d->tex, -1, 8192, img, &err)) {
+            LOGW("copy image: %s", err.c_str());
+            return;
+        }
+        // CF_DIB: bottom-up BGRA
+        size_t px = (size_t)img.width * img.height;
+        HGLOBAL mem = GlobalAlloc(GMEM_MOVEABLE, sizeof(BITMAPINFOHEADER) + px * 4);
+        if (!mem) return;
+        auto* hdr = (BITMAPINFOHEADER*)GlobalLock(mem);
+        *hdr = {};
+        hdr->biSize = sizeof(BITMAPINFOHEADER);
+        hdr->biWidth = img.width;
+        hdr->biHeight = img.height;
+        hdr->biPlanes = 1;
+        hdr->biBitCount = 32;
+        hdr->biCompression = BI_RGB;
+        u8* dst = (u8*)(hdr + 1);
+        for (int y = 0; y < img.height; y++) {
+            const u8* s = &img.rgba[(size_t)(img.height - 1 - y) * img.width * 4];
+            u8* o = dst + (size_t)y * img.width * 4;
+            for (int x = 0; x < img.width; x++) {
+                o[x * 4 + 0] = s[x * 4 + 2];
+                o[x * 4 + 1] = s[x * 4 + 1];
+                o[x * 4 + 2] = s[x * 4 + 0];
+                o[x * 4 + 3] = s[x * 4 + 3];
+            }
+        }
+        GlobalUnlock(mem);
+        bool ok = false;
+        if (OpenClipboard((HWND)m_hwnd)) {
+            EmptyClipboard();
+            ok = SetClipboardData(CF_DIB, mem) != nullptr;
+            CloseClipboard();
+        }
+        if (!ok) GlobalFree(mem);
+        LOGI(ok ? "copied %s (%dx%d) to the clipboard" : "could not copy %s", d->name.c_str(), img.width, img.height);
+    });
+}
+
+// ------------------------------------------------------------------ backups (Directory > Backup)
+
+static std::wstring BackupDir() { return DataDir() + L"\\Backups"; }
+
+void App::DrawBackupWindow() {
+    ImGuiViewport* vp = ImGui::GetMainViewport();
+    ImGui::SetNextWindowSize(ImVec2(ImGui::GetFontSize() * 36, ImGui::GetFontSize() * 22), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x * 0.5f, vp->WorkPos.y + vp->WorkSize.y * 0.5f), ImGuiCond_FirstUseEver, ImVec2(0.5f, 0.5f));
+    if (!ImGui::Begin("Backup Manager", &m_showBackups, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings)) {
+        ImGui::End();
+        return;
+    }
+    ImGui::TextWrapped("A backup is a list of every file in the archives with its size. Compare one with the current game files to see "
+                       "which packages a patch added, changed or removed.");
+    bool ready = m_mountState == MountState::Ready;
+    ImGui::BeginDisabled(!ready);
+    if (ImGui::Button("Create Backup")) {
+        const Vfs& vfs = m_api->vfs;
+        std::string out;
+        out.reserve(vfs.FileCount() * 80);
+        for (u32 i = 0; i < vfs.FileCount(); i++) {
+            out.append(vfs.Path(i));
+            out += '\t';
+            out += std::to_string(vfs.Entry(i).usize);
+            out += '\n';
+        }
+        time_t now = time(nullptr);
+        tm lt;
+        localtime_s(&lt, &now);
+        wchar_t name[64];
+        wcsftime(name, 64, L"SOTModel_%Y-%m-%d_%H-%M-%S.sotbkp", &lt);
+        CreateDirectories(BackupDir());
+        std::wstring path = BackupDir() + L"\\" + name;
+        m_backupMessage = WriteWholeFile(path, out.data(), out.size()) ? "Created " + Narrow(name) : "Could not write " + Narrow(path);
+        LOGI("%s", m_backupMessage.c_str());
+    }
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    if (ImGui::Button("Open Folder")) {
+        CreateDirectories(BackupDir());
+        ShellExecuteW(nullptr, L"open", BackupDir().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+    }
+    if (!m_backupMessage.empty()) ImGui::TextDisabled("%s", m_backupMessage.c_str());
+    ImGui::Separator();
+    // existing backups, newest first
+    std::vector<std::pair<std::wstring, u64>> files;
+    WIN32_FIND_DATAW fd;
+    HANDLE h = FindFirstFileW((BackupDir() + L"\\*.sotbkp").c_str(), &fd);
+    if (h != INVALID_HANDLE_VALUE) {
+        do files.push_back({fd.cFileName, (u64)fd.nFileSizeHigh << 32 | fd.nFileSizeLow});
+        while (FindNextFileW(h, &fd));
+        FindClose(h);
+    }
+    std::sort(files.begin(), files.end(), [](auto& a, auto& b) { return a.first > b.first; });
+    if (files.empty()) ImGui::TextDisabled("No backups yet");
+    if (ImGui::BeginTable("##bk", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY)) {
+        ImGui::TableSetupColumn("Backup", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn("Size", ImGuiTableColumnFlags_WidthFixed, ImGui::GetFontSize() * 5);
+        ImGui::TableSetupColumn("##act", ImGuiTableColumnFlags_WidthFixed, ImGui::GetFontSize() * 5);
+        for (auto& [name, size] : files) {
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted(Narrow(name).c_str());
+            ImGui::TableNextColumn();
+            ImGui::TextDisabled("%s", HumanSize(size).c_str());
+            ImGui::TableNextColumn();
+            ImGui::PushID(Narrow(name).c_str());
+            ImGui::BeginDisabled(!ready);
+            if (ImGui::SmallButton("Compare")) CompareBackup(BackupDir() + L"\\" + name);
+            ImGui::EndDisabled();
+            ImGui::PopID();
+        }
+        ImGui::EndTable();
+    }
+    ImGui::End();
+}
+
+void App::CompareBackup(const std::wstring& file) {
+    Bytes data;
+    if (!ReadWholeFile(file, data)) { LOGW("could not read %s", Narrow(file).c_str()); return; }
+    std::unordered_map<std::string, u64> old;
+    std::string_view text((const char*)data.data(), data.size());
+    for (size_t pos = 0; pos < text.size();) {
+        size_t nl = text.find('\n', pos);
+        if (nl == std::string_view::npos) nl = text.size();
+        std::string_view line = text.substr(pos, nl - pos);
+        size_t tab = line.find('\t');
+        if (tab != std::string_view::npos) old.emplace(ToLower(line.substr(0, tab)), strtoull(std::string(line.substr(tab + 1)).c_str(), nullptr, 10));
+        pos = nl + 1;
+    }
+    const Vfs& vfs = m_api->vfs;
+    std::vector<std::string> added, modified, removed;
+    std::unordered_map<std::string, bool> seen;
+    for (u32 i = 0; i < vfs.FileCount(); i++) {
+        std::string p(vfs.Path(i)), k = ToLower(p);
+        auto it = old.find(k);
+        if (it == old.end()) added.push_back(p);
+        else {
+            if (it->second != vfs.Entry(i).usize) modified.push_back(p);
+            seen[k] = true;
+        }
+    }
+    for (auto& [k, sz] : old) if (!seen.count(k)) removed.push_back(k);
+    std::sort(added.begin(), added.end());
+    std::sort(modified.begin(), modified.end());
+    std::sort(removed.begin(), removed.end());
+    JsonWriter w;
+    w.BeginObject();
+    w.KV("Backup", Narrow(file.substr(file.find_last_of(L'\\') + 1)));
+    w.KV("NewCount", (i64)added.size());
+    w.KV("ModifiedCount", (i64)modified.size());
+    w.KV("RemovedCount", (i64)removed.size());
+    auto list = [&](const char* k, const std::vector<std::string>& v) {
+        w.Key(k);
+        w.BeginArray();
+        for (auto& s : v) w.Str(s);
+        w.EndArray();
+    };
+    list("New", added);
+    list("Modified", modified);
+    list("Removed", removed);
+    w.EndObject();
+    LOGI("backup comparison: %zu new, %zu modified, %zu removed", added.size(), modified.size(), removed.size());
+    OpenTextTab("Backup Comparison", w.Take(), UINT32_MAX, true);
+}

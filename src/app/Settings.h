@@ -17,6 +17,8 @@ struct Settings {
     int explorerViewMode = 0;      // 0 grid, 1 list
     bool loggerExpanded = true;
     float leftPanelWidth = 0;      // 0 = automatic
+    bool previewTextures = false;  // texture thumbnails on explorer cards
+    std::vector<std::string> favoriteDirs;   // Packages > Favorite Directories (game folder paths)
 
     static std::wstring Path();   // %APPDATA%\SOTModel\Settings.ini
     void Load();

@@ -143,6 +143,21 @@ private:
     void AddTab();
     Document* ActiveDoc();
     std::string& FolderFilter();
+    // FModel features (Features.cpp)
+    void PlaceDocument(std::shared_ptr<Document> d, bool newTab);   // into the selected tab unless newTab (FModel)
+    void OpenTextTab(const std::string& title, std::string text, u32 entry, bool newTab);
+    void ShowMetadata(u32 entry, bool newTab = false);
+    void ShowArchivesInfo();
+    void FindReferences(u32 entry);
+    void StartReferenceIndex();
+    void DrawReferencesTab();
+    void DrawBackupWindow();
+    void CompareBackup(const std::wstring& file);
+    std::shared_ptr<GpuTexture> Thumbnail(u32 entry);   // asynchronous; nullptr until decoded (or not a texture)
+    void CopyTextureImage(std::shared_ptr<Document> d);
+    u32 FolderByPath(std::string_view path) const;      // deepest existing folder along a game path
+    bool IsFavorite(u32 folder) const;
+    void ToggleFavorite(u32 folder);
     // viewers (App.cpp)
     void DrawModel(Document& d);
     void DrawAnimation(Document& d);
@@ -197,6 +212,24 @@ private:
     i64 m_selected = -1;            // selected package (Packages list / explorer)
     u32 m_selFolder = UINT32_MAX;   // folder card selected in the explorer
     bool m_showSearch = false, m_focusGlobalSearch = false;   // Packages > Search window
+    int m_searchTab = 0;                       // 0 search, 1 references
+    bool m_searchMatchCase = false, m_searchRegex = false;
+    std::string m_searchError;
+    // reference index: package entry -> packages importing it (built once in the background, cached on disk)
+    std::unordered_map<u32, std::vector<u32>> m_refIndex;
+    std::mutex m_refMutex;
+    std::atomic<int> m_refDone{0}, m_refTotal{0}, m_refWorkers{0};
+    bool m_refReady = false, m_refBuilding = false;
+    u32 m_refTarget = UINT32_MAX;
+    // explorer texture thumbnails
+    struct Thumb { int state = 0; std::shared_ptr<GpuTexture> tex; };   // 0 none, 1 pending, 2 ready, 3 not a texture
+    std::unordered_map<u32, Thumb> m_thumbs;
+    std::mutex m_thumbMutex;
+    int m_thumbPending = 0;
+    std::vector<std::thread> m_refThreads;
+    std::atomic<bool> m_shutdown{false};
+    bool m_showBackups = false;
+    std::string m_backupMessage;
     double m_readyAt = 0;            // ImGui time the archives finished mounting ("Last Refresh")
     char m_search[256] = {};
     std::string m_lastSearch;

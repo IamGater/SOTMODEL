@@ -48,6 +48,8 @@ void Settings::Load() {
             else if (k == "ExplorerViewMode") explorerViewMode = std::clamp(atoi(v.c_str()), 0, 1);
             else if (k == "LoggerExpanded") loggerExpanded = v == "1";
             else if (k == "LeftPanelWidth") leftPanelWidth = (float)atof(v.c_str());
+            else if (k == "PreviewTextures") previewTextures = v == "1";
+            else if (k == "FavoriteDir") { if (!v.empty()) favoriteDirs.push_back(v); }
         }
     }
     if (outputDir.empty()) {
@@ -72,6 +74,8 @@ bool Settings::Save() const {
     s += "ExplorerViewMode=" + std::to_string(explorerViewMode) + "\n";
     s += std::string("LoggerExpanded=") + (loggerExpanded ? "1" : "0") + "\n";
     s += Fmt("LeftPanelWidth=%.0f\n", leftPanelWidth);
+    s += std::string("PreviewTextures=") + (previewTextures ? "1" : "0") + "\n";
+    for (auto& f : favoriteDirs) s += "FavoriteDir=" + f + "\n";
     std::wstring p = Path();
     CreateDirectories(p.substr(0, p.find_last_of(L'\\')));
     return WriteWholeFile(p, s.data(), s.size());

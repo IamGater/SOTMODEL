@@ -516,6 +516,7 @@ void App::Frame() {
 
     if (m_showSettings) DrawSettings();
     if (m_showSearch) DrawSearchWindow();
+    if (m_showBackups) DrawBackupWindow();
     DrawExportProgress();
     if (g_animating) m_busyFrames = std::max(m_busyFrames, 2);   // transitions still running: keep drawing
 }
@@ -524,7 +525,8 @@ void App::HandleHotkeys() {
     ImGuiIO& io = ImGui::GetIO();
     bool typing = io.WantTextInput;
     bool ready = m_mountState == MountState::Ready;
-    if (ready && ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_F)) { m_showSearch = true; m_focusGlobalSearch = true; }
+    if (ready && ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_F)) { m_showSearch = true; m_searchTab = 0; m_focusGlobalSearch = true; }
+    if (ready && ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_R)) FindReferences(m_selected >= 0 ? (u32)m_selected : m_refTarget);
     if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_T)) AddTab();
     if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_W) && m_activeDoc) CloseDocument(m_activeDoc);
     if (ImGui::IsKeyPressed(ImGuiKey_F3, false) && !m_explorerVisible) {
@@ -562,15 +564,24 @@ void App::DrawMenu() {
         if (MenuItemIcon("Selector", nullptr, [](ImDrawList* dl, ImVec2 c, float s, ImU32 col) { IconFolder(dl, ImVec2(c.x - s * 0.5f, c.y - s * 0.5f), s, false); (void)col; }))
             m_showSettings = true;
         if (MenuItemIcon("AES", nullptr, IconKey, ready)) m_showSettings = true;
-        MenuItemIcon("Backup", nullptr, IconClock, false);
-        if (MenuItemIcon("Archives Info", nullptr, IconInfo, ready)) m_leftTab = 0;
+        if (MenuItemIcon("Backup", nullptr, IconClock, ready)) m_showBackups = true;
+        if (MenuItemIcon("Archives Info", nullptr, IconInfo, ready)) ShowArchivesInfo();
         ImGui::EndMenu();
     }
     if (ImGui::BeginMenu("Packages")) {
-        if (MenuItemIcon("Search", "Ctrl+Shift+F", IconSearch, ready)) { m_showSearch = true; m_focusGlobalSearch = true; }
-        MenuItemIcon("References", "Ctrl+Shift+R", IconSearch, false);
-        MenuItemIcon("Favorite Directories", nullptr, [](ImDrawList* dl, ImVec2 c, float s, ImU32) { IconFolder(dl, ImVec2(c.x - s * 0.5f, c.y - s * 0.5f), s, true); },
-                     false);
+        if (MenuItemIcon("Search", "Ctrl+Shift+F", IconSearch, ready)) { m_showSearch = true; m_searchTab = 0; m_focusGlobalSearch = true; }
+        if (MenuItemIcon("References", "Ctrl+Shift+R", IconSearch, ready)) FindReferences(m_selected >= 0 ? (u32)m_selected : m_refTarget);
+        {
+            ImVec2 rp = ImGui::GetCursorScreenPos();
+            bool open = ImGui::BeginMenu("      Favorite Directories", ready);
+            IconFolder(ImGui::GetWindowDrawList(), ImVec2(rp.x + Dip(1), ImGui::GetItemRectMin().y + (ImGui::GetItemRectSize().y - Dip(14)) * 0.5f), Dip(14), true);
+            if (open) {
+                if (m_settings.favoriteDirs.empty()) ImGui::MenuItem("Right-click a folder > Favorite Directory", nullptr, false, false);
+                for (auto& f : m_settings.favoriteDirs)
+                    if (ImGui::MenuItem(f.c_str())) { m_leftTab = 1; SelectFolder(FolderByPath(f)); }
+                ImGui::EndMenu();
+            }
+        }
         ImGui::EndMenu();
     }
     if (ImGui::BeginMenu("Views")) {
@@ -735,7 +746,7 @@ void App::DrawFolderMenu(u32 f) {
         ImGui::EndMenu();
     }
     ImGui::Separator();
-    ImGui::MenuItem("Favorite Directory", nullptr, false, false);
+    if (ImGui::MenuItem("Favorite Directory", nullptr, IsFavorite(f))) ToggleFavorite(f);
     if (ImGui::MenuItem("Copy Directory Path")) CopyToClipboard(FolderPath(folders, f));
 }
 
@@ -1049,7 +1060,7 @@ void App::DrawRightPanel(float width, float height) {
     if (m_mountState == MountState::Ready) {
         float b = Dip(32), pad = Dip(4);
         ImVec2 mx(p.x + width - Dip(3) - Dip(20), p.y + contentH - Dip(12));
-        ImVec2 mn(mx.x - b - pad * 2, mx.y - b - pad * 2);
+        ImVec2 mn(mx.x - b * 2 - Dip(2) - pad * 2, mx.y - b - pad * 2);
         float op = 0.5f + 0.5f * Anim(ImGui::GetID("##floatpanel"), ImGui::IsMouseHoveringRect(mn, mx), 0.2f);   // fades in over 0.2 s
         ImDrawList* fg = ImGui::GetWindowDrawList();
         fg->AddRectFilled(mn, mx, Alpha(IM_COL32(50, 50, 63, 255), op), Dip(8));
@@ -1066,6 +1077,19 @@ void App::DrawRightPanel(float width, float height) {
         if (m_explorerVisible) IconFolder(fg, ImVec2(c.x - Dip(9), c.y - Dip(9)), Dip(18), false);
         else FileGlyph(fg, c, Dip(18), "x.uasset", bg);
         if (bh) ImGui::SetTooltip(m_explorerVisible ? "Assets Explorer (Z)" : "File Properties (Z)");
+        // texture thumbnails on the explorer cards
+        ImGui::SetCursorScreenPos(ImVec2(mn.x + pad + b + Dip(2), mn.y + pad));
+        ImGui::SetNextItemAllowOverlap();
+        if (ImGui::InvisibleButton("##previewtex", ImVec2(b, b))) { m_settings.previewTextures = !m_settings.previewTextures; m_settings.Save(); }
+        bool ph = ImGui::IsItemHovered();
+        float pt = HoverAnim();
+        a = ImGui::GetItemRectMin();
+        z = ImGui::GetItemRectMax();
+        bg = Mix(m_settings.previewTextures ? IM_COL32(147, 112, 219, 255) : IM_COL32(38, 38, 48, 255), kTabSel, pt);
+        fg->AddRectFilled(a, z, Alpha(bg, op), Dip(8));
+        fg->AddRect(a, z, Alpha(kPanel, op), Dip(8));
+        IconImages(fg, ImVec2((a.x + z.x) * 0.5f, (a.y + z.y) * 0.5f), Dip(18), Alpha(kText, std::max(op, 0.8f)));
+        if (ph) ImGui::SetTooltip(m_settings.previewTextures ? "Preview Textures (ON)" : "Preview Textures (OFF)");
     }
 
     // log expander
@@ -1190,7 +1214,14 @@ void App::DrawExplorer() {
                     std::string_view fn = vfs.FileName(id);
                     size_t dot = fn.rfind('.');
                     std::string base(dot == std::string_view::npos ? fn : fn.substr(0, dot)), ext(dot == std::string_view::npos ? "" : fn.substr(dot + 1));
-                    FileGlyph(dl, ImVec2(x + Dip(10), cy), Dip(20), fn, sel ? kAccent : kPanel);
+                    std::shared_ptr<GpuTexture> thumb = m_settings.previewTextures && IEndsWith(fn, ".uasset") ? Thumbnail(id) : nullptr;
+                    if (thumb) {
+                        float s = std::min(Dip(20) / thumb->width, Dip(20) / thumb->height);
+                        ImVec2 isz(thumb->width * s, thumb->height * s), ia(x + (Dip(20) - isz.x) * 0.5f, cy - isz.y * 0.5f);
+                        dl->AddImage((ImTextureID)(intptr_t)thumb->srvRaw.Get(), ia, ImVec2(ia.x + isz.x, ia.y + isz.y));
+                    } else {
+                        FileGlyph(dl, ImVec2(x + Dip(10), cy), Dip(20), fn, sel ? kAccent : kPanel);
+                    }
                     ImGui::PushFont(boldFont, FontDip(13));
                     TextEllipsis(dl, ImVec2(x + Dip(28), cy - ImGui::GetFontSize() * 0.5f), x + c1 - Dip(8), kText, base.c_str());
                     ImGui::PopFont();
@@ -1262,7 +1293,14 @@ void App::DrawExplorer() {
                     ImU32 tint = FileTint(fn);
                     dl->AddRectFilled(mn, mxp, Mix(kCardFile, Shade(kCardFile, 1.2f), ht));
                     dl->AddRectFilled(mn, ImVec2(mxp.x, mn.y + topH), kBorder);
-                    FileGlyph(dl, ImVec2(mn.x + tw * 0.5f, mn.y + topH * 0.5f), Dip(64), fn, kBorder);
+                    std::shared_ptr<GpuTexture> thumb = m_settings.previewTextures && IEndsWith(fn, ".uasset") ? Thumbnail(id) : nullptr;
+                    if (thumb) {   // fitted into the preview square
+                        float s = std::min(topH / thumb->width, topH / thumb->height);
+                        ImVec2 isz(thumb->width * s, thumb->height * s), ia(mn.x + (tw - isz.x) * 0.5f, mn.y + (topH - isz.y) * 0.5f);
+                        dl->AddImage((ImTextureID)(intptr_t)thumb->srvRaw.Get(), ia, ImVec2(ia.x + isz.x, ia.y + isz.y));
+                    } else {
+                        FileGlyph(dl, ImVec2(mn.x + tw * 0.5f, mn.y + topH * 0.5f), Dip(64), fn, kBorder);
+                    }
                     dl->AddRectFilled(ImVec2(mn.x, mn.y + topH), ImVec2(mxp.x, mn.y + topH + Dip(2)), tint);
                     // name: up to two lines, then type (left) and size (right) at the bottom
                     ImGui::PushFont(boldFont, FontDip(13));
@@ -1316,21 +1354,7 @@ void App::OpenFile(u32 entry, bool newTab) {
     d->gamePath = std::string(m_api->vfs.Path(entry));
     d->name = std::string(m_api->vfs.FileName(entry));
     // FModel: extracts into the selected tab; a new tab only when asked (or there is none / it is full)
-    auto it = std::find_if(m_docs.begin(), m_docs.end(), [&](auto& x) { return x->id == m_activeDoc; });
-    if (!newTab && it != m_docs.end()) {
-        d->id = (*it)->id;
-        (*it)->cancel = true;
-        *it = d;
-    } else if (newTab && it != m_docs.end() && (*it)->newTab) {
-        d->id = (*it)->id;
-        *it = d;
-    } else {
-        if (m_docs.size() >= 25) return;
-        d->id = m_nextDocId++;
-        m_docs.push_back(d);
-    }
-    m_activeDoc = d->id;
-    m_explorerVisible = false;
+    PlaceDocument(d, newTab);
     if (!IsPackageFile(d->gamePath)) {   // loose files: show their text
         d->loading = true;
         m_jobs->Push([this, d] {
@@ -1405,8 +1429,8 @@ void App::DrawDocTabs(float height) {
             if (MenuItemIcon("Close Other Tabs", nullptr, IconClose)) closeOthers = d.id;
             bool pkg = !d.newTab && IsPackageFile(d.gamePath);
             ImGui::Separator();
-            MenuItemIcon("Show Metadata", nullptr, IconInfo, false);
-            MenuItemIcon("Find References", nullptr, IconSearch, false);
+            if (MenuItemIcon("Show Metadata", nullptr, IconInfo, pkg)) { u32 e = d.entry; Post([this, e] { ShowMetadata(e, true); }); }
+            if (MenuItemIcon("Find References", nullptr, IconSearch, pkg)) FindReferences(d.entry);
             MenuItemIcon("Decompile Blueprint", nullptr, IconCube, false);
             ImGui::Separator();
             if (ImGui::BeginMenu("      Export", !d.newTab)) {
@@ -1589,16 +1613,43 @@ void App::DrawImagePanel(Document& d) {
     float m = Dip(8);
     ImVec2 area(w - m * 2, h - headH - m * 2);
     if (tex && area.x > 4 && area.y > 4) {
-        float s = std::min(area.x / tex->width, area.y / tex->height);
-        s = std::min(s, std::max(1.f, s));   // never upscale beyond the panel
-        ImVec2 sz(tex->width * s, tex->height * s);
-        ImVec2 a(p.x + m + (area.x - sz.x) * 0.5f, p.y + headH + m + (area.y - sz.y) * 0.5f);
+        ImGuiIO& io = ImGui::GetIO();
+        ImVec2 a0(p.x + m, p.y + headH + m);
+        float fit = std::min({area.x / tex->width, area.y / tex->height, 1.f});   // fitted, never upscaled
+        float s = d.texZoom > 0 ? d.texZoom : fit;
+        ImGui::SetCursorScreenPos(a0);
+        ImGui::InvisibleButton("##img", area, ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight | ImGuiButtonFlags_MouseButtonMiddle);
+        bool hov = ImGui::IsItemHovered();
+        ImVec2 center(a0.x + area.x * 0.5f + d.texPanX, a0.y + area.y * 0.5f + d.texPanY);
+        if (hov && io.MouseWheel != 0) {   // zoom around the cursor
+            float ns = std::clamp(s * powf(1.2f, io.MouseWheel), fit * 0.25f, 32.f);
+            d.texPanX += (io.MousePos.x - center.x) * (1 - ns / s);
+            d.texPanY += (io.MousePos.y - center.y) * (1 - ns / s);
+            d.texZoom = ns;
+            s = ns;
+        }
+        if (ImGui::IsItemActive() && (ImGui::IsMouseDragging(0, 1) || ImGui::IsMouseDragging(2, 1))) { d.texPanX += io.MouseDelta.x; d.texPanY += io.MouseDelta.y; }
+        if (hov && ImGui::IsMouseDoubleClicked(0)) { d.texZoom = 0; d.texPanX = d.texPanY = 0; s = fit; }
+        center = ImVec2(a0.x + area.x * 0.5f + d.texPanX, a0.y + area.y * 0.5f + d.texPanY);
+        ImVec2 sz(tex->width * s, tex->height * s), a(center.x - sz.x * 0.5f, center.y - sz.y * 0.5f);
+        dl->PushClipRect(a0, ImVec2(a0.x + area.x, a0.y + area.y), true);
         dl->AddImage((ImTextureID)(intptr_t)tex->srvRaw.Get(), a, ImVec2(a.x + sz.x, a.y + sz.y));
         dl->AddRect(ImVec2(a.x - 1, a.y - 1), ImVec2(a.x + sz.x + 1, a.y + sz.y + 1), kSeparator);
-        ImGui::SetCursorScreenPos(a);
-        ImGui::InvisibleButton("##img", sz, ImGuiButtonFlags_MouseButtonRight);
+        dl->PopClipRect();
+        if (hov && d.texture) {
+            float u = (io.MousePos.x - a.x) / sz.x, v = (io.MousePos.y - a.y) / sz.y;
+            if (u >= 0 && u < 1 && v >= 0 && v < 1)
+                ImGui::SetTooltip("%d, %d  (%.0f%%)\nWheel: zoom, drag: pan, double click: fit", (int)(u * d.tex.sizeX), (int)(v * d.tex.sizeY),
+                                  s * tex->width / std::max(1, d.tex.sizeX) * 100);
+        }
         if (ImGui::BeginPopupContextItem("##imgctx")) {
+            if (ImGui::MenuItem("Copy Image", nullptr, false, d.texture && d.pkg)) {
+                for (auto& sp : m_docs) if (sp.get() == &d) CopyTextureImage(sp);
+            }
             if (ImGui::MenuItem("Export Image")) ExportFiles({d.entry}, 0, d.texture ? 1 : 0);
+            ImGui::Separator();
+            if (ImGui::MenuItem("Fit")) { d.texZoom = 0; d.texPanX = d.texPanY = 0; }
+            if (ImGui::MenuItem("Actual Size")) { d.texZoom = (float)std::max(1, d.tex.sizeX) / tex->width; d.texPanX = d.texPanY = 0; }
             ImGui::EndPopup();
         }
     } else if (!tex) {
@@ -1643,7 +1694,7 @@ void App::DrawJsonEditor(Document& d, ImVec2 size) {
         u32 s = d.lines[line], e = lineEnd(line);
         return std::min(s + (u32)col, e);
     };
-    if (!d.loading && ImGui::IsItemClicked(0)) {
+    if (!d.loading && ImGui::IsItemClicked(0) && !io.KeyCtrl) {
         u32 off = posToOffset(io.MousePos);
         if (ImGui::IsMouseDoubleClicked(0)) {   // word
             auto isWord = [](char c) { return isalnum((unsigned char)c) || c == '_'; };
@@ -1720,6 +1771,24 @@ void App::DrawJsonEditor(Document& d, ImVec2 size) {
                 continue;
             }
             dl->AddText(ImVec2(x0 + k * cw, y), col, line.data() + k, line.data() + j);
+            if (col == kJsonString && j - k > 8 && hovered) {   // game / package path value: Ctrl+click opens it
+                ImVec2 ta(x0 + k * cw, y), tb(x0 + j * cw, y + lh);
+                if (ImGui::IsMouseHoveringRect(ta, tb)) {
+                    std::string val(line.substr(k + 1, j - k - 2));
+                    bool candidate = IStartsWith(val, "/Game/") || (IStartsWith(val, "Athena/") && (IEndsWith(val, ".uasset") || IEndsWith(val, ".umap")));
+                    size_t colon = val.find(':');
+                    if (colon != std::string::npos) val.resize(colon);   // "/Game/X.Y:Inner" -> package object
+                    i64 target = candidate ? m_api->ResolveFile(val) : -1;
+                    if (target >= 0) {
+                        dl->AddLine(ImVec2(ta.x + cw, tb.y - 1), ImVec2(tb.x - cw, tb.y - 1), col);
+                        ImGui::SetTooltip("Ctrl+Click to open %s", std::string(m_api->vfs.Path((u32)target)).c_str());
+                        if (io.KeyCtrl) {
+                            ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+                            if (ImGui::IsMouseClicked(0)) { u32 e = (u32)target; Post([this, e] { OpenFile(e, true); }); }
+                        }
+                    }
+                }
+            }
             k = j;
         }
     }
@@ -1881,7 +1950,7 @@ void App::DrawStatusBar() {
     float h = Dip(27), w = ImGui::GetContentRegionAvail().x;
     bool docLoading = false;
     for (auto& d : m_docs) docLoading |= d->loading || d->worldLoading;
-    bool busy = m_mountState == MountState::Mounting || m_exporting || docLoading;
+    bool busy = m_mountState == MountState::Mounting || m_exporting || docLoading || m_refBuilding;
     ImU32 col = m_mountState == MountState::Failed ? kError : busy ? kAlert : kAccent;
     ImDrawList* dl = ImGui::GetWindowDrawList();
     dl->AddRectFilled(p, ImVec2(p.x + w, p.y + h), col);
@@ -1890,6 +1959,7 @@ void App::DrawStatusBar() {
                         : m_mountState == MountState::Failed  ? "Failed: " + m_mountError
                         : m_exporting                          ? Fmt("Exporting \xE2\x80\xA6    %d / %d", m_exportDone.load(), m_exportTotal.load())
                         : docLoading                           ? std::string("Loading \xE2\x80\xA6")
+                        : m_refBuilding                        ? Fmt("Indexing references \xE2\x80\xA6    %d / %d", m_refDone.load(), m_refTotal.load())
                         : m_mountState == MountState::Ready    ? std::string("Completed")
                                                                : std::string("Ready");
     float ty = p.y + (h - ImGui::GetFontSize()) * 0.5f;
@@ -1927,10 +1997,41 @@ void App::DrawSearchWindow() {
         ImGui::PopStyleColor(3);
         return;
     }
-    SearchBox("##gsearch", m_search, sizeof(m_search), "Write your pattern (terms or * ? wildcards)...", 0, m_focusGlobalSearch);
+    // Search / References (FModel SearchView tabs)
+    {
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        const char* names[2] = {"Search", "References"};
+        float tw = Dip(120), th = Dip(24);
+        ImVec2 p = ImGui::GetCursorScreenPos();
+        for (int i = 0; i < 2; i++) {
+            ImGui::SetCursorScreenPos(ImVec2(p.x + tw * i, p.y));
+            ImGui::PushID(i);
+            if (ImGui::InvisibleButton("##stab", ImVec2(tw, th))) m_searchTab = i;
+            float ht = HoverAnim(), st = Anim(ImGui::GetItemID() ^ 0x7ab, m_searchTab == i);
+            ImGui::PopID();
+            ImVec2 a(p.x + tw * i, p.y);
+            dl->AddRectFilled(a, ImVec2(a.x + tw - 1, a.y + th), Mix(Mix(kLayer0, kHover, ht), kTabSel, st));
+            TextCentered(dl, a.x, a.x + tw, a.y + (th - ImGui::GetFontSize()) * 0.5f, kText, names[i]);
+        }
+        float w = ImGui::GetContentRegionAvail().x;
+        dl->AddRectFilled(ImVec2(p.x, p.y + th), ImVec2(p.x + w, p.y + th + Dip(4)), kTabSel);
+        ImGui::SetCursorScreenPos(ImVec2(p.x, p.y + th + Dip(10)));
+    }
+    if (m_searchTab == 1) {
+        DrawReferencesTab();
+        ImGui::End();
+        ImGui::PopStyleColor(3);
+        return;
+    }
+    SearchBox("##gsearch", m_search, sizeof(m_search), m_searchRegex ? "Write your regex pattern..." : "Write your pattern (terms or * ? wildcards)...", 0,
+              m_focusGlobalSearch);
     m_focusGlobalSearch = false;
+    ImGui::Checkbox("Match Case", &m_searchMatchCase);
+    ImGui::SameLine();
+    ImGui::Checkbox("Regex", &m_searchRegex);
     UpdateSearch();
-    ImGui::TextDisabled("%zu result(s)%s", m_searchResults.size(), m_searchTruncated ? " (truncated)" : "");
+    if (!m_searchError.empty()) ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(kError), "%s", m_searchError.c_str());
+    else ImGui::TextDisabled("%zu result(s)%s", m_searchResults.size(), m_searchTruncated ? " (truncated)" : "");
     auto& vfs = m_api->vfs;
     if (ImGui::BeginTable("##sres", 2, ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable | ImGuiTableFlags_BordersInnerV)) {
         ImGui::TableSetupScrollFreeze(0, 1);
@@ -1989,8 +2090,8 @@ void App::DrawFileMenu(u32 e) {
     bool pkg = IsPackageFile(path);
     m_selected = e;
     if (MenuItemIcon("Extract in New Tab", nullptr, IconExportBox)) OpenFile(e, true);
-    MenuItemIcon("Show Metadata", nullptr, IconInfo, false);
-    MenuItemIcon("Find References", nullptr, IconSearch, false);
+    if (MenuItemIcon("Show Metadata", nullptr, IconInfo, pkg)) ShowMetadata(e, true);
+    if (MenuItemIcon("Find References", nullptr, IconSearch, pkg)) FindReferences(e);
     MenuItemIcon("Decompile Blueprint", nullptr, IconCube, false);
     ImGui::Separator();
     if (ImGui::BeginMenu("      Export")) {
