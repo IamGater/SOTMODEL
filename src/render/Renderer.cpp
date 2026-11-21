@@ -427,7 +427,7 @@ void Renderer::BeginFrame(int width, int height, const Camera& cam, const DrawOp
 
     D3D11_MAPPED_SUBRESOURCE ms;
     if (SUCCEEDED(m_ctx->Map(m_frameCb.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &ms))) {
-        FrameConstants fc;
+        FrameConstants fc{};
         fc.viewProj = m_viewProj;
         fc.eye[0] = eye.x; fc.eye[1] = eye.y; fc.eye[2] = eye.z; fc.eye[3] = 1;
         // key light from over the camera's shoulder
