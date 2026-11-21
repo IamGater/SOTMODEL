@@ -45,6 +45,9 @@ void Settings::Load() {
             else if (k == "TextureFormat") textureFormat = atoi(v.c_str());
             else if (k == "WorldDrawDistance") worldDrawDistance = (float)atof(v.c_str());
             else if (k == "ShowGrid") showGrid = v == "1";
+            else if (k == "ExplorerViewMode") explorerViewMode = std::clamp(atoi(v.c_str()), 0, 1);
+            else if (k == "LoggerExpanded") loggerExpanded = v == "1";
+            else if (k == "LeftPanelWidth") leftPanelWidth = (float)atof(v.c_str());
         }
     }
     if (outputDir.empty()) {
@@ -66,6 +69,9 @@ bool Settings::Save() const {
     s += "TextureFormat=" + std::to_string(textureFormat) + "\n";
     s += Fmt("WorldDrawDistance=%.0f\n", worldDrawDistance);
     s += std::string("ShowGrid=") + (showGrid ? "1" : "0") + "\n";
+    s += "ExplorerViewMode=" + std::to_string(explorerViewMode) + "\n";
+    s += std::string("LoggerExpanded=") + (loggerExpanded ? "1" : "0") + "\n";
+    s += Fmt("LeftPanelWidth=%.0f\n", leftPanelWidth);
     std::wstring p = Path();
     CreateDirectories(p.substr(0, p.find_last_of(L'\\')));
     return WriteWholeFile(p, s.data(), s.size());

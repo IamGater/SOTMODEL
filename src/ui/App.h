@@ -10,8 +10,11 @@
 #include <condition_variable>
 #include <deque>
 #include <atomic>
+#include <unordered_map>
+#include <unordered_set>
 
 struct ImFont;
+struct ImVec2;
 
 // Small worker pool; results that touch UI state are posted back with App::Post (run on the UI thread).
 class JobPool {
@@ -41,11 +44,18 @@ struct Document {
     std::string error;
     std::shared_ptr<Package> pkg;
 
-    // properties
+    bool newTab = false;   // FModel "New Tab" placeholder (no asset yet)
+
+    // properties (JSON editor)
     std::string json;
     std::vector<u32> lines;   // line start offsets
-    char find[128] = {};
-    int findLine = -1, scrollToLine = -1;
+    u32 maxCols = 0;          // longest line, for the horizontal scroll range
+    u32 selA = 0, selB = 0;   // selection as byte offsets (anchor, caret)
+    bool searchOpen = false, focusSearch = false, searchUp = false, wholeWord = false, matchCase = false;
+    char find[256] = {};
+    int scrollToLine = -1;
+    float sideW = 0;          // preview column width (0 = default)
+    int imagePage = 0;        // material textures shown one at a time
 
     // texture
     TextureInfo tex;
@@ -113,34 +123,45 @@ public:
 private:
     void StartMount();
     void DrawMenu();
-    void DrawFolderTree(u32 folder);
-    void DrawArchives();
-    void DrawFileList();
-    void DrawDocuments();
-    void DrawDocument(Document& d);
-    void DrawProperties(Document& d);
-    void DrawTexture(Document& d);
+    // main window (Shell.cpp): FModel layout
+    void DrawLeftPanel(float width, float height);
+    void DrawArchivesTab();
+    void DrawFoldersTab();
+    void DrawPackagesTab();
+    void DrawRightPanel(float width, float height);
+    void DrawExplorer();
+    void DrawDocTabs(float height);
+    void DrawDocContent(Document& d);
+    void DrawJsonEditor(Document& d, ImVec2 size);
+    void DrawImagePanel(Document& d);
+    void DrawLog(float width);
+    void DrawSearchWindow();
+    void DrawFolderMenu(u32 folder);
+    void Breadcrumb(u32 folder);
+    void HandleHotkeys();
+    void SelectFolder(u32 folder);   // select + reveal in the tree, show it in the explorer
+    void AddTab();
+    Document* ActiveDoc();
+    std::string& FolderFilter();
+    // viewers (App.cpp)
     void DrawModel(Document& d);
-    void DrawMaterial(Document& d);
     void DrawAnimation(Document& d);
     void DrawWorld(Document& d);
     void LoadWorld(std::shared_ptr<Document> d);
     void LoadAnimationMesh(std::shared_ptr<Document> d, std::string meshPath);
     bool LoadAnimationMeshNow(Document& d, const std::string& meshPath);
-    void DrawLog(float height);
-    void DrawLeftPanel(float height);
-    void DrawExplorer();
-    void DrawFileMenu(u32 entry, bool searching);
+    void DrawFileMenu(u32 entry);
     void ReloadArchives();
     void CloseDocument(u64 id);   // 0 = all
+    void CloseOtherDocuments(u64 keep);
     void DrawSettings();
     void DrawStatusBar();
     void DrawExportProgress();
 
-    void OpenFile(u32 entry);
+    void OpenFile(u32 entry, bool newTab = false);   // FModel: into the selected tab unless newTab
     void LoadDocument(std::shared_ptr<Document> d);
     void RebuildMeshLod(Document& d);
-    void ExportFiles(std::vector<u32> entries, int mode);   // 0 by type, 1 raw, 2 json
+    void ExportFiles(std::vector<u32> entries, int mode, int kind = 0);   // mode 0 by type, 1 raw, 2 json; kind 1 textures, 2 meshes, 3 worlds, 4 animations
     void ExportCurrentFolder();
     void UpdateSearch();
     std::vector<u32> FolderFilesRecursive(u32 folder) const;
@@ -161,18 +182,22 @@ private:
     std::string m_mountError;
     double m_mountSeconds = 0;
 
-    u32 m_folder = 0;
-    bool m_collapseTree = false;
-    u32 m_treeFolder = 0;   // folder the tree last showed as current (a change elsewhere expands the tree to it)
+    u32 m_folder = 0;                       // selected folder (0 = root)
+    std::unordered_set<u32> m_expanded;     // open folders in the tree
+    u32 m_scrollTreeTo = UINT32_MAX;        // tree row to bring into view next frame
     int m_leftTab = 1;   // 0 archives, 1 folders, 2 packages
     int m_selPak = -1;
     std::vector<u64> m_pakSizes;
-    float m_logFrac = 0.16f;   // log pane height as a fraction of the window
-    int m_explorerFilter = 0;   // 0 all, 1 packages, 2 other files
-    bool m_selectExplorer = false;
-    std::string m_explorerView;   // folder / search the explorer last showed (scroll resets when it changes)
-    i64 m_selected = -1;
+    int m_explorerFilter = 0;   // category: 0 all, 1 packages, 2 maps, 3 other files
+    bool m_explorerVisible = true;   // explorer instead of the document tabs (FModel "Assets Explorer" toggle)
+    std::string m_explorerView;   // folder / filter the explorer last showed (scroll resets when it changes)
+    std::unordered_map<u32, std::string> m_folderFilters;   // "Filter assets in current folder..." per folder
+    char m_filterBuf[256] = {};
+    u32 m_filterFolder = UINT32_MAX;
+    i64 m_selected = -1;            // selected package (Packages list / explorer)
     u32 m_selFolder = UINT32_MAX;   // folder card selected in the explorer
+    bool m_showSearch = false, m_focusGlobalSearch = false;   // Packages > Search window
+    double m_readyAt = 0;            // ImGui time the archives finished mounting ("Last Refresh")
     char m_search[256] = {};
     std::string m_lastSearch;
     std::vector<u32> m_searchResults;
@@ -180,10 +205,10 @@ private:
     bool m_focusSearch = false;
 
     std::vector<std::shared_ptr<Document>> m_docs;
-    u64 m_nextDocId = 1, m_activeDoc = 0, m_selectDoc = 0;
+    u64 m_nextDocId = 1, m_activeDoc = 0;
 
     int m_busyFrames = 3;
-    bool m_showSettings = false, m_showLog = true, m_quit = false;
+    bool m_showSettings = false, m_quit = false;
     std::vector<LogLine> m_log;
     size_t m_logSeen = 0;
     bool m_logScroll = true;

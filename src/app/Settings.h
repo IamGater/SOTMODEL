@@ -13,6 +13,10 @@ struct Settings {
     int textureFormat = 0;     // 0 = PNG, 1 = DDS (raw blocks)
     float worldDrawDistance = 2500.0f;   // metres
     bool showGrid = true;
+    // main window (FModel layout)
+    int explorerViewMode = 0;      // 0 grid, 1 list
+    bool loggerExpanded = true;
+    float leftPanelWidth = 0;      // 0 = automatic
 
     static std::wstring Path();   // %APPDATA%\SOTModel\Settings.ini
     void Load();
