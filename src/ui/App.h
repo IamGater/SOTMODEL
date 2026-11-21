@@ -121,6 +121,19 @@ struct Document {
     std::vector<MorphTarget> morphs;
     std::vector<float> morphWeights;
     char morphFilter[64] = {};
+    // meshes attached to sockets (a weapon in a hand); they follow the animation's pose
+    struct Attachment {
+        std::string mesh, socket;
+        std::shared_ptr<MeshData> data;
+        std::shared_ptr<GpuMesh> gpu;
+        Mat4 world = Mat4::Identity();   // this frame's attachment -> mesh space
+        bool placed = false;             // false: the socket is not on the current mesh
+    };
+    std::vector<Attachment> attachments;
+    char attachEdit[512] = {};
+    int attachSocket = -1;   // -1: pick a hand socket
+    bool attachLoading = false;
+    std::string attachError;
 
     // world (.umap)
     bool isWorld = false;
@@ -201,6 +214,7 @@ public:
     std::vector<std::string> openOnStart;   // asset paths from the command line
     float pickU = -1, pickV = -1;           // --pick u,v: click the 3D view there once a map has loaded (automation)
     bool popoutOnStart = false;             // --popout: show the opened tab's 3D view in the separate window
+    std::vector<std::string> attachOnStart; // --attach mesh@socket: attached to the opened tab's mesh once loaded (automation)
 
 private:
     void StartMount();
@@ -262,6 +276,9 @@ private:
     void DrawAnimAssetHeader(Document& d);
     void DrawStateMachinePanel(Document& d);
     void DrawParticlePanel(Document& d);   // ParticlePanel.cpp
+    void DrawAttachControls(Document& d);   // attach a mesh to one of the shown mesh's sockets
+    void AttachMesh(std::shared_ptr<Document> d, std::string meshPath, std::string socket);   // loads in the background
+    static void PlaceAttachments(Document& d, const std::vector<Mat4>* boneWorld);   // null: reference pose
     void RequestGraphShaders(Document& d);   // compiles the graph shaders of the shown mesh's materials in the background
     void DrawWorld(Document& d);
     void PopoutButton(Document& d, bool flow);

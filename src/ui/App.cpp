@@ -315,6 +315,10 @@ bool App::LoadAnimationMeshNow(Document& d, const std::string& meshPath) {
     int lod = 0;
     auto gm = m_assets->Mesh(*mesh, lod, true, true);
     if (!gm) { d.error = "mesh has no geometry"; return false; }
+    std::vector<MeshSocket> sockets;
+    ReadMeshSockets(*m_api->cache, *mp, mp->MainExport() - 1, *mesh, sockets);
+    d.sockets = std::move(sockets);
+    d.attachSocket = -1;
     d.mesh = mesh;
     d.poser = poser;
     d.gpuMesh = gm;
@@ -669,6 +673,8 @@ static void DrawViewport(Renderer& r, Document& d, ImVec2 size, bool allowFly) {
         Mat4 id = Mat4::Identity();
         r.DrawMesh(*d.gpuMesh, &id, 1);
         if (!d.boneLines.empty()) r.DrawLines(d.boneLines, 0xff40d0ffu);
+        for (auto& at : d.attachments)
+            if (at.gpu && at.placed) r.DrawMesh(*at.gpu, &at.world, 1);
         if (d.showCollision && !d.collisionLines.empty()) r.DrawLines(d.collisionLines, 0xff60ff40u);
         if (d.showSockets) {
             static const u32 axis[3] = {0xff4040ffu, 0xff40ff40u, 0xffff6040u};
@@ -755,6 +761,129 @@ void App::FramePopout() {
     ImGui::PopStyleVar(2);
 }
 
+// Socket -> mesh space of every attachment: the posed bone (boneWorld = mesh-space bone matrices of an animation pose) or the
+// reference pose the sockets were read in.
+void App::PlaceAttachments(Document& d, const std::vector<Mat4>* boneWorld) {
+    for (auto& at : d.attachments) {
+        at.placed = false;
+        for (auto& so : d.sockets) {
+            if (!IEquals(so.name, at.socket)) continue;
+            at.world = so.transform;
+            if (boneWorld && d.mesh && !so.bone.empty())
+                for (size_t b = 0; b < d.mesh->skeleton.size() && b < boneWorld->size(); b++)
+                    if (IEquals(d.mesh->skeleton[b].name, so.bone)) {
+                        at.world = Mat4::FromTRS(so.location, RotatorToQuat(so.rotation.x, so.rotation.y, so.rotation.z), so.scale) * (*boneWorld)[b];
+                        break;
+                    }
+            at.placed = true;
+            break;
+        }
+    }
+}
+
+void App::AttachMesh(std::shared_ptr<Document> sp, std::string path, std::string socket) {
+    sp->attachLoading = true;
+    sp->attachError.clear();
+    m_jobs->Push([this, sp, path, socket] {
+        std::string err;
+        i64 e = m_api->ResolveFile(path);
+        auto pkg = e >= 0 ? m_api->cache->Load((u32)e, &err) : nullptr;
+        auto mesh = std::make_shared<MeshData>();
+        std::shared_ptr<GpuMesh> gm;
+        if (!pkg) err = "not found: " + path;
+        else if (!pkg->MainExport() || !ReadMesh(*pkg, pkg->MainExport() - 1, *mesh, &err)) err = path + ": " + (err.empty() ? "not a mesh" : err);
+        else if (!(gm = m_assets->Mesh(*mesh, 0))) err = path + ": no geometry";
+        Post([sp, mesh, gm, err, path, socket] {
+            sp->attachLoading = false;
+            sp->attachError = err;
+            if (!err.empty()) LOGW("attach: %s", err.c_str());
+            if (!gm) return;
+            Document::Attachment at;
+            at.mesh = path;
+            at.socket = socket;
+            at.data = mesh;
+            at.gpu = gm;
+            sp->attachments.push_back(std::move(at));
+            sp->attachEdit[0] = 0;
+        });
+    });
+}
+
+void App::DrawAttachControls(Document& d) {
+    if (d.sockets.empty()) return;
+    if (!attachOnStart.empty()) {   // --attach mesh@socket
+        for (auto& sp : m_docs)
+            if (sp.get() == &d)
+                for (auto& a : attachOnStart) {
+                    size_t at = a.rfind('@');
+                    if (at != std::string::npos) AttachMesh(sp, a.substr(0, at), a.substr(at + 1));
+                }
+        attachOnStart.clear();
+    }
+    ImGui::PushID("attach");
+    if (d.attachSocket < 0) {   // default: a hand prop socket
+        d.attachSocket = 0;
+        int best = 0;
+        for (int i = 0; i < (int)d.sockets.size(); i++) {
+            std::string n = ToLower(d.sockets[i].name);
+            int score = n == "righthandprop" ? 3 : n.find("hand") != std::string::npos && n.find("prop") != std::string::npos ? 2 : n.find("hand") != std::string::npos ? 1 : 0;
+            if (score > best) best = score, d.attachSocket = i;
+        }
+    }
+    d.attachSocket = std::clamp(d.attachSocket, 0, (int)d.sockets.size() - 1);
+    float u = ImGui::GetFontSize() / 16.f;
+    bool narrow = ImGui::GetContentRegionAvail().x < 420 * u;   // side panel: socket and path on separate lines
+    ImGui::SetNextItemWidth(narrow ? -1 : 180 * u);
+    if (ImGui::BeginCombo("##sock", d.sockets[d.attachSocket].name.c_str(), ImGuiComboFlags_HeightLarge)) {
+        for (int i = 0; i < (int)d.sockets.size(); i++) {
+            auto& so = d.sockets[i];
+            std::string label = so.bone.empty() ? so.name : so.name + "  @ " + so.bone;
+            if (ImGui::Selectable(label.c_str(), i == d.attachSocket)) d.attachSocket = i;
+        }
+        ImGui::EndCombo();
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Socket to attach to");
+    if (!narrow) ImGui::SameLine();
+    float btnW = ImGui::CalcTextSize("Attach").x + ImGui::GetStyle().FramePadding.x * 2;
+    ImGui::SetNextItemWidth(std::max(60 * u, ImGui::GetContentRegionAvail().x - btnW - ImGui::GetStyle().ItemSpacing.x));
+    bool go = ImGui::InputTextWithHint("##am", narrow ? "mesh path" : "mesh to attach (/Game/... path; empty = the explorer's selection)", d.attachEdit,
+                                       sizeof(d.attachEdit), ImGuiInputTextFlags_EnterReturnsTrue);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Static or skeletal mesh path; leave empty to attach the mesh selected in the explorer");
+    ImGui::SameLine();
+    ImGui::BeginDisabled(d.attachLoading);
+    go |= ImGui::Button("Attach");
+    ImGui::EndDisabled();
+    if (go && !d.attachLoading) {
+        std::string path = d.attachEdit;
+        if (path.empty() && m_selected >= 0) path = std::string(m_api->vfs.Path((u32)m_selected));
+        std::shared_ptr<Document> sp;
+        for (auto& x : m_docs)
+            if (x.get() == &d) sp = x;
+        if (path.empty()) d.attachError = "type a mesh path or select a mesh in the explorer";
+        else if (sp) AttachMesh(sp, path, d.sockets[d.attachSocket].name);
+    }
+    if (!d.attachError.empty()) ImGui::TextColored(ImVec4(1, 0.45f, 0.4f, 1), "%s", d.attachError.c_str());
+    for (size_t i = 0; i < d.attachments.size(); i++) {
+        auto& at = d.attachments[i];
+        ImGui::PushID((int)i);
+        if (ImGui::SmallButton("x")) {
+            d.attachments.erase(d.attachments.begin() + i);
+            ImGui::PopID();
+            break;
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Detach");
+        ImGui::SameLine();
+        std::string name = at.mesh.substr(at.mesh.find_last_of('/') + 1);
+        if (size_t dot = name.find('.'); dot != std::string::npos) name.resize(dot);
+        if (at.placed) ImGui::Text("%s", name.c_str());
+        else ImGui::TextColored(ImVec4(1, 0.45f, 0.4f, 1), "%s", name.c_str());
+        ImGui::SameLine();
+        ImGui::TextDisabled(at.placed ? "@ %s" : "@ %s (no such socket on this mesh)", at.socket.c_str());
+        ImGui::PopID();
+    }
+    ImGui::PopID();
+}
+
 void App::DrawModel(Document& d) {
     auto& m = *d.mesh;
     if (!d.meshExtrasLoaded) {
@@ -833,6 +962,7 @@ void App::DrawModel(Document& d) {
     ImGui::TextDisabled("%u vertices, %zu triangles, %d UV set(s), %zu section(s) | %.1f x %.1f x %.1f cm", l.VertexCount(), l.indices.size() / 3, l.numUVs,
                         l.sections.size(), m.boundsMax.x - m.boundsMin.x, m.boundsMax.y - m.boundsMin.y, m.boundsMax.z - m.boundsMin.z);
     ImGui::PopTextWrapPos();
+    PlaceAttachments(d, nullptr);
     ImVec2 avail = MinViewportAvail();
     float matW = avail.x > 560 ? std::min(320.f, avail.x * 0.3f) : 0.f;   // the material list is dropped in narrow windows
     DrawViewport(*m_renderer, d, ImVec2(matW > 0 ? avail.x - matW - ImGui::GetStyle().ItemSpacing.x : avail.x, avail.y), true);
@@ -859,6 +989,9 @@ void App::DrawModel(Document& d) {
     if (m.skeletal) ImGui::TextDisabled("%zu bones", m.skeleton.size());
     if (!d.sockets.empty()) {
         ImGui::Separator();
+        ImGui::TextDisabled("Attach a mesh to a socket");
+        DrawAttachControls(d);
+        ImGui::Spacing();
         ImGui::TextDisabled("Sockets (%zu)", d.sockets.size());
         for (auto& so : d.sockets) {
             ImGui::TextUnformatted(so.name.c_str());
@@ -935,6 +1068,7 @@ void App::DrawAnimation(Document& d) {
         ImGui::TextDisabled("No mesh to show the animation on.");
         return;
     }
+    DrawAttachControls(d);
     // advance time and pose the mesh (CPU skinning into the dynamic vertex buffer)
     if (d.animPlaying && a.length > 0) {
         d.animTime += ImGui::GetIO().DeltaTime * d.animSpeed;
@@ -949,9 +1083,10 @@ void App::DrawAnimation(Document& d) {
     d.poser->Skin(lod, pose, pos, nrm);
     m_renderer->UpdateMeshVertices(*d.gpuMesh, pos, nrm);
     d.boneLines.clear();
+    std::vector<Mat4> world;
+    if (d.showBones || !d.attachments.empty()) AnimPoser::WorldMatrices(pose, world);
+    PlaceAttachments(d, &world);
     if (d.showBones) {
-        std::vector<Mat4> world;
-        AnimPoser::WorldMatrices(pose, world);
         for (size_t i = 0; i < pose.size(); i++)
             if (pose[i].parent >= 0) {
                 d.boneLines.push_back(world[pose[i].parent].Translation());
