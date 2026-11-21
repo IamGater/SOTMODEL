@@ -1,6 +1,7 @@
 #pragma once
 #include "app/Api.h"
 #include "app/DepGraph.h"
+#include "app/ClassIndex.h"
 #include "render/GpuAssets.h"
 #include "render/WorldScene.h"
 #include "ue/Material.h"
@@ -334,6 +335,7 @@ private:
     // explorer texture thumbnails
     struct Thumb { int state = 0; std::shared_ptr<GpuTexture> tex; };   // 0 none, 1 pending, 2 ready, 3 not a texture
     std::unordered_map<u32, Thumb> m_thumbs;
+    ClassIndex m_classes;   // main class per package for explorer icons / type filters (resolved on demand)
     std::mutex m_thumbMutex;
     int m_thumbPending = 0;
     std::vector<std::thread> m_refThreads;

@@ -128,6 +128,7 @@ App::~App() {
     m_exportCancel = true;
     m_shutdown = true;   // stops the reference indexer
     for (auto& t : m_refThreads) t.join();
+    m_classes.Stop();   // saves Classes.bin while the archives are still mounted
     m_jobs.reset();   // joins workers before the renderer / api go away
     m_docs.clear();
     m_assets.reset();
@@ -137,6 +138,7 @@ bool App::Busy() const {
     if (m_player.Active() && !m_player.Paused()) return true;   // playhead
     if (m_busyFrames > 0 || m_mountState == MountState::Mounting || m_exporting || m_refBuilding) return true;
     if (m_jobs && m_jobs->Pending() > 0) return true;
+    if (m_classes.Pending() > 0) return true;   // explorer icons still resolving
     for (auto& d : m_docs) if (d->loading) return true;
     return false;
 }
@@ -191,6 +193,7 @@ void App::StartMount() {
                 return;
             }
             m_mountState = MountState::Ready;
+            m_classes.Start(m_api->vfs);
             m_mountSeconds = secs;
             m_readyAt = ImGui::GetTime();
             m_assets = std::make_unique<GpuAssets>(*m_renderer, *m_api->cache);
@@ -252,6 +255,7 @@ void App::ReloadArchives() {
     m_refReady = m_refBuilding = false;
     m_jobs->WaitIdle();
     m_assets.reset();
+    m_classes.Stop();
     m_api->Unmount();
     m_searchResults.clear();
     m_lastSearch.clear();
@@ -1433,7 +1437,8 @@ void App::DrawSettings() {
             m_jobs->WaitIdle();
             m_docs.clear();
             m_assets.reset();
-            m_api->Unmount();
+            m_classes.Stop();
+    m_api->Unmount();
             m_searchResults.clear();
             m_lastSearch.clear();
             StartMount();

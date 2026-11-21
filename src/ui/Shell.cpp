@@ -207,6 +207,80 @@ void FileGlyph(ImDrawList* dl, ImVec2 c, float s, std::string_view name, ImU32 b
     Glyph(dl, c, s * 1.05f, FileTint(name), g, true);
 }
 
+// Asset kinds by the package's main class (ClassIndex): icon, colour and the explorer's type filters.
+enum class AssetKind { Unknown, Mesh, SkeletalMesh, Texture, Material, Animation, Skeleton, Blueprint, Widget, Particles, Sound, Data, Curve, Physics, World, Font, Other };
+AssetKind KindOfClass(std::string_view c) {
+    if (c.empty()) return AssetKind::Unknown;
+    if (c == "World") return AssetKind::World;
+    if (c == "StaticMesh") return AssetKind::Mesh;
+    if (c == "SkeletalMesh" || c == "DestructibleMesh") return AssetKind::SkeletalMesh;
+    if (c.find("Texture") != std::string_view::npos) return AssetKind::Texture;
+    if (IStartsWith(c, "Material")) return AssetKind::Material;
+    if (c == "Skeleton") return AssetKind::Skeleton;
+    if (IStartsWith(c, "Anim") || c.find("BlendSpace") != std::string_view::npos || IStartsWith(c, "AimOffset")) return AssetKind::Animation;
+    if (c.find("Widget") != std::string_view::npos) return AssetKind::Widget;
+    if (c.find("Blueprint") != std::string_view::npos || IEndsWith(c, "GeneratedClass")) return AssetKind::Blueprint;
+    if (IStartsWith(c, "Particle")) return AssetKind::Particles;
+    if (c.find("Sound") != std::string_view::npos || c.find("Audio") != std::string_view::npos || c.find("Wwise") != std::string_view::npos || IStartsWith(c, "Ak") ||
+        c.find("Reverb") != std::string_view::npos)
+        return AssetKind::Sound;
+    if (c == "DataTable" || c == "CurveTable" || c.find("DataAsset") != std::string_view::npos || IStartsWith(c, "UserDefined")) return AssetKind::Data;
+    if (IStartsWith(c, "Curve")) return AssetKind::Curve;
+    if (c.find("Physic") != std::string_view::npos) return AssetKind::Physics;
+    if (IStartsWith(c, "Font")) return AssetKind::Font;
+    return AssetKind::Other;
+}
+struct KindLook { unsigned int cp; ImU32 tint; };
+KindLook LookOf(AssetKind k) {
+    switch (k) {
+    case AssetKind::Mesh: return {0xe1da, IM_COL32(40, 190, 230, 255)};          // cube
+    case AssetKind::SkeletalMesh: return {0xe72e, IM_COL32(235, 120, 210, 255)}; // person
+    case AssetKind::Texture: return {0xe2ca, IM_COL32(235, 95, 95, 255)};        // image
+    case AssetKind::Material: return {0xe6c8, IM_COL32(110, 205, 95, 255)};      // palette
+    case AssetKind::Animation: return {0xe730, IM_COL32(165, 130, 245, 255)};    // running person
+    case AssetKind::Skeleton: return {0xe7f2, IM_COL32(205, 185, 245, 255)};     // bone
+    case AssetKind::Blueprint: return {0xe1bc, IM_COL32(70, 135, 250, 255)};     // code
+    case AssetKind::Widget: return {0xe32e, IM_COL32(95, 175, 250, 255)};        // monitor
+    case AssetKind::Particles: return {0xe6a2, IM_COL32(250, 200, 70, 255)};     // sparkle
+    case AssetKind::Sound: return {0xe44a, IM_COL32(70, 210, 170, 255)};         // speaker
+    case AssetKind::Data: return {0xe476, IM_COL32(205, 205, 215, 255)};         // table
+    case AssetKind::Curve: return {0xe154, IM_COL32(205, 205, 215, 255)};        // chart
+    case AssetKind::Physics: return {0xec5e, IM_COL32(255, 150, 60, 255)};       // shapes
+    case AssetKind::World: return {0xe31a, IM_COL32(255, 160, 40, 255)};         // map
+    case AssetKind::Font: return {0xe6ee, IM_COL32(210, 210, 220, 255)};         // Aa
+    case AssetKind::Other: return {0xe1da, IM_COL32(130, 140, 165, 255)};        // grey cube
+    default: return {0xe1da, IM_COL32(90, 95, 115, 255)};                        // not resolved yet: outline cube
+    }
+}
+// Packages by their class (outline cube while unknown), other files by extension
+void AssetGlyph(ImDrawList* dl, ImVec2 c, float s, std::string_view fileName, const std::string& cls) {
+    if (!IsPackageFile(fileName)) return FileGlyph(dl, c, s, fileName, 0);
+    AssetKind k = IEndsWith(fileName, ".umap") ? AssetKind::World : KindOfClass(cls);
+    KindLook l = LookOf(k);
+    char utf8[5];
+    ImTextCharToUtf8(utf8, l.cp);
+    Glyph(dl, c, s * 1.05f, l.tint, utf8, k != AssetKind::Unknown);
+}
+ImU32 AssetTint(std::string_view fileName, const std::string& cls) {
+    if (!IsPackageFile(fileName)) return FileTint(fileName);
+    return LookOf(IEndsWith(fileName, ".umap") ? AssetKind::World : KindOfClass(cls)).tint;
+}
+// explorer type filters 4.. (after All / Packages / Maps / Other files)
+const char* kTypeFilters[] = {"Meshes", "Textures", "Materials", "Animations", "Blueprints", "Particles", "Sounds", "Data"};
+bool KindInFilter(AssetKind k, int typeFilter) {
+    switch (typeFilter) {
+    case 0: return k == AssetKind::Mesh || k == AssetKind::SkeletalMesh;
+    case 1: return k == AssetKind::Texture;
+    case 2: return k == AssetKind::Material;
+    case 3: return k == AssetKind::Animation || k == AssetKind::Skeleton;
+    case 4: return k == AssetKind::Blueprint || k == AssetKind::Widget;
+    case 5: return k == AssetKind::Particles;
+    case 6: return k == AssetKind::Sound;
+    case 7: return k == AssetKind::Data || k == AssetKind::Curve;
+    }
+    return false;
+}
+
 
 using IconFn = void (*)(ImDrawList*, ImVec2, float, ImU32);
 
@@ -964,7 +1038,7 @@ void App::DrawPackagesTab() {
             }
             float cy = p.y + rowH * 0.5f;
             std::string_view name = vfs.FileName(e);
-            FileGlyph(dl, ImVec2(p.x + Dip(5) + Dip(8), cy), Dip(16), name, m_selected == (i64)e ? kAccent : kPanel);
+            AssetGlyph(dl, ImVec2(p.x + Dip(5) + Dip(8), cy), Dip(16), name, IsPackageFile(name) ? m_classes.Get(e) : std::string());
             Text(dl, ImVec2(p.x + Dip(5) + Dip(19), cy - ImGui::GetFontSize() * 0.5f), kText, std::string(name).c_str());
             ImGui::PopID();
         }
@@ -1075,8 +1149,9 @@ void App::DrawExplorer() {
         ImVec2 p = ImGui::GetCursorScreenPos();
         SearchBox("##xfilter", m_filterBuf, sizeof(m_filterBuf), "Filter assets in current folder...", searchW, false);
         ImGui::SetCursorScreenPos(ImVec2(p.x + searchW + Dip(5), p.y));
-        const char* cats[] = {"All", "Packages", "Maps", "Other files"};
-        Combo("##cat", &m_explorerFilter, cats, 4, catW);
+        const char* cats[4 + IM_ARRAYSIZE(kTypeFilters)] = {"All", "Packages", "Maps", "Other files"};
+        for (int i = 0; i < IM_ARRAYSIZE(kTypeFilters); i++) cats[4 + i] = kTypeFilters[i];
+        Combo("##cat", &m_explorerFilter, cats, IM_ARRAYSIZE(cats), catW);
         float bh = FieldH();
         for (int i = 0; i < 2; i++) {
             ImVec2 bp(p.x + avail - tb * (2 - i), p.y);
@@ -1103,6 +1178,7 @@ void App::DrawExplorer() {
     if (m_explorerFilter == 0)
         for (u32 f : folders[m_folder].folders)
             if (filter.empty() || ToLower(folders[f].name).find(filter) != std::string::npos) subfolders.push_back(f);
+    int unresolved = 0;   // type filters: packages whose class is still being read
     for (u32 e : folders[m_folder].files) {
         std::string_view n = vfs.FileName(e);
         bool pkg = IsPackageFile(n), map = IEndsWith(n, ".umap");
@@ -1110,8 +1186,15 @@ void App::DrawExplorer() {
         if (m_explorerFilter == 2 && !map) continue;
         if (m_explorerFilter == 3 && pkg) continue;
         if (!filter.empty() && ToLower(n).find(filter) == std::string::npos) continue;
+        if (m_explorerFilter >= 4) {
+            if (!pkg) continue;
+            std::string cls = m_classes.Get(e);
+            if (cls.empty()) { unresolved++; continue; }
+            if (!KindInFilter(KindOfClass(cls), m_explorerFilter - 4)) continue;
+        }
         files.push_back(e);
     }
+    if (unresolved) m_busyFrames = 3;
     int total = (int)(subfolders.size() + files.size());
     ImGui::BeginChild("##tiles", ImVec2(0, 0), ImGuiChildFlags_None);
     dl = ImGui::GetWindowDrawList();
@@ -1121,10 +1204,11 @@ void App::DrawExplorer() {
         ImGui::SetScrollY(0);
     }
     if (total == 0) {
-        const char* msg = "No folders or packages found";
+        std::string pendingMsg = Fmt("Reading asset types... %d left", unresolved);
+        const char* msg = unresolved ? pendingMsg.c_str() : "No folders or packages found";
         ImGui::SetCursorPosX((ImGui::GetContentRegionAvail().x - ImGui::CalcTextSize(msg).x) * 0.5f);
         ImGui::PushFont(boldFont, 0);
-        ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(kError), "%s", msg);
+        ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(unresolved ? kTextDim : kError), "%s", msg);
         ImGui::PopFont();
         ImGui::EndChild();
         return;
@@ -1179,19 +1263,20 @@ void App::DrawExplorer() {
                     std::string_view fn = vfs.FileName(id);
                     size_t dot = fn.rfind('.');
                     std::string base(dot == std::string_view::npos ? fn : fn.substr(0, dot)), ext(dot == std::string_view::npos ? "" : fn.substr(dot + 1));
+                    std::string cls = IsPackageFile(fn) ? m_classes.Get(id) : std::string();
                     std::shared_ptr<GpuTexture> thumb = m_settings.previewTextures && IEndsWith(fn, ".uasset") ? Thumbnail(id) : nullptr;
                     if (thumb) {
                         float s = std::min(Dip(20) / thumb->width, Dip(20) / thumb->height);
                         ImVec2 isz(thumb->width * s, thumb->height * s), ia(x + (Dip(20) - isz.x) * 0.5f, cy - isz.y * 0.5f);
                         dl->AddImage((ImTextureID)(intptr_t)thumb->srvRaw.Get(), ia, ImVec2(ia.x + isz.x, ia.y + isz.y));
                     } else {
-                        FileGlyph(dl, ImVec2(x + Dip(10), cy), Dip(20), fn, sel ? kAccent : kPanel);
+                        AssetGlyph(dl, ImVec2(x + Dip(10), cy), Dip(20), fn, cls);
                     }
                     ImGui::PushFont(boldFont, FontDip(13));
                     TextEllipsis(dl, ImVec2(x + Dip(28), cy - ImGui::GetFontSize() * 0.5f), x + c1 - Dip(8), kText, base.c_str());
                     ImGui::PopFont();
                     ImGui::PushFont(nullptr, FontDip(12));
-                    TextEllipsis(dl, ImVec2(x + c1, cy - ImGui::GetFontSize() * 0.5f), x + c1 + c2 - Dip(8), kTextDim, ext.c_str());
+                    TextEllipsis(dl, ImVec2(x + c1, cy - ImGui::GetFontSize() * 0.5f), x + c1 + c2 - Dip(8), kTextDim, cls.empty() || cls == "?" ? ext.c_str() : cls.c_str());
                     std::string sz = HumanSize(vfs.Entry(id).usize);
                     Text(dl, ImVec2(x + inner - ImGui::CalcTextSize(sz.c_str()).x, cy - ImGui::GetFontSize() * 0.5f), kTextDim, sz.c_str());
                     ImGui::PopFont();
@@ -1255,7 +1340,8 @@ void App::DrawExplorer() {
                     size_t dot = fn.rfind('.');
                     std::string base(dot == std::string_view::npos ? fn : fn.substr(0, dot)), ext(dot == std::string_view::npos ? "" : fn.substr(dot + 1));
                     float topH = Dip(128);
-                    ImU32 tint = FileTint(fn);
+                    std::string cls = IsPackageFile(fn) ? m_classes.Get(id) : std::string();
+                    ImU32 tint = AssetTint(fn, cls);
                     dl->AddRectFilled(mn, mxp, Mix(kCardFile, Shade(kCardFile, 1.2f), ht));
                     dl->AddRectFilled(mn, ImVec2(mxp.x, mn.y + topH), kBorder);
                     std::shared_ptr<GpuTexture> thumb = m_settings.previewTextures && IEndsWith(fn, ".uasset") ? Thumbnail(id) : nullptr;
@@ -1264,7 +1350,7 @@ void App::DrawExplorer() {
                         ImVec2 isz(thumb->width * s, thumb->height * s), ia(mn.x + (tw - isz.x) * 0.5f, mn.y + (topH - isz.y) * 0.5f);
                         dl->AddImage((ImTextureID)(intptr_t)thumb->srvRaw.Get(), ia, ImVec2(ia.x + isz.x, ia.y + isz.y));
                     } else {
-                        FileGlyph(dl, ImVec2(mn.x + tw * 0.5f, mn.y + topH * 0.5f), Dip(64), fn, kBorder);
+                        AssetGlyph(dl, ImVec2(mn.x + tw * 0.5f, mn.y + topH * 0.5f), Dip(64), fn, cls);
                     }
                     dl->AddRectFilled(ImVec2(mn.x, mn.y + topH), ImVec2(mxp.x, mn.y + topH + Dip(2)), tint);
                     // name: up to two lines, then type (left) and size (right) at the bottom
@@ -1278,7 +1364,7 @@ void App::DrawExplorer() {
                     ImGui::PushFont(nullptr, FontDip(9));
                     std::string sz = HumanSize(vfs.Entry(id).usize);
                     float by = mxp.y - pad - ImGui::GetFontSize();
-                    TextEllipsis(dl, ImVec2(nx, by), mxp.x - pad - ImGui::CalcTextSize(sz.c_str()).x - Dip(5), kTextDim, ext.c_str());
+                    TextEllipsis(dl, ImVec2(nx, by), mxp.x - pad - ImGui::CalcTextSize(sz.c_str()).x - Dip(5), kTextDim, cls.empty() || cls == "?" ? ext.c_str() : cls.c_str());
                     Text(dl, ImVec2(mxp.x - pad - ImGui::CalcTextSize(sz.c_str()).x, by), kTextDim, sz.c_str());
                     ImGui::PopFont();
                     if (sel) dl->AddRect(mn, mxp, accentBorder, 0, 0, Dip(1.5f));
