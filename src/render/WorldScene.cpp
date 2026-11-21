@@ -1,5 +1,6 @@
 #include "render/WorldScene.h"
 #include "ue/Mesh.h"
+#include <unordered_set>
 
 static Vec4 SphereOf(const GpuMesh& m, const Mat4& w) {
     Vec3 c = w.TransformPoint(m.center);
@@ -94,11 +95,14 @@ void WorldScene::Build(const WorldData& wd, const std::function<bool()>& cancel,
         m_bmin = {std::min(m_bmin.x, s.x - s.w), std::min(m_bmin.y, s.y - s.w), std::min(m_bmin.z, s.z - s.w)};
         m_bmax = {std::max(m_bmax.x, s.x + s.w), std::max(m_bmax.y, s.y + s.w), std::max(m_bmax.z, s.z + s.w)};
     };
+    std::unordered_set<const GpuMesh*> counted;   // cached meshes shared by several groups (material variants) count once
     for (size_t gi = 0; gi < wd.groups.size(); gi++) {
         const WorldMeshGroup& g = wd.groups[gi];
         if (cancel && cancel()) return;
         if (progress && (done++ & 7) == 0) progress(done, total);
-        auto mesh = WithMaterials(m_assets, m_assets.MeshByPath(g.mesh, 0), g.materials);
+        auto base = m_assets.MeshByPath(g.mesh, 0);
+        if (base && counted.insert(base.get()).second) m_gpuBytes += base->gpuBytes;
+        auto mesh = WithMaterials(m_assets, base, g.materials);
         if (!mesh) { m_missing++; continue; }
         Item it;
         it.mesh = mesh;
