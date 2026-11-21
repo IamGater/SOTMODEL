@@ -168,8 +168,9 @@ bool App::Init(void* hwnd, ID3D11Device* dev, ID3D11DeviceContext* ctx) {
     MeshLod sphere = MakePreviewSphere(50, 64, 32);
     m_sphere = m_renderer->CreateMesh(sphere, {-50, -50, -50}, {50, 50, 50});
     LOGI("settings: %s", Narrow(Settings::Path()).c_str());
-    if (startTab >= 0) m_leftTab = startTab;
-    StartMount();
+    // FModel: start on the Archives tab, mount only when Load is pressed (command-line automation mounts right away)
+    m_leftTab = startTab >= 0 ? startTab : 0;
+    if (!openOnStart.empty() || !startFolder.empty() || startTab > 0) StartMount();
     return true;
 }
 
@@ -195,6 +196,7 @@ void App::StartMount() {
             m_assets = std::make_unique<GpuAssets>(*m_renderer, *m_api->cache);
             m_assets->SetMaxTextureSize(std::min(m_settings.previewMaxTexture, 1024));
             m_folder = 0;
+            if (startTab < 0) m_leftTab = 1;   // loaded: show the folders (FModel)
             if (!startFolder.empty()) {   // walk the tree along the path components
                 auto& folders = m_api->vfs.Folders();
                 std::string_view p = startFolder;
@@ -1424,7 +1426,9 @@ void App::DrawSettings() {
         if (m_assets) m_assets->SetMaxTextureSize(std::min(m_settings.previewMaxTexture, 1024));
         ImGui::CloseCurrentPopup();
         m_showSettings = false;
-        if ((apply || changed || m_mountState != MountState::Ready) && m_mountState != MountState::Mounting) {
+        m_pakListed = false;   // the game folder may have changed: list its archives again
+        // not loaded yet (Idle): mounting waits for Load in the Archives tab
+        if (m_mountState != MountState::Idle && (apply || changed || m_mountState != MountState::Ready) && m_mountState != MountState::Mounting) {
             m_exportCancel = true;
             m_jobs->WaitIdle();
             m_docs.clear();

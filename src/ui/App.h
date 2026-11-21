@@ -300,9 +300,11 @@ private:
     u32 m_folder = 0;                       // selected folder (0 = root)
     std::unordered_set<u32> m_expanded;     // open folders in the tree
     u32 m_scrollTreeTo = UINT32_MAX;        // tree row to bring into view next frame
-    int m_leftTab = 1;   // 0 archives, 1 folders, 2 packages
+    int m_leftTab = 0;   // 0 archives, 1 folders, 2 packages
     int m_selPak = -1;
     std::vector<u64> m_pakSizes;
+    std::vector<std::pair<std::string, u64>> m_pakList;   // before Load: the game folder's .pak files (name, size), not mounted
+    bool m_pakListed = false;
     int m_explorerFilter = 0;   // category: 0 all, 1 packages, 2 maps, 3 other files
     bool m_explorerVisible = true;   // explorer instead of the document tabs (FModel "Assets Explorer" toggle)
     std::string m_explorerView;   // folder / filter the explorer last showed (scroll resets when it changes)

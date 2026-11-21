@@ -659,6 +659,7 @@ void App::DrawLeftPanel(float width, float height) {
     ImGui::BeginChild("##leftbody", ImVec2(width - 2, height - top - 1), ImGuiChildFlags_AlwaysUseWindowPadding, ImGuiWindowFlags_NoScrollbar);
     if (m_mountState != MountState::Ready && m_leftTab != 0) {
         if (m_mountState == MountState::Mounting) ImGui::TextDisabled("Loading archives...");
+        else if (m_mountState == MountState::Idle) ImGui::TextWrapped("Archives are not loaded yet. Press Load in the Archives tab.");
         else {
             ImGui::TextWrapped("Archives are not loaded. Open Directory > Selector to choose the game folder and the AES key.");
             if (!m_mountError.empty()) ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(kError), "%s", m_mountError.c_str());
@@ -693,7 +694,41 @@ void App::DrawArchivesTab() {
 
     float infoH = (ImGui::GetTextLineHeight() * 1.25f) * 4 + FontDip(11) + Dip(16) + Dip(6);
     ImGui::BeginChild("##paks", ImVec2(0, ImGui::GetContentRegionAvail().y - infoH));
-    if (m_mountState != MountState::Ready) {
+    if (m_mountState == MountState::Idle && !m_pakListed) {   // before Load: just the .pak files in the game folder
+        m_pakListed = true;
+        m_pakList.clear();
+        if (m_settings.gameDir.empty()) m_settings.ImportFromFModel();
+        if (!m_settings.gameDir.empty()) {
+            WIN32_FIND_DATAW fd;
+            HANDLE h = FindFirstFileW((m_settings.PaksDir() + L"\\*.pak").c_str(), &fd);
+            if (h != INVALID_HANDLE_VALUE) {
+                do m_pakList.emplace_back(Narrow(fd.cFileName), (u64)fd.nFileSizeHigh << 32 | fd.nFileSizeLow);
+                while (FindNextFileW(h, &fd));
+                FindClose(h);
+            }
+            std::sort(m_pakList.begin(), m_pakList.end());
+        }
+    }
+    if (m_mountState == MountState::Idle && !m_pakList.empty()) {
+        float rowH = Dip(22.4f), rw = ImGui::GetContentRegionAvail().x;
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        ImGuiListClipper clip;
+        clip.Begin((int)m_pakList.size(), rowH);
+        while (clip.Step())
+            for (int i = clip.DisplayStart; i < clip.DisplayEnd; i++) {
+                ImGui::PushID(i);
+                ImVec2 p = ImGui::GetCursorScreenPos();
+                RowState rs = ListRow("##pak", ImVec2(rw, rowH), m_selPak == i);
+                if (rs.pressed) m_selPak = i;
+                float cy = p.y + rowH * 0.5f, ty = cy - ImGui::GetFontSize() * 0.5f;
+                IconArchive(dl, ImVec2(p.x + Dip(5) + Dip(8), cy), Dip(16), false);
+                std::string size = HumanSize(m_pakList[i].second);
+                float sizeX = p.x + rw - Dip(5) - ImGui::CalcTextSize(size.c_str()).x;
+                TextEllipsis(dl, ImVec2(p.x + Dip(5) + Dip(20), ty), std::max(sizeX - Dip(10), p.x + Dip(60)), kText, m_pakList[i].first.c_str());
+                Text(dl, ImVec2(sizeX, ty), kText, size.c_str());
+                ImGui::PopID();
+            }
+    } else if (m_mountState != MountState::Ready) {
         ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(kError), "%s", m_mountState == MountState::Mounting ? "Loading archives..." : "No archives found in the specified directory");
     } else {
         auto& paks = m_api->vfs.Paks();

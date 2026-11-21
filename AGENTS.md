@@ -36,7 +36,8 @@ process (the exe is a GUI-subsystem program).
 
 ## 3. GUI automation
 
-`SOTModel.exe <asset path> ...` opens the given assets in tabs. Adding `--screenshot <file.png> [--delay <s>]`
+The GUI starts on the Archives tab and mounts only when Load is pressed; asset paths, `--folder` or `--tab 1/2` on the
+command line mount right away. `SOTModel.exe <asset path> ...` opens the given assets in tabs. Adding `--screenshot <file.png> [--delay <s>]`
 renders the window off-screen-safe (from the app's own back buffer), saves it once loading settles and exits —
 handy for checking what the viewer shows without screen capture. `--shaders <path>` opens the compiled shaders
 of a material package or of `Engine/Content/GlobalShaderCache-PCD3D_SM5.bin` instead; `--material-hlsl <path>`
