@@ -1,5 +1,6 @@
 #include "ue/NativeInfo.h"
 #include "ue/Texture.h"
+#include "ue/DataTable.h"
 #include "core/Json.h"
 
 void WriteNativeInfo(JsonWriter& w, const Package& pkg, size_t exportIdx, size_t propsEnd) {
@@ -30,6 +31,15 @@ void WriteNativeInfo(JsonWriter& w, const Package& pkg, size_t exportIdx, size_t
         } else w.KV("Error", err);
         w.EndObject();
         return;
+    }
+    if (IsTableClass(cls)) {   // DataTable / CurveTable rows, like FModel
+        TableData t;
+        std::string err;
+        if (ReadTable(pkg, exportIdx, t, &err)) {
+            WriteTableRows(w, t);
+            return;
+        }
+        w.KV("RowsError", err);
     }
     if (propsEnd && end > propsEnd) w.KV("NativeDataBytes", (i64)(end - propsEnd));
 }

@@ -430,6 +430,9 @@ void App::LoadDocument(std::shared_ptr<Document> d) {
         } else if (main && IsWorldClass(d->className)) {
             d->isWorld = true;
             d->preferred = DocView::World;
+        } else if (main && IsTableClass(d->className)) {
+            auto t = std::make_shared<TableData>();
+            if (ReadTable(*pkg, main - 1, *t, &err)) d->table = t;
         } else if (main && d->className == "WwiseBank") {   // the bank bytes follow the properties: list its embedded media
             d->isBank = ParseBank(pkg->Data().data(), pkg->Data().size(), d->bank, nullptr, &err);
             if (!d->isBank) d->audioError = "bank: " + err;

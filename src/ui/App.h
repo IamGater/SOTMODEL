@@ -7,6 +7,7 @@
 #include "ue/AnimPose.h"
 #include "export/Exporter.h"
 #include "audio/Player.h"
+#include "ue/DataTable.h"
 #include <thread>
 #include <condition_variable>
 #include <deque>
@@ -108,6 +109,10 @@ struct Document {
     const AudioPcm* peaksFor = nullptr;
     int peaksWidth = 0;
 
+    // DataTable / CurveTable rows
+    std::shared_ptr<TableData> table;
+    char tableFilter[128] = {};
+
     // material
     bool hasMaterial = false;
     MaterialInfo material;
@@ -149,6 +154,7 @@ private:
     void DrawJsonEditor(Document& d, ImVec2 size);
     void DrawImagePanel(Document& d);
     void DrawAudioPanel(Document& d);
+    void DrawTablePanel(Document& d);
     void LoadAudioDocument(std::shared_ptr<Document> d);
     bool ExportAudioEntry(u32 entry, const ExportOptions& opt, std::vector<std::string>& written, std::string* error);
     void PlayAudio(Document& d, std::shared_ptr<AudioPcm> pcm, double from = 0);

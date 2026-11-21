@@ -4,6 +4,7 @@
 #include "export/MeshExport.h"
 #include "ue/AnimPose.h"
 #include "ue/Mesh.h"
+#include "ue/DataTable.h"
 
 namespace {
 
@@ -67,6 +68,50 @@ bool ExportAnimationSet(PackageCache& cache, const std::vector<std::shared_ptr<P
 }
 
 void RegisterExportTools(Api& api) {
+    api.Register({"export_datatable",
+                  "A DataTable / CurveTable as a table: rows with their fields. format=csv writes a .csv (and returns its path), format=json returns "
+                  "the rows inline (limit / offset page them).",
+                  R"({"type":"object","properties":{"path":{"type":"string"},"format":{"type":"string","enum":["json","csv"],"default":"json"},"output_dir":{"type":"string"},"limit":{"type":"integer","default":200},"offset":{"type":"integer","default":0}},"required":["path"]})",
+                  "path",
+                  [](Api& a, const JsonValue& args) {
+                      std::string err;
+                      auto pkg = a.LoadPackage(args.GetStr("path"), &err);
+                      if (!pkg) return ApiResult::Error(err);
+                      i32 main = pkg->MainExport();
+                      if (!main || !IsTableClass(pkg->ExportClass(main - 1))) return ApiResult::Error("not a DataTable / CurveTable");
+                      TableData t;
+                      if (!ReadTable(*pkg, main - 1, t, &err)) return ApiResult::Error(err);
+                      if (args.GetStr("format", "json") == "csv") {
+                          std::string csv = TableToCsv(t);
+                          std::wstring out = OutFile(a, args.GetStr("output_dir"), pkg->GamePath(), L".csv");
+                          if (!WriteWholeFile(out, csv.data(), csv.size())) return ApiResult::Error("could not write " + Narrow(out));
+                          return Written({Narrow(out)}, Fmt("%zu rows, %zu columns", t.rows.size(), t.columns.size()));
+                      }
+                      int limit = (int)args.GetNum("limit", 200), offset = (int)args.GetNum("offset", 0);
+                      SetJsonPackage(pkg.get());
+                      JsonWriter w;
+                      w.BeginObject();
+                      w.KV("path", pkg->GamePath());
+                      w.KV("rowStruct", t.rowStruct);
+                      w.KV("rowCount", (i64)t.rows.size());
+                      w.Key("columns");
+                      w.BeginArray();
+                      for (auto& c : t.columns) w.Str(c);
+                      w.EndArray();
+                      w.Key("rows");
+                      w.BeginObject();
+                      for (int i = offset; i < (int)t.rows.size() && i < offset + limit; i++) {
+                          w.Key(t.rows[i].name);
+                          WriteProperties(w, t.rows[i].fields);
+                      }
+                      w.EndObject();
+                      w.EndObject();
+                      SetJsonPackage(nullptr);
+                      ApiResult r;
+                      r.json = w.Take();
+                      return r;
+                  }});
+
     api.Register({"export_world",
                   "Export a whole map (.umap) as one glTF .glb for Blender: a node per level, every placed mesh (with material overrides and "
                   "textures, downscaled to max_texture_size) and the landscape terrain. Large maps take a while.",

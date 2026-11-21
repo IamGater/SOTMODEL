@@ -1545,9 +1545,10 @@ void App::DrawDocContent(Document& d) {
     bool has3d = !d.loading && (d.hasMesh || d.anim || d.isWorld);
     bool hasImage = !d.loading && (d.texture || (d.hasMaterial && !d.materialTextures.empty()));
     bool hasAudio = !d.loading && (d.audio || d.isBank || !d.audioError.empty());
-    bool side = has3d || hasImage || hasAudio;
+    bool hasTable = !d.loading && d.table != nullptr;
+    bool side = has3d || hasImage || hasAudio || hasTable;
     float splitW = Dip(4);
-    if (side && d.sideW <= 0) d.sideW = has3d ? avail.x * 0.55f : std::min(avail.x * 0.45f, Dip(400) + avail.x * 0.1f);
+    if (side && d.sideW <= 0) d.sideW = has3d || hasTable ? avail.x * 0.6f : std::min(avail.x * 0.45f, Dip(400) + avail.x * 0.1f);
     float sideW = side ? std::clamp(d.sideW, Dip(160), std::max(Dip(160), avail.x - Dip(200))) : 0;
     float editW = side ? avail.x - sideW - splitW : avail.x;
     ImVec2 p = ImGui::GetCursorScreenPos();
@@ -1559,6 +1560,14 @@ void App::DrawDocContent(Document& d) {
     if (ImGui::IsItemActive()) d.sideW = sideW - ImGui::GetIO().MouseDelta.x;
     ImGui::GetWindowDrawList()->AddRectFilled(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), kLayer0);
     ImGui::SetCursorScreenPos(ImVec2(p.x + editW + splitW, p.y));
+    if (hasTable) {
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(Dip(6), Dip(6)));
+        ImGui::BeginChild("##table", ImVec2(sideW, avail.y), ImGuiChildFlags_AlwaysUseWindowPadding, ImGuiWindowFlags_NoScrollbar);
+        DrawTablePanel(d);
+        ImGui::EndChild();
+        ImGui::PopStyleVar();
+        return;
+    }
     if (hasAudio) {
         ImGui::BeginChild("##audio", ImVec2(sideW, avail.y), ImGuiChildFlags_None, ImGuiWindowFlags_NoScrollbar);
         DrawAudioPanel(d);
@@ -1683,6 +1692,90 @@ void App::DrawImagePanel(Document& d) {
     } else if (!tex) {
         Text(dl, ImVec2(p.x + m, p.y + headH + m), kTextDim, "(texture not loaded)");
     }
+}
+
+// ================================================================== DataTable / CurveTable grid
+
+void App::DrawTablePanel(Document& d) {
+    TableData& t = *d.table;
+    ImGui::PushFont(boldFont, FontDip(12));
+    ImGui::TextUnformatted(d.name.substr(0, d.name.rfind('.')).c_str());
+    ImGui::PopFont();
+    ImGui::PushFont(nullptr, FontDip(11));
+    ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(kTextDim), "%s%s / %zu rows / %zu columns", t.curves ? "CurveTable" : "DataTable",
+                       t.rowStruct.empty() ? "" : (" of " + t.rowStruct).c_str(), t.rows.size(), t.columns.size());
+    ImGui::PopFont();
+    float bw = Dip(110);
+    SearchBox("##tf", d.tableFilter, sizeof(d.tableFilter), "Filter rows...", ImGui::GetContentRegionAvail().x - bw - Dip(6), false);
+    ImGui::SameLine(0, Dip(6));
+    if (Button("Export CSV", ImVec2(bw, 0))) {
+        std::string csv = TableToCsv(t);
+        std::string rel = m_settings.exportKeepDirectories ? d.gamePath : d.gamePath.substr(d.gamePath.rfind('/') + 1);
+        std::wstring out = m_settings.outputDir + L"\\" + Widen(rel.substr(0, rel.rfind('.')) + ".csv");
+        for (auto& c : out) if (c == L'/') c = L'\\';
+        CreateDirectories(out.substr(0, out.find_last_of(L'\\')));
+        if (WriteWholeFile(out, csv.data(), csv.size())) LOGI("table -> %s", Narrow(out).c_str());
+        else LOGW("could not write %s", Narrow(out).c_str());
+    }
+    // rows filtered by any cell, sorted by the clicked column
+    std::string filter = ToLower(d.tableFilter);
+    int cols = (int)t.columns.size() + 1;
+    std::vector<std::vector<std::string>> cells;
+    cells.reserve(t.cells.size());
+    for (auto& c : t.cells) {
+        if (!filter.empty()) {
+            bool hit = false;
+            for (auto& s : c) if (ToLower(s).find(filter) != std::string::npos) { hit = true; break; }
+            if (!hit) continue;
+        }
+        cells.push_back(std::move(c));
+    }
+    int tcols = std::min(cols, 64);
+    ImGuiTableFlags fl = ImGuiTableFlags_ScrollX | ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_Resizable |
+                         ImGuiTableFlags_Sortable | ImGuiTableFlags_Reorderable | ImGuiTableFlags_Hideable;
+    ImGui::PushStyleColor(ImGuiCol_TableHeaderBg, kField);
+    if (ImGui::BeginTable("##grid", tcols, fl)) {
+        ImGui::TableSetupScrollFreeze(1, 1);
+        ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_DefaultSort, Dip(140));
+        for (int c = 1; c < tcols; c++) ImGui::TableSetupColumn(t.columns[c - 1].c_str(), ImGuiTableColumnFlags_WidthFixed, Dip(130));
+        ImGui::TableHeadersRow();
+        if (ImGuiTableSortSpecs* ss = ImGui::TableGetSortSpecs(); ss && ss->SpecsCount > 0) {
+            int sc = ss->Specs[0].ColumnIndex;
+            bool asc = ss->Specs[0].SortDirection == ImGuiSortDirection_Ascending;
+            std::stable_sort(cells.begin(), cells.end(), [&](auto& a, auto& b) {
+                const std::string &x = a[sc], &y = b[sc];
+                char* ex = nullptr;
+                char* ey = nullptr;
+                double nx = strtod(x.c_str(), &ex), ny = strtod(y.c_str(), &ey);
+                bool numeric = !x.empty() && !y.empty() && ex && !*ex && ey && !*ey;
+                int r = numeric ? (nx < ny ? -1 : nx > ny ? 1 : 0) : x.compare(y);
+                return asc ? r < 0 : r > 0;
+            });
+        }
+        ImGuiListClipper clip;
+        clip.Begin((int)cells.size());
+        while (clip.Step())
+            for (int i = clip.DisplayStart; i < clip.DisplayEnd; i++) {
+                ImGui::TableNextRow();
+                for (int c = 0; c < tcols; c++) {
+                    ImGui::TableNextColumn();
+                    const std::string& s = cells[i][c];
+                    ImGui::PushID(i * 97 + c);
+                    if (c == 0) ImGui::PushFont(boldFont, 0);
+                    ImGui::TextUnformatted(s.c_str());
+                    if (c == 0) ImGui::PopFont();
+                    if (ImGui::IsItemHovered() && s.size() > 24) ImGui::SetTooltip("%s", s.c_str());
+                    if (ImGui::BeginPopupContextItem("##cell")) {
+                        if (ImGui::MenuItem("Copy Value")) CopyToClipboard(s);
+                        if (ImGui::MenuItem("Copy Row Name")) CopyToClipboard(cells[i][0]);
+                        ImGui::EndPopup();
+                    }
+                    ImGui::PopID();
+                }
+            }
+        ImGui::EndTable();
+    }
+    ImGui::PopStyleColor();
 }
 
 // ================================================================== audio player (own design)
