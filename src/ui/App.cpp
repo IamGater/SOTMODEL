@@ -243,9 +243,12 @@ void App::StartMount() {
                 }
             }
             if (m_folder) SelectFolder(m_folder);
-            for (auto& p : openOnStart) {
+            for (auto& p0 : openOnStart) {
+                bool shaders = p0.rfind("shaders:", 0) == 0;   // --shaders <path>: open its compiled shaders
+                std::string p = shaders ? p0.substr(8) : p0;
                 i64 e = m_api->ResolveFile(p);
-                if (e >= 0) OpenFile((u32)e);
+                if (e >= 0 && shaders) DecompileShadersTab((u32)e);
+                else if (e >= 0) OpenFile((u32)e);
                 else LOGW("not found: %s", p.c_str());
             }
             openOnStart.clear();

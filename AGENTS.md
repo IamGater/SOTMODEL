@@ -38,7 +38,8 @@ process (the exe is a GUI-subsystem program).
 
 `SOTModel.exe <asset path> ...` opens the given assets in tabs. Adding `--screenshot <file.png> [--delay <s>]`
 renders the window off-screen-safe (from the app's own back buffer), saves it once loading settles and exits —
-handy for checking what the viewer shows without screen capture.
+handy for checking what the viewer shows without screen capture. `--shaders <path>` opens the compiled shaders
+of a material package or of `Engine/Content/GlobalShaderCache-PCD3D_SM5.bin` instead.
 
 ## Configuration
 
@@ -81,6 +82,8 @@ or `/Game/Models/Props/Common/cmn_barrel_debris_02_a.cmn_barrel_debris_02_a`.
 | `export_datatable` | DataTable / CurveTable rows as JSON (paged) or a .csv file (struct fields flattened into columns) |
 | `search_localization` | the game's translated strings (.locres) by text or key in any shipped language (`culture=de-DE`); FText values in JSON also carry `LocalizedString` |
 | `get_localized_text` | one FText (namespace + key) in every language |
+| `list_shaders` | compiled D3D11 (SM5) shaders of a material's shader maps or of `Engine/Content/GlobalShaderCache-PCD3D_SM5.bin`: index, stage, shader type, vertex factory, instructions, uniform buffers (`stage` / `type` / `vertex_factory` filters) |
+| `decompile_shader` | one shader (`index`) as readable HLSL, `hlsl_exact` (raw uint4 lanes), `asm` (D3D disassembly), `reflection`, or raw `dxbc` with `save_to` |
 | `get_material` | material instance chain with every texture / scalar / vector parameter resolved |
 | `export` | write files: textures (PNG/DDS), meshes (glTF/OBJ), animations (glTF with skeleton + skinned mesh), JSON; `raw=true` writes any file as stored |
 | `get_audio_info` | Wwise audio: a `.wem` (codec, channels, rate, length) or a sound bank (`WwiseBank` package / `.bnk`) with its embedded media |
@@ -93,4 +96,8 @@ Typical flow: `search` → `get_package` → `get_properties` / `preview_*` → 
 - Packages are legacy single-file `.uasset`/`.umap` (no `.uexp`/`.ubulk`); UE4 object version 483.
 - 4.10 property tags do not name the element struct of arrays or the key/value types of maps. SOTModel guesses
   arrays of structs (tagged bags, or native layouts by element size) and shows maps as `UndecodedType` hex.
+- Shader code in shader maps is LZ4-compressed (Sea of Thieves addition, uncompressed size after the resource).
+  Reflection names are stripped: constant buffers, textures and samplers keep their register numbers (`cb1_cb[42]`,
+  `t3`, `s5`); inputs / outputs keep their semantics. The decompiled HLSL recompiles with fxc for almost every
+  shader; geometry shaders, UAVs, groupshared memory and atomics are translated too.
 - Unreal units are centimetres, Z up, left handed. glTF exports are converted to metres, Y up.

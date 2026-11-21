@@ -6,6 +6,7 @@
 #include "core/Json.h"
 #include "ue/Texture.h"
 #include "ue/Blueprint.h"
+#include "render/ShaderTools.h"
 #include "imgui.h"
 #include <windows.h>
 #include <shellapi.h>
@@ -706,6 +707,72 @@ void App::DecompileBlueprintTab(u32 entry) {
                 return;
             }
             OpenTextTab(title, code, entry, true, 1);
+        });
+    });
+}
+// ------------------------------------------------------------------ Decompile Shaders
+
+void App::DecompileShadersTab(u32 entry) {
+    if (m_mountState != MountState::Ready) return;
+    std::string path(m_api->vfs.Path(entry)), title(m_api->vfs.FileName(entry));
+    title = title.substr(0, title.rfind('.')) + " (Shaders)";
+    m_jobs->Push([this, entry, path, title] {
+        std::string err;
+        auto list = std::make_shared<std::vector<ShaderEntry>>();
+        if (IsShaderCacheFile(path) || IEndsWith(path, ".bin")) {
+            Bytes data;
+            if (m_api->vfs.Read(entry, data, &err)) ScanShaders(data, nullptr, *list);
+            if (list->empty() && err.empty()) err = "no shaders found";
+        } else if (auto pkg = m_api->cache->Load(entry, &err)) {
+            ReadPackageShaders(*pkg, *list, &err);
+        }
+        Post([this, entry, title, list, err] {
+            if (list->empty()) {
+                LOGW("shaders: %s", err.c_str());
+                return;
+            }
+            OpenTextTab(title, "", entry, true, 1);
+            auto it = std::find_if(m_docs.begin(), m_docs.end(), [&](auto& x) { return x->id == m_activeDoc; });
+            if (it == m_docs.end()) return;
+            (*it)->shaders = list;
+            LOGI("%s: %zu shaders", title.c_str(), list->size());
+            ShowShader(*it, 0, 0);
+        });
+    });
+}
+
+void App::ShowShader(std::shared_ptr<Document> d, int index, int mode) {
+    if (!d->shaders || index < 0 || index >= (int)d->shaders->size()) return;
+    d->shaderSel = index;
+    d->shaderMode = mode;
+    auto list = d->shaders;
+    m_jobs->Push([this, d, list, index, mode] {
+        const ShaderEntry& s = (*list)[index];
+        std::string text, err;
+        bool ok = true;
+        if (mode == 2) ok = DisassembleShader(s.dxbc, text, &err);
+        else if (mode == 3) {
+            ShaderReflectionInfo info;
+            ok = ReflectShader(s.dxbc, info, &err);
+            if (ok) text = ReflectionToText(info);
+        } else ok = DecompileShader(s.dxbc, text, mode == 1, &err);
+        std::string head = Fmt("// [%d] %s shader %s\n", index, ShaderFrequencyName(s.frequency), s.type.c_str());
+        if (!s.vertexFactory.empty()) head += "// vertex factory: " + s.vertexFactory + "\n";
+        if (!s.uniformBuffers.empty()) {
+            head += "// uniform buffers:";
+            for (auto& u : s.uniformBuffers) head += " " + u;
+            head += "\n";
+        }
+        if (!s.usage.empty()) head += "// " + s.usage + "\n";
+        text = head + "\n" + (ok ? text : "// " + err + "\n");
+        Post([d, index, mode, text] {
+            if (d->shaderSel != index || d->shaderMode != mode) return;   // a newer selection is on its way
+            d->json = text;
+            d->lines.assign(1, 0);
+            for (u32 i = 0; i < (u32)d->json.size(); i++)
+                if (d->json[i] == '\n') d->lines.push_back(i + 1);
+            d->selA = d->selB = 0;
+            d->scrollToLine = 0;
         });
     });
 }

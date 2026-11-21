@@ -3,6 +3,7 @@
 // Sizes and colours follow FModel's XAML; every icon is drawn here (no FModel artwork). The 3D preview is our own viewer.
 #include "ui/App.h"
 #include "ui/UiCommon.h"
+#include "render/ShaderTools.h"
 #include "imgui.h"
 #include "imgui_internal.h"
 #include <windows.h>
@@ -1453,6 +1454,7 @@ void App::DrawDocTabs(float height) {
             if (MenuItemIcon("Show Metadata", nullptr, IconInfo, pkg)) { u32 e = d.entry; Post([this, e] { ShowMetadata(e, true); }); }
             if (MenuItemIcon("Find References", nullptr, IconSearch, pkg)) FindReferences(d.entry);
             if (MenuItemIcon("Decompile Blueprint", nullptr, IconCube, pkg)) DecompileBlueprintTab(d.entry);
+            if (MenuItemIcon("Decompile Shaders", nullptr, IconCube, pkg || (!d.newTab && IsShaderCacheFile(d.gamePath)))) DecompileShadersTab(d.entry);
             ImGui::Separator();
             if (ImGui::BeginMenu("      Export", !d.newTab)) {
                 if (ImGui::MenuItem("Raw Data (.uasset)")) ExportFiles({d.entry}, 1);
@@ -1546,9 +1548,10 @@ void App::DrawDocContent(Document& d) {
     bool hasImage = !d.loading && (d.texture || (d.hasMaterial && !d.materialTextures.empty()));
     bool hasAudio = !d.loading && (d.audio || d.isBank || !d.audioError.empty());
     bool hasTable = !d.loading && d.table != nullptr;
-    bool side = has3d || hasImage || hasAudio || hasTable;
+    bool hasShaders = d.shaders != nullptr;
+    bool side = has3d || hasImage || hasAudio || hasTable || hasShaders;
     float splitW = Dip(4);
-    if (side && d.sideW <= 0) d.sideW = has3d || hasTable ? avail.x * 0.6f : std::min(avail.x * 0.45f, Dip(400) + avail.x * 0.1f);
+    if (side && d.sideW <= 0) d.sideW = hasShaders ? std::min(avail.x * 0.4f, Dip(520)) : has3d || hasTable ? avail.x * 0.6f : std::min(avail.x * 0.45f, Dip(400) + avail.x * 0.1f);
     float sideW = side ? std::clamp(d.sideW, Dip(160), std::max(Dip(160), avail.x - Dip(200))) : 0;
     float editW = side ? avail.x - sideW - splitW : avail.x;
     ImVec2 p = ImGui::GetCursorScreenPos();
@@ -1560,6 +1563,14 @@ void App::DrawDocContent(Document& d) {
     if (ImGui::IsItemActive()) d.sideW = sideW - ImGui::GetIO().MouseDelta.x;
     ImGui::GetWindowDrawList()->AddRectFilled(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), kLayer0);
     ImGui::SetCursorScreenPos(ImVec2(p.x + editW + splitW, p.y));
+    if (hasShaders) {
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(Dip(6), Dip(6)));
+        ImGui::BeginChild("##shaders", ImVec2(sideW, avail.y), ImGuiChildFlags_AlwaysUseWindowPadding, ImGuiWindowFlags_NoScrollbar);
+        DrawShaderPanel(d);
+        ImGui::EndChild();
+        ImGui::PopStyleVar();
+        return;
+    }
     if (hasTable) {
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(Dip(6), Dip(6)));
         ImGui::BeginChild("##table", ImVec2(sideW, avail.y), ImGuiChildFlags_AlwaysUseWindowPadding, ImGuiWindowFlags_NoScrollbar);
@@ -1695,6 +1706,111 @@ void App::DrawImagePanel(Document& d) {
 }
 
 // ================================================================== DataTable / CurveTable grid
+
+// compiled shaders of a material / the global shader cache: pick one, see it as HLSL / assembly / reflection
+void App::DrawShaderPanel(Document& d) {
+    auto& list = *d.shaders;
+    std::shared_ptr<Document> self;
+    for (auto& x : m_docs)
+        if (x.get() == &d) self = x;
+    if (!self) return;
+    int counts[6] = {};
+    for (auto& sh : list) if (sh.frequency >= 0 && sh.frequency < 6) counts[sh.frequency]++;
+    std::string summary = Fmt("%zu shaders", list.size());
+    for (int f = 0; f < 6; f++) if (counts[f]) summary += Fmt(" / %d %s", counts[f], ShaderStagePrefix(f));
+    ImGui::PushFont(boldFont, FontDip(12));
+    ImGui::TextUnformatted(d.name.c_str());
+    ImGui::PopFont();
+    ImGui::PushFont(nullptr, FontDip(11));
+    ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(kTextDim), "%s", summary.c_str());
+    ImGui::PopFont();
+    // view mode
+    static const char* modes[] = {"HLSL", "HLSL (exact)", "Assembly", "Reflection"};
+    float avail = ImGui::GetContentRegionAvail().x, gap = Dip(4), bw = (avail - gap * 3) / 4;
+    for (int m = 0; m < 4; m++) {
+        if (m) ImGui::SameLine(0, gap);
+        ImVec2 bp = ImGui::GetCursorScreenPos();
+        if (Button(modes[m], ImVec2(bw, 0)) && m != d.shaderMode) ShowShader(self, d.shaderSel, m);
+        if (m == d.shaderMode) {
+            ImVec2 bq = ImGui::GetItemRectMax();
+            ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(bp.x, bq.y - Dip(2)), bq, kAccent);
+        }
+    }
+    // filter + save
+    float sw = Dip(70);
+    SearchBox("##sf", d.shaderFilter, sizeof(d.shaderFilter), "Filter by type, stage, vertex factory...", ImGui::GetContentRegionAvail().x - (sw + Dip(6)) * 2, false);
+    std::string base = m_settings.exportKeepDirectories ? d.gamePath : d.gamePath.substr(d.gamePath.rfind('/') + 1);
+    base = base.substr(0, base.rfind('.')) + "_shaders";
+    std::wstring outDir = m_settings.outputDir;
+    auto save = [base, outDir](int i, int frequency, int mode, const std::string& text) {
+        const char* ext = mode == 2 ? ".asm" : mode == 3 ? ".txt" : ".hlsl";
+        std::wstring out = outDir + L"\\" + Widen(base + "\\" + Fmt("%03d_%s", i, ShaderStagePrefix(frequency)) + ext);
+        for (auto& c : out) if (c == L'/') c = L'\\';
+        CreateDirectories(out.substr(0, out.find_last_of(L'\\')));
+        return WriteWholeFile(out, text.data(), text.size()) ? Narrow(out) : std::string();
+    };
+    ImGui::SameLine(0, Dip(6));
+    if (Button("Save", ImVec2(sw, 0), d.shaderSel >= 0)) {
+        std::string w = save(d.shaderSel, list[d.shaderSel].frequency, d.shaderMode, d.json);
+        if (!w.empty()) LOGI("shader -> %s", w.c_str());
+        else LOGW("could not write the shader");
+    }
+    ImGui::SameLine(0, Dip(6));
+    if (Button("Save All", ImVec2(sw, 0))) {
+        int mode = d.shaderMode;
+        auto lst = d.shaders;
+        m_jobs->Push([lst, mode, save] {
+            int n = 0;
+            for (int i = 0; i < (int)lst->size(); i++) {
+                std::string text, err;
+                const Bytes& code = (*lst)[i].dxbc;
+                bool ok = false;
+                if (mode == 2) ok = DisassembleShader(code, text, &err);
+                else if (mode == 3) {
+                    ShaderReflectionInfo info;
+                    if ((ok = ReflectShader(code, info, &err))) text = ReflectionToText(info);
+                } else ok = DecompileShader(code, text, mode == 1, &err);
+                if (ok && !save(i, (*lst)[i].frequency, mode, text).empty()) n++;
+            }
+            LOGI("saved %d of %zu shaders", n, lst->size());
+        });
+    }
+    // list
+    std::string filter = ToLower(d.shaderFilter);
+    std::vector<int> rows;
+    for (int i = 0; i < (int)list.size(); i++) {
+        auto& sh = list[i];
+        if (!filter.empty() && ToLower(sh.type + " " + ShaderFrequencyName(sh.frequency) + " " + ShaderStagePrefix(sh.frequency) + " " + sh.vertexFactory).find(filter) == std::string::npos) continue;
+        rows.push_back(i);
+    }
+    ImGui::BeginChild("##shaderlist", ImVec2(0, 0), ImGuiChildFlags_None);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    float lh = ImGui::GetFontSize(), rowH = lh * 2 + Dip(10), rw = ImGui::GetContentRegionAvail().x;
+    ImGuiListClipper clip;
+    clip.Begin((int)rows.size(), rowH);
+    while (clip.Step())
+        for (int r = clip.DisplayStart; r < clip.DisplayEnd; r++) {
+            int i = rows[r];
+            const ShaderEntry& sh = list[i];
+            ImGui::PushID(i);
+            ImVec2 rp = ImGui::GetCursorScreenPos();
+            RowState rs = ListRow("##sh", ImVec2(rw, rowH), d.shaderSel == i);
+            if (rs.pressed && d.shaderSel != i) ShowShader(self, i, d.shaderMode);
+            std::string tag = Fmt("%d  %s", i, ShaderStagePrefix(sh.frequency));
+            Text(dl, ImVec2(rp.x + Dip(6), rp.y + Dip(3)), d.shaderSel == i ? kText : kAccent, tag.c_str());
+            float tx = rp.x + Dip(6) + ImGui::CalcTextSize("0000  xx ").x;
+            std::string instr = Fmt("%u instr", sh.numInstructions);
+            float iw = ImGui::CalcTextSize(instr.c_str()).x;
+            TextEllipsis(dl, ImVec2(tx, rp.y + Dip(3)), rp.x + rw - iw - Dip(14), kText, sh.type.empty() ? "(unknown type)" : sh.type.c_str());
+            Text(dl, ImVec2(rp.x + rw - iw - Dip(6), rp.y + Dip(3)), kTextDim, instr.c_str());
+            std::string sub = sh.vertexFactory.empty() ? std::string(ShaderFrequencyName(sh.frequency)) : sh.vertexFactory;
+            if (sh.numTextureSamplers) sub += Fmt("   %u samplers", sh.numTextureSamplers);
+            TextEllipsis(dl, ImVec2(tx, rp.y + Dip(5) + lh), rp.x + rw - Dip(6), kTextDim, sub.c_str());
+            if (rs.hovered && !sh.usage.empty()) ImGui::SetTooltip("%s", sh.usage.c_str());
+            ImGui::PopID();
+        }
+    ImGui::EndChild();
+}
 
 void App::DrawTablePanel(Document& d) {
     TableData& t = *d.table;
@@ -2515,6 +2631,7 @@ void App::DrawFileMenu(u32 e) {
     if (MenuItemIcon("Show Metadata", nullptr, IconInfo, pkg)) ShowMetadata(e, true);
     if (MenuItemIcon("Find References", nullptr, IconSearch, pkg)) FindReferences(e);
     if (MenuItemIcon("Decompile Blueprint", nullptr, IconCube, pkg)) DecompileBlueprintTab(e);
+    if (MenuItemIcon("Decompile Shaders", nullptr, IconCube, pkg || IsShaderCacheFile(path))) DecompileShadersTab(e);
     ImGui::Separator();
     if (ImGui::BeginMenu("      Export")) {
         if (ImGui::MenuItem("Raw Data (.uasset)")) ExportFiles({e}, 1);

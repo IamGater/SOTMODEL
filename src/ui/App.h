@@ -8,6 +8,7 @@
 #include "export/Exporter.h"
 #include "audio/Player.h"
 #include "ue/DataTable.h"
+#include "ue/Shaders.h"
 #include <thread>
 #include <condition_variable>
 #include <deque>
@@ -113,6 +114,11 @@ struct Document {
     std::shared_ptr<TableData> table;
     char tableFilter[128] = {};
 
+    // compiled shaders (Decompile Shaders): the list in the side panel, the selected one as text in the editor
+    std::shared_ptr<std::vector<ShaderEntry>> shaders;
+    int shaderSel = -1, shaderMode = 0;   // 0 HLSL, 1 bit-exact HLSL, 2 assembly, 3 reflection
+    char shaderFilter[128] = {};
+
     // material
     bool hasMaterial = false;
     MaterialInfo material;
@@ -171,6 +177,9 @@ private:
     void PlaceDocument(std::shared_ptr<Document> d, bool newTab);   // into the selected tab unless newTab (FModel)
     void OpenTextTab(const std::string& title, std::string text, u32 entry, bool newTab, int syntax = 0);
     void DecompileBlueprintTab(u32 entry);
+    void DecompileShadersTab(u32 entry);
+    void ShowShader(std::shared_ptr<Document> d, int index, int mode);   // decompiles in the background into the editor
+    void DrawShaderPanel(Document& d);
     void ShowMetadata(u32 entry, bool newTab = false);
     void ShowArchivesInfo();
     void FindReferences(u32 entry);

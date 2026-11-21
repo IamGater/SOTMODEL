@@ -28,6 +28,7 @@ void RegisterWorldTools(Api& api);  // ApiWorld.cpp: map / scene tools
 void RegisterAudioTools(Api& api);  // ApiAudio.cpp: Wwise audio tools
 void RegisterExportTools(Api& api); // ApiExport.cpp: map / animation set glTF exports
 void RegisterLocalizationTools(Api& api);   // ApiLocalization.cpp
+void RegisterShaderTools(Api& api);   // ApiShaders.cpp: compiled material / global shaders
 // Several AnimSequence packages of one skeleton -> one .glb (ApiExport.cpp; also used by the UI).
 bool ExportAnimationSet(PackageCache& cache, const std::vector<std::shared_ptr<Package>>& animPkgs, const std::string& meshPath, Bytes& glb, std::string& note, std::string* error);
 struct ApiTool {

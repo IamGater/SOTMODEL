@@ -54,6 +54,7 @@ Api::Api(Settings& s) : settings(s) {
     RegisterAudioTools(*this);
     RegisterExportTools(*this);
     RegisterLocalizationTools(*this);
+    RegisterShaderTools(*this);
 }
 
 bool Api::EnsureMounted(std::string* error) {
