@@ -32,7 +32,6 @@ constexpr ImU32 kText = IM_COL32(240, 240, 240, 255);
 constexpr ImU32 kTextDim = IM_COL32(150, 151, 165, 255);
 constexpr ImU32 kCardFolder = IM_COL32(50, 50, 63, 255);
 constexpr ImU32 kCardFile = IM_COL32(50, 51, 65, 255);
-constexpr ImU32 kBadge = IM_COL32(112, 85, 66, 255);
 
 float U() { return ImGui::GetFontSize() / 16.f; }
 float Dip(float v) { return v * U(); }   // FModel's XAML units (our UI scale matches FModel's fonts at the same DPI)
@@ -878,18 +877,14 @@ void App::DrawFoldersTab() {
             if (hasKids) IconChevron(dl, ImVec2(x + Dip(10), cy), Dip(16), open ? kPi * 0.25f : 0.f, kText);
             float ix = x + Dip(20);
             IconFolder(dl, ImVec2(ix, cy - Dip(8)), Dip(16), open || sel, f.name);
-            float tx = ix + Dip(16) + Dip(3.5f);
-            if (!f.files.empty()) {   // package count badge over the folder's corner
-                ImGui::PushFont(nullptr, FontDip(7));
-                std::string n = std::to_string(f.files.size());
-                float bw = std::max(Dip(10), ImGui::CalcTextSize(n.c_str()).x + Dip(5)), bh = Dip(10);
-                ImVec2 b0(tx - Dip(10.5f), cy + Dip(8) - bh);
-                dl->AddRectFilled(b0, ImVec2(b0.x + bw, b0.y + bh), kBadge, bh * 0.5f);
-                Text(dl, ImVec2(b0.x + (bw - ImGui::CalcTextSize(n.c_str()).x) * 0.5f, b0.y + (bh - ImGui::GetFontSize()) * 0.5f), kText, n.c_str());
-                ImGui::PopFont();
-                tx = b0.x + bw + Dip(4.5f);
-            }
+            float tx = ix + Dip(16) + Dip(6);   // names line up whatever the icon
             Text(dl, ImVec2(tx, cy - ImGui::GetFontSize() * 0.5f), kText, f.name.c_str());
+            if (!f.files.empty()) {   // package count after the name (a badge on the 16 px icon would cover its glyph)
+                float nameW = ImGui::CalcTextSize(f.name.c_str()).x;
+                ImGui::PushFont(nullptr, FontDip(11));
+                Text(dl, ImVec2(tx + nameW + Dip(6), cy - ImGui::GetFontSize() * 0.5f), kTextDim, std::to_string(f.files.size()).c_str());
+                ImGui::PopFont();
+            }
             if (sel) selIndex = i;
             ImGui::PopID();
         }
