@@ -98,6 +98,9 @@ struct Document {
     std::string worldStage;
     char worldFilter[128] = {};
     int worldOutliner = 0;   // 0 meshes, 1 levels
+    bool worldSea = false;        // sot_world_layout_2: the whole open world
+    bool worldProxies = true;     // whole sea: islands as their merged LOD proxies
+    char worldIslands[256] = {};  // whole sea: island filter (comma terms, '-' excludes)
 
     // audio: a .wem, or a sound bank (WwiseBank) with embedded media decoded on demand
     std::shared_ptr<AudioPcm> audio;

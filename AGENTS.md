@@ -75,10 +75,12 @@ or `/Game/Models/Props/Common/cmn_barrel_debris_02_a.cmn_barrel_debris_02_a`.
 | `preview_mesh` | renders a mesh with its textures to a PNG (`yaw`/`pitch` orbit, `wireframe`, `lod`) |
 | `get_animation_info` | AnimSequence: frames, length, fps, compression, skeleton, animated bones (+ a mesh that can show it) |
 | `preview_animation` | contact sheet PNG of an animation posed on a skeletal mesh (found automatically or `mesh=`) |
-| `get_world_info` | a map (.umap) as a scene: sublevels, placed meshes with Blueprint templates resolved, landscape components, instance counts, unresolved components (`filter=rock,-small` narrows the meshes) |
+| `get_world_info` | a map (.umap) as a scene: sublevels, placed meshes with Blueprint templates resolved, landscape components, instance counts, unresolved components (`filter=rock,-small` narrows the meshes). `path=Athena/Content/Maps/World_Layout/sot_world_layout_2.umap` is the whole sea: every island placed by the world layout; `islands=wsp_,-fort` / `region=[minX,minY,maxX,maxY]` select islands, `proxies=true` loads each island's merged LOD proxy instead (whole sea in seconds) |
 | `preview_world` | renders a whole map (meshes, Blueprint components, landscape terrain coloured by paint layers) to a PNG; orbit with `yaw`/`pitch`/`zoom` or place the camera with `eye`/`target` |
 | `decompile_blueprint` | a Blueprint (`BlueprintGeneratedClass` package) as C++-like code: variables, functions with parameters and locals, Kismet bytecode as statements with labelled jumps |
-| `export_world` | a whole map (.umap with sublevels) as one glTF scene for Blender: level nodes, every placed mesh with materials and textures, landscape |
+| `export_world` | a whole map (.umap with sublevels) as one glTF scene for Blender: level nodes, every placed mesh with materials and textures, landscape. For `sot_world_layout_2` pick islands with `islands` / `region` or use `proxies` |
+| `get_world_layout` | the open world: every island / outpost / fort folder with its persistent map, sea, type, tile transform (location + yaw), bounds centre and radius (`filter`, `levels=true` for per-sublevel transforms) |
+| `find_mesh_placements` | where a mesh is placed: levels using it (reference index, also through Blueprints), instance counts and world positions (open-world levels moved to their island's place) |
 | `export_animations` | several AnimSequences of one skeleton (list or folder) into one .glb: the skinned mesh once, one animation per sequence |
 | `export_datatable` | DataTable / CurveTable rows as JSON (paged) or a .csv file (struct fields flattened into columns) |
 | `search_localization` | the game's translated strings (.locres) by text or key in any shipped language (`culture=de-DE`); FText values in JSON also carry `LocalizedString` |
@@ -109,4 +111,9 @@ Typical flow: `search` → `get_package` → `get_properties` / `preview_*` → 
   Reflection names are stripped: constant buffers, textures and samplers keep their register numbers (`cb1_cb[42]`,
   `t3`, `s5`); inputs / outputs keep their semantics. The decompiled HLSL recompiles with fxc for almost every
   shader; geometry shaders, UAVs, groupshared memory and atomics are translated too.
+- The open world (`sot_world_layout_2`): cooked tiles carry no world-composition offsets (`worldTile` in `get_package` is
+  0,0). Island placement is recovered like Athena's tiles.py: the layout keeps `Copied<Name>` NavMeshBoundsVolumes of every
+  island level (`OriginatingLevelName`); matching each copy to the level's own volume (by name, else by brush extent) gives
+  the level's yaw + translation. 95 islands; the Legendary Hideout and the Maiden Voyage island are not part of it.
+  CLI arrays: `key=[1,2,3]`.
 - Unreal units are centimetres, Z up, left handed. glTF exports are converted to metres, Y up.

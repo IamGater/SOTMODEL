@@ -5,6 +5,7 @@
 #include "ue/AnimPose.h"
 #include "ue/Mesh.h"
 #include "ue/DataTable.h"
+#include "ue/WorldLayout.h"
 
 namespace {
 
@@ -114,8 +115,9 @@ void RegisterExportTools(Api& api) {
 
     api.Register({"export_world",
                   "Export a whole map (.umap) as one glTF .glb for Blender: a node per level, every placed mesh (with material overrides and "
-                  "textures, downscaled to max_texture_size) and the landscape terrain. Large maps take a while.",
-                  R"({"type":"object","properties":{"path":{"type":"string"},"output_dir":{"type":"string"},"textures":{"type":"boolean","default":true},"max_texture_size":{"type":"integer","default":1024},"lod":{"type":"integer","default":0},"landscape":{"type":"boolean","default":true},"sublevels":{"type":"boolean","default":true},"filter":{"type":"string"}},"required":["path"]})",
+                  "textures, downscaled to max_texture_size) and the landscape terrain. Large maps take a while. path = sot_world_layout_2 exports "
+                  "the open world: pick islands ('islands' terms, 'region' [minX,minY,maxX,maxY] cm) or 'proxies' for the whole sea.",
+                  R"({"type":"object","properties":{"path":{"type":"string"},"output_dir":{"type":"string"},"textures":{"type":"boolean","default":true},"max_texture_size":{"type":"integer","default":1024},"lod":{"type":"integer","default":0},"landscape":{"type":"boolean","default":true},"sublevels":{"type":"boolean","default":true},"filter":{"type":"string"},"islands":{"type":"string"},"proxies":{"type":"boolean","default":false},"region":{"type":"array","items":{"type":"number"}}},"required":["path"]})",
                   "path",
                   [](Api& a, const JsonValue& args) {
                       WorldLoader loader(*a.cache);
@@ -123,6 +125,7 @@ void RegisterExportTools(Api& api) {
                       opt.sublevels = args.GetBool("sublevels", true);
                       opt.landscape = args.GetBool("landscape", true);
                       opt.meshFilter = args.GetStr("filter");
+                      SeaOptionsFrom(args, opt);
                       WorldData world;
                       std::string err;
                       i64 e = a.ResolveFile(args.GetStr("path"));
@@ -136,7 +139,13 @@ void RegisterExportTools(Api& api) {
                       wo.landscape = opt.landscape;
                       Bytes glb;
                       if (!ExportWorldGlb(*a.cache, world, wo, glb, &err)) return ApiResult::Error(err);
-                      std::wstring out = OutFile(a, args.GetStr("output_dir"), gp, L".glb");
+                      std::string name = gp;
+                      if (IsWorldLayoutMap(gp)) {   // name the file after the selection
+                          std::string sel = opt.islands.empty() ? (opt.region ? "region" : "all") : opt.islands;
+                          for (auto& c : sel) if (!isalnum((unsigned char)c) && c != '_') c = '_';
+                          name = gp.substr(0, gp.rfind('.')) + "_" + sel.substr(0, 60) + (opt.proxies ? "_proxies" : "") + ".umap";
+                      }
+                      std::wstring out = OutFile(a, args.GetStr("output_dir"), name, L".glb");
                       if (!WriteWholeFile(out, glb.data(), glb.size())) return ApiResult::Error("could not write " + Narrow(out));
                       return Written({Narrow(out)}, Fmt("%zu levels, %zu meshes, %zu instances, %zu landscape patches", world.levels.size(), world.groups.size(),
                                                         world.InstanceCount(), world.landscapes.size()));

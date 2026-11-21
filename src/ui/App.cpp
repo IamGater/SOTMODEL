@@ -2,6 +2,7 @@
 #include "ui/UiCommon.h"
 #include "ue/AssetJson.h"
 #include "ue/Blueprint.h"
+#include "ue/WorldLayout.h"
 #include "imgui.h"
 #include "imgui_internal.h"
 #include <windows.h>
@@ -434,6 +435,7 @@ void App::LoadDocument(std::shared_ptr<Document> d) {
             }
         } else if (main && IsWorldClass(d->className)) {
             d->isWorld = true;
+            d->worldSea = IsWorldLayoutMap(d->gamePath);
             d->preferred = DocView::World;
         } else if (main && IsTableClass(d->className)) {
             auto t = std::make_shared<TableData>();
@@ -458,6 +460,11 @@ void App::LoadWorld(std::shared_ptr<Document> d) {
         WorldLoader loader(*m_api->cache);
         WorldOptions opt;
         opt.landscapeStep = 1;
+        if (d->worldSea) {
+            opt.proxies = d->worldProxies;
+            opt.islands = d->worldIslands;
+            if (opt.proxies) opt.landscape = false;   // the proxies include the terrain
+        }
         opt.cancel = [d] { return d->cancel.load(); };
         opt.progress = [this, d](int done, int total, const std::string& level) {
             std::string stage = level.empty() ? "levels" : level.substr(level.find_last_of('/') + 1);
@@ -699,7 +706,30 @@ void App::DrawAnimation(Document& d) {
 }
 
 void App::DrawWorld(Document& d) {
+    auto reload = [&] {
+        for (auto& sp : m_docs)
+            if (sp.get() == &d) {
+                d.worldScene.reset();
+                d.world.reset();
+                d.cancel = false;
+                LoadWorld(sp);
+                break;
+            }
+    };
+    // whole sea: what to load
+    auto seaOptions = [&] {
+        if (!d.worldSea) return;
+        BeginToolbar();
+        FlowToggle("Island proxies", &d.worldProxies, true);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Each island as its merged LOD proxy mesh (fast). Off: every mesh and the landscapes (filter islands first)");
+        FlowNext(260);
+        ImGui::SetNextItemWidth(260);
+        bool enter = ImGui::InputTextWithHint("##isl", "islands: name / sea terms, -excluded", d.worldIslands, sizeof(d.worldIslands), ImGuiInputTextFlags_EnterReturnsTrue);
+        if ((FlowButton("Reload sea") || enter) && !d.worldLoading) reload();
+        EndToolbar();
+    };
     if (d.worldLoading || !d.worldScene) {
+        seaOptions();
         if (d.worldLoading) {
             float f = d.worldTotal > 0 ? (float)d.worldDone / d.worldTotal : 0.f;
             ImGui::TextDisabled("Loading map: %s", d.worldStage.c_str());
@@ -740,6 +770,7 @@ void App::DrawWorld(Document& d) {
     };
     if (FlowButton("Frame")) frameWorld();
     EndToolbar();
+    seaOptions();
     const auto& st = sc.Stats();
     ImGui::PushTextWrapPos(0);
     ImGui::TextDisabled("%zu levels | %zu instances of %zu meshes, %zu landscape patches | drawn: %u instances, %u meshes, %u patches, %.2fM tris | %s GPU",
@@ -804,9 +835,55 @@ void App::DrawWorld(Document& d) {
             }
             ImGui::EndTabItem();
         }
+        if (d.worldSea && ImGui::BeginTabItem("Islands")) {
+            const WorldLayout* L = GetWorldLayout(*m_api->cache);
+            std::string f = ToLower(d.worldFilter);
+            ImGui::SetNextItemWidth(-1);
+            ImGui::InputTextWithHint("##wf", "filter islands", d.worldFilter, sizeof(d.worldFilter));
+            if (L && ImGui::BeginTable("##wi", 2, ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV)) {
+                ImGui::TableSetupScrollFreeze(0, 1);
+                ImGui::TableSetupColumn("Island");
+                ImGui::TableSetupColumn("Sea", ImGuiTableColumnFlags_WidthFixed, 110);
+                ImGui::TableHeadersRow();
+                for (size_t ii = 0; ii < L->islands.size(); ii++) {
+                    auto& isl = L->islands[ii];
+                    if (!f.empty() && ToLower(isl.name + " " + isl.sea).find(f) == std::string::npos) continue;
+                    ImGui::TableNextRow();
+                    ImGui::TableNextColumn();
+                    ImGui::PushID((int)ii);
+                    if (ImGui::Selectable(isl.name.c_str(), false, ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowDoubleClick) &&
+                        ImGui::IsMouseDoubleClicked(0)) {
+                        cam.target = isl.radius > 0 ? isl.centre : isl.location;
+                        cam.distance = std::max(isl.radius * 2.5f, 20000.f);
+                    }
+                    if (ImGui::BeginPopupContextItem()) {
+                        if (ImGui::MenuItem("Load in full detail")) {
+                            snprintf(d.worldIslands, sizeof(d.worldIslands), "%s", isl.name.c_str());
+                            d.worldProxies = false;
+                            reload();
+                        }
+                        if (ImGui::MenuItem("Open island map", nullptr, false, !isl.map.empty())) {
+                            i64 e = m_api->ResolveFile(isl.map);
+                            if (e >= 0) OpenFile((u32)e);
+                        }
+                        if (ImGui::MenuItem("Copy folder")) CopyToClipboard(isl.dir);
+                        ImGui::EndPopup();
+                    }
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("%s\nlocation %.0f %.0f %.0f, yaw %.1f\n%s%sDouble-click: fly to it, right-click: load / open", isl.dir.c_str(),
+                                          isl.location.x, isl.location.y, isl.location.z, isl.yaw, isl.type.c_str(), isl.type.empty() ? "" : "\n");
+                    ImGui::TableNextColumn();
+                    ImGui::TextDisabled("%s", isl.sea.c_str());
+                    ImGui::PopID();
+                }
+                ImGui::EndTable();
+            }
+            ImGui::EndTabItem();
+        }
         if (ImGui::BeginTabItem("Levels")) {
             for (auto& l : w.levels) {
                 ImGui::TextUnformatted(l.path.substr(l.path.find_last_of('/') + 1).c_str());
+                if (!l.island.empty()) { ImGui::SameLine(); ImGui::TextDisabled("(%s)", l.island.c_str()); }
                 if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", l.path.c_str());
                 ImGui::TextDisabled("   %u actors, %u instances%s%s", l.actors, l.instances,
                                     l.landscapeComponents ? Fmt(", %u landscape", l.landscapeComponents).c_str() : "",

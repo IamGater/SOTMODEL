@@ -50,6 +50,7 @@ struct WorldLandscape {
 struct WorldLevel {
     std::string path;    // game path of the .umap
     Mat4 transform = Mat4::Identity();   // level -> world
+    std::string island;                  // world layout: the island the level belongs to
     u32 actors = 0, meshComponents = 0, instances = 0, splines = 0, unresolved = 0, landscapeComponents = 0;
 };
 
@@ -72,7 +73,12 @@ struct WorldOptions {
     int landscapeStep = 1;
     // mesh path filter: comma separated substrings (case insensitive); a mesh must match one of the plain terms (if any)
     // and none of the '-' terms, e.g. "rock,-small"
-    std::string meshFilter;       // landscape vertex spacing in quads (2 or 4 = coarser, less memory)
+    std::string meshFilter;
+    // Opening sot_world_layout_2 loads the whole open world: every island placed by the world layout (see WorldLayout.h).
+    std::string islands;          // island filter for the world layout, same syntax as meshFilter (name / folder / sea)
+    bool proxies = false;         // world layout: use the islands' merged LOD proxy levels (one cheap mesh per sublevel)
+    bool region = false;          // world layout: only islands whose centre lies in [regionMin, regionMax] (world XY, cm)
+    Vec2 regionMin, regionMax;
     std::function<bool()> cancel;
     std::function<void(int done, int total, const std::string& level)> progress;
 };

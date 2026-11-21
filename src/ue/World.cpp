@@ -1,4 +1,5 @@
 #include "ue/World.h"
+#include "ue/WorldLayout.h"
 #include "core/Vfs.h"
 #include "ue/Texture.h"
 #include <unordered_map>
@@ -143,6 +144,11 @@ u32 LayerColor(const std::string& layer) {
     for (auto& g : groups)
         if (l.find(g.key) != std::string::npos) return g.rgb;
     return 0x9A9285;
+}
+
+bool IsProxyMesh(const std::string& meshPath) {
+    std::string p = ToLower(meshPath);
+    return p.rfind("/game/maps/", 0) == 0 && p.find("/lod/") != std::string::npos;
 }
 
 bool PassesFilter(const std::string& meshPath, const std::string& filter) {
@@ -624,7 +630,7 @@ void WorldLoader::AddLevel(const Package& pkg, const Mat4& levelTransform, const
                 continue;
             }
         }
-        if (opt.skipNonVisual && IsHelperMesh(mesh)) continue;
+        if (opt.skipNonVisual && IsHelperMesh(mesh) && !(opt.proxies && IsProxyMesh(mesh))) continue;
         if (!PassesFilter(mesh, opt.meshFilter)) continue;
         Mat4 w = World(i) * levelTransform;
         std::vector<std::string> mats = MaterialsOf(v);
@@ -703,9 +709,69 @@ std::vector<std::string> WorldLoader::MapLevels(std::string_view mapPath, bool s
     return res;
 }
 
+// The islands' LOD proxy levels ("<island>/sharedassets/LOD/<level>lod1.umap"): the lowest LOD of every base level.
+static std::vector<std::string> ProxyLevels(const Vfs& vfs, const std::string& islandDir) {
+    std::map<std::string, std::pair<int, std::string>> best;   // base level -> (lod, path)
+    std::string dir = islandDir + "/";
+    for (u32 i = 0; i < (u32)vfs.FileCount(); i++) {
+        std::string_view p = vfs.Path(i);
+        if (!IStartsWith(p, dir) || !IEndsWith(p, ".umap")) continue;
+        std::string lp = ToLower(p);
+        if (lp.find("/lod/") == std::string::npos) continue;
+        std::string stem = StemOf(p);
+        size_t k = stem.rfind("lod");
+        if (k == std::string::npos) continue;
+        int lod = atoi(stem.c_str() + k + 3);
+        if (EndsWithLevelSuffix(stem.substr(0, k))) continue;
+        auto& b = best[stem.substr(0, k)];
+        if (b.second.empty() || lod < b.first) b = {lod, std::string(p)};
+    }
+    std::vector<std::string> res;
+    for (auto& [k, v] : best) res.push_back(v.second);
+    return res;
+}
+
 bool WorldLoader::Load(std::string_view mapPath, const WorldOptions& opt, WorldData& out, std::string* error) {
     out = WorldData{};
     m->groupIndex.clear();
+    if (opt.sublevels && IsWorldLayoutMap(mapPath)) {
+        const WorldLayout* L = GetWorldLayout(m->cache, error);
+        if (!L) return false;
+        struct Item { std::string path, island; Mat4 t; };
+        std::vector<Item> items;
+        // the layout's own sublevels (sea rocks, world regions, ...); with an island filter only those it names
+        for (auto& l : MapLevels(L->layoutMap, opt.skipNonVisual))
+            if (IStartsWith(StemOf(l), "sot_world_layout_2") && (opt.islands.empty() ? !opt.region : PassesFilter(l, opt.islands)))
+                items.push_back({l, {}, Mat4::Identity()});
+        for (auto& isl : L->islands) {
+            if (!PassesFilter(isl.name + " " + isl.dir + " " + isl.sea, opt.islands)) continue;
+            if (opt.region) {
+                Vec3 c = isl.radius > 0 ? isl.centre : isl.location;
+                if (c.x < opt.regionMin.x || c.y < opt.regionMin.y || c.x > opt.regionMax.x || c.y > opt.regionMax.y) continue;
+            }
+            std::vector<std::string> lv;
+            if (opt.proxies) lv = ProxyLevels(m->cache.FileSystem(), isl.dir);
+            if (lv.empty() && !isl.map.empty()) lv = MapLevels(isl.map, opt.skipNonVisual);
+            for (auto& l : lv) {
+                Item it{l, isl.name, isl.Transform()};
+                L->LevelTransform(l, it.t);
+                items.push_back(std::move(it));
+            }
+        }
+        out.root = L->layoutMap;
+        for (size_t i = 0; i < items.size(); i++) {
+            if (opt.cancel && opt.cancel()) { if (error) *error = "cancelled"; return false; }
+            if (opt.progress) opt.progress((int)i, (int)items.size(), items[i].path);
+            std::string err;
+            auto pkg = m->cache.LoadPath(items[i].path, &err);
+            if (!pkg) { LOGW("world: %s: %s", items[i].path.c_str(), err.c_str()); continue; }
+            AddLevel(*pkg, items[i].t, opt, out);
+            out.levels.back().island = items[i].island;
+        }
+        if (opt.progress) opt.progress((int)items.size(), (int)items.size(), {});
+        if (out.InstanceCount() == 0 && out.landscapes.empty()) out.boundsMin = out.boundsMax = {};
+        return true;
+    }
     std::vector<std::string> levels = opt.sublevels ? MapLevels(mapPath, opt.skipNonVisual) : std::vector<std::string>{};
     if (levels.empty()) {
         i64 e = m->cache.FileSystem().Find(mapPath);
