@@ -14,7 +14,19 @@ struct GpuTexture {
     int width = 0, height = 0;
 };
 
+// A material's translated graph compiled as a viewport pixel shader (GraphShader.h).
+struct GpuGraphShader {
+    ComPtr<ID3D11PixelShader> ps;
+    std::vector<std::shared_ptr<GpuTexture>> textures;   // t0..tN (null for cubes / missing)
+    std::vector<std::string> textureNames;
+    int blend = 0;   // 0 opaque, 1 masked, 2 translucent, 3 additive, 4 modulate
+    std::string error;
+    double compileMs = 0;
+};
+
 struct GpuMaterial {
+    std::string path;
+    std::shared_ptr<GpuGraphShader> graph;   // set when graph shading is requested (GpuAssets::GraphShader)
     std::shared_ptr<GpuTexture> diffuse, normal;
     float color[4] = {0.75f, 0.75f, 0.75f, 1};
     bool twoSided = false;
@@ -77,6 +89,8 @@ struct DrawOptions {
     bool grid = true;
     bool backfaceCulling = true;
     const SceneLighting* lighting = nullptr;   // map lights / fog (null: the viewer's key light)
+    bool graphMaterials = false;               // draw with each material's translated graph shader where compiled
+    float time = -1;                           // material time (s); < 0 = wall clock
 };
 
 class Renderer {
@@ -89,6 +103,8 @@ public:
     std::shared_ptr<GpuMesh> CreateMesh(const MeshLod& lod, const Vec3& bmin, const Vec3& bmax, bool dynamic = false) const;
     // Dynamic meshes only (main thread): replace positions / normals, e.g. after CPU skinning.
     void UpdateMeshVertices(GpuMesh& mesh, const std::vector<Vec3>& positions, const std::vector<Vec3>& normals);
+    // Compiles a pixel shader (free threaded).
+    bool CreatePixelShader(const std::string& source, const char* entry, ComPtr<ID3D11PixelShader>& out, std::string* error) const;
 
     // Viewport rendering into an offscreen target (main thread).
     void BeginFrame(int width, int height, const Camera& cam, const DrawOptions& opt);
@@ -119,7 +135,10 @@ private:
     ComPtr<ID3D11DepthStencilState> m_depth, m_noDepth;
     ComPtr<ID3D11Buffer> m_lineVb;
     u32 m_lineCap = 0;
-    ComPtr<ID3D11BlendState> m_opaqueBlend, m_lineBlend;
+    ComPtr<ID3D11BlendState> m_opaqueBlend, m_lineBlend, m_addBlend, m_modBlend;
+    ComPtr<ID3D11DepthStencilState> m_depthNoWrite;
+    ComPtr<ID3D11Buffer> m_graphCb;
+    double m_startTime = 0;
     std::shared_ptr<GpuTexture> m_white, m_flatNormal;
 
     // targets

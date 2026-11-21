@@ -12,7 +12,11 @@ struct PreviewRequest {
     Vec3 boundsMin, boundsMax;
     struct Overlay { u32 color; std::vector<Vec3> segments; };   // pairs of points, mesh space, drawn on top
     std::vector<Overlay> overlays;
+    std::vector<std::string>* graphNotes = nullptr;   // draw.graphMaterials: per material "path: ok / error"
 };
+
+// UV sphere (UE axes, tangents along +phi) for material previews.
+MeshLod MakePreviewSphere(float radius, int segments, int rings);
 
 bool RenderMeshPreview(PackageCache& cache, const MeshData& mesh, const PreviewRequest& req, Image& out, std::string* error);
 // Several meshes (e.g. animation frames) with one camera; textures are decoded once.

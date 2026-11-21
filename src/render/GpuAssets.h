@@ -11,6 +11,10 @@ public:
 
     std::shared_ptr<GpuTexture> Texture(const std::string& path, bool forceLinear = false);
     std::shared_ptr<GpuMaterial> Material(const std::string& path);
+    // The material's translated graph as a pixel shader (compiled once per path; result->error set on failure).
+    std::shared_ptr<GpuGraphShader> GraphShader(const std::string& materialPath);
+    // Fills mesh.materials[*]->graph (compiling what isn't cached yet).
+    void EnsureGraphShaders(const GpuMesh& mesh);
     // Uploads one LOD of a decoded mesh with its material slots resolved.
     std::shared_ptr<GpuMesh> Mesh(const MeshData& mesh, int lod, bool loadMaterials = true, bool dynamic = false);
     // Loads a mesh asset by object path (cached; nullptr if it can't be decoded).
@@ -28,5 +32,6 @@ private:
     std::unordered_map<std::string, std::shared_ptr<GpuTexture>> m_textures;
     std::unordered_map<std::string, std::shared_ptr<GpuMaterial>> m_materials;
     std::unordered_map<std::string, std::shared_ptr<GpuMesh>> m_meshes;
+    std::unordered_map<std::string, std::shared_ptr<GpuGraphShader>> m_graphs;
     std::atomic<size_t> m_texBytes{0};
 };

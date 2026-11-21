@@ -164,6 +164,7 @@ struct Document {
 
     // material
     bool hasMaterial = false;
+    bool materialSphere = true;   // material tabs: the 3D sphere view (else the texture pages)
     MaterialInfo material;
     std::vector<std::pair<std::string, std::shared_ptr<GpuTexture>>> materialTextures;
 
@@ -246,6 +247,7 @@ private:
     void DrawAnimAssetHeader(Document& d);
     void DrawStateMachinePanel(Document& d);
     void DrawParticlePanel(Document& d);   // ParticlePanel.cpp
+    void RequestGraphShaders(Document& d);   // compiles the graph shaders of the shown mesh's materials in the background
     void DrawWorld(Document& d);
     void LoadWorld(std::shared_ptr<Document> d);
     void LoadAnimationMesh(std::shared_ptr<Document> d, std::string meshPath);

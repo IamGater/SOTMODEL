@@ -5,6 +5,11 @@
 #include "ue/Shaders.h"
 #include "render/ShaderTools.h"
 #include "ue/MaterialGraph.h"
+#include "ue/Material.h"
+#include "ue/Mesh.h"
+#include "render/Offscreen.h"
+#include "render/GraphShader.h"
+#include "export/Png.h"
 
 namespace {
 
@@ -221,6 +226,74 @@ void RegisterShaderTools(Api& api) {
                       w.EndObject();
                       ApiResult r;
                       r.json = w.Take();
+                      return r;
+                  }});
+
+    api.Register({"preview_material",
+                  "Render a material on a sphere (or on 'mesh'). graph=true (default) compiles the material's translated node graph "
+                  "(get_material_hlsl) into a pixel shader with stubbed engine inputs, so textures, parameters, panners and blend modes "
+                  "act as in the graph; graph=false uses the viewer's simple diffuse / normal shading. 'time' fixes the material time; "
+                  "'shader_source=true' returns the generated shader.",
+                  R"({"type":"object","properties":{"path":{"type":"string"},"graph":{"type":"boolean","default":true},"mesh":{"type":"string"},)"
+                  R"("size":{"type":"integer","default":512},"yaw":{"type":"number","default":180},"pitch":{"type":"number","default":-10},)"
+                  R"("time":{"type":"number","default":0},"shader_source":{"type":"boolean","default":false},"save_to":{"type":"string"}},"required":["path"]})",
+                  "path",
+                  [](Api& a, const JsonValue& args) {
+                      std::string err, path = args.GetStr("path");
+                      if (!a.EnsureMounted(&err)) return ApiResult::Error(err);
+                      MaterialInfo mi;
+                      if (!ReadMaterial(*a.cache, path, mi, &err)) return ApiResult::Error(err);
+                      MeshData m;
+                      std::string meshPath = args.GetStr("mesh");
+                      if (!meshPath.empty()) {
+                          auto mp = a.cache->LoadPath(meshPath, &err);
+                          if (!mp || !mp->MainExport() || !ReadMesh(*mp, mp->MainExport() - 1, m, &err)) return ApiResult::Error("mesh: " + err);
+                          for (auto& s : m.materials) s.materialPath = path;
+                      } else {
+                          m.name = "sphere";
+                          m.lods.push_back(MakePreviewSphere(50, 64, 32));
+                          MeshMaterialSlot slot;
+                          slot.materialPath = path;
+                          m.materials.push_back(slot);
+                          m.ComputeBounds();
+                      }
+                      PreviewRequest req;
+                      req.width = req.height = std::clamp((int)args.GetNum("size", 512), 64, 2048);
+                      req.yaw = (float)args.GetNum("yaw", 180);
+                      req.pitch = (float)args.GetNum("pitch", -10);
+                      req.draw.grid = false;
+                      req.draw.graphMaterials = args.GetBool("graph", true);
+                      req.draw.time = (float)args.GetNum("time", 0);
+                      std::vector<std::string> notes;
+                      req.graphNotes = &notes;
+                      Image img;
+                      if (!RenderMeshPreview(*a.cache, m, req, img, &err)) return ApiResult::Error(err);
+                      ApiResult r;
+                      ApiImage im;
+                      im.mime = "image/png";
+                      im.data = EncodePng(img.rgba.data(), img.width, img.height);
+                      JsonWriter w;
+                      w.BeginObject();
+                      w.KV("material", path);
+                      w.KV("blendMode", mi.blendMode);
+                      if (!mi.shadingModel.empty()) w.KV("shadingModel", mi.shadingModel);
+                      w.Key("graphShader");
+                      w.BeginArray();
+                      for (auto& n : notes) w.Str(n);
+                      w.EndArray();
+                      if (args.GetBool("shader_source", false)) {
+                          std::string hlsl;
+                          GraphShaderSource src;
+                          if (MaterialToHlsl(*a.cache, path, hlsl, nullptr, &err) && BuildGraphShaderSource(hlsl, mi.blendMode, mi.shadingModel, src, &err)) w.KV("shaderSource", src.hlsl);
+                      }
+                      std::string save = args.GetStr("save_to");
+                      if (!save.empty()) {
+                          WriteWholeFile(Widen(save), im.data.data(), im.data.size());
+                          w.KV("savedTo", save);
+                      }
+                      w.EndObject();
+                      r.json = w.Take();
+                      r.images.push_back(std::move(im));
                       return r;
                   }});
 }

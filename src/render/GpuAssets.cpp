@@ -1,4 +1,7 @@
 #include "render/GpuAssets.h"
+#include "render/GraphShader.h"
+#include "ue/MaterialGraph.h"
+#include <chrono>
 #include "ue/Mesh.h"
 
 static std::string ObjectNameOf(const std::string& path) {
@@ -41,6 +44,7 @@ std::shared_ptr<GpuMaterial> GpuAssets::Material(const std::string& path) {
         if (it != m_materials.end()) return it->second;
     }
     auto gm = std::make_shared<GpuMaterial>();
+    gm->path = path;
     MaterialInfo mi;
     std::string err;
     if (!path.empty() && ReadMaterial(m_cache, path, mi, &err)) {
@@ -100,6 +104,7 @@ void GpuAssets::Clear() {
     m_textures.clear();
     m_materials.clear();
     m_meshes.clear();
+    m_graphs.clear();
     m_texBytes = 0;
 }
 
@@ -108,6 +113,7 @@ void GpuAssets::Trim() {
     // meshes first (they hold materials), then materials (they hold textures), then textures
     for (auto it = m_meshes.begin(); it != m_meshes.end();) it = it->second.use_count() <= 1 ? m_meshes.erase(it) : std::next(it);
     for (auto it = m_materials.begin(); it != m_materials.end();) it = it->second.use_count() <= 1 ? m_materials.erase(it) : std::next(it);
+    for (auto it = m_graphs.begin(); it != m_graphs.end();) it = it->second.use_count() <= 1 ? m_graphs.erase(it) : std::next(it);
     size_t bytes = 0;
     for (auto it = m_textures.begin(); it != m_textures.end();) {
         if (it->second.use_count() <= 1) it = m_textures.erase(it);
@@ -117,4 +123,52 @@ void GpuAssets::Trim() {
         }
     }
     m_texBytes = bytes;
+}
+
+std::shared_ptr<GpuGraphShader> GpuAssets::GraphShader(const std::string& path) {
+    {
+        std::lock_guard lk(m_mutex);
+        auto it = m_graphs.find(path);
+        if (it != m_graphs.end()) return it->second;
+    }
+    auto g = std::make_shared<GpuGraphShader>();
+    auto t0 = std::chrono::steady_clock::now();
+    MaterialInfo mi;
+    std::string hlsl, err;
+    GraphShaderSource src;
+    if (path.empty()) g->error = "no material";
+    else if (!ReadMaterial(m_cache, path, mi, &err)) g->error = "material: " + err;
+    else if (!MaterialToHlsl(m_cache, path, hlsl, nullptr, &err)) g->error = "translate: " + err;
+    else if (!BuildGraphShaderSource(hlsl, mi.blendMode, mi.shadingModel, src, &err)) g->error = err;
+    else if (!m_r.CreatePixelShader(src.hlsl, "GraphPSMain", g->ps, &err)) {
+        std::string errs;   // error lines only (drop warnings and the shader file prefix)
+        size_t s = 0;
+        while (s < err.size()) {
+            size_t e = err.find('\n', s);
+            std::string l = err.substr(s, e == std::string::npos ? std::string::npos : e - s);
+            s = e == std::string::npos ? err.size() : e + 1;
+            size_t k = l.find("error X");
+            if (k == std::string::npos) continue;
+            size_t lp = l.find('(');
+            errs += (errs.empty() ? "" : "; ") + (lp != std::string::npos && lp < k ? "line " + l.substr(lp + 1, l.find(',', lp) - lp - 1) + ": " : std::string()) + l.substr(k);
+        }
+        g->error = "compile: " + (errs.empty() ? err : errs).substr(0, 800);
+    }
+    else {
+        g->blend = src.blend;
+        for (auto& t : src.textures) {
+            g->textureNames.push_back(t.ident);
+            g->textures.push_back(t.cube || t.path.empty() ? nullptr : Texture(t.path));
+        }
+    }
+    g->compileMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    if (!g->error.empty()) LOGW("graph shader %s: %s", path.c_str(), g->error.substr(0, 300).c_str());
+    std::lock_guard lk(m_mutex);
+    m_graphs[path] = g;
+    return g;
+}
+
+void GpuAssets::EnsureGraphShaders(const GpuMesh& mesh) {
+    for (auto& m : mesh.materials)
+        if (m && !m->graph) m->graph = GraphShader(m->path);
 }

@@ -1,5 +1,6 @@
 #include "render/Renderer.h"
 #include <d3dcompiler.h>
+#include <chrono>
 
 static const char* kMeshShader = R"(
 #pragma pack_matrix(row_major)
@@ -192,6 +193,9 @@ bool Renderer::Init(ID3D11Device* device, ID3D11DeviceContext* ctx, std::string*
     m_dev->CreateBuffer(&cb, nullptr, &m_frameCb);
     cb.ByteWidth = sizeof(MaterialConstants);
     m_dev->CreateBuffer(&cb, nullptr, &m_materialCb);
+    cb.ByteWidth = 32;
+    m_dev->CreateBuffer(&cb, nullptr, &m_graphCb);
+    m_startTime = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
 
     D3D11_SAMPLER_DESC sd = {};
     sd.Filter = D3D11_FILTER_ANISOTROPIC;
@@ -218,6 +222,8 @@ bool Renderer::Init(ID3D11Device* device, ID3D11DeviceContext* ctx, std::string*
     dd.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ALL;
     dd.DepthFunc = D3D11_COMPARISON_GREATER_EQUAL;   // reversed Z
     m_dev->CreateDepthStencilState(&dd, &m_depth);
+    dd.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ZERO;
+    m_dev->CreateDepthStencilState(&dd, &m_depthNoWrite);
     dd.DepthEnable = FALSE;
     dd.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ZERO;
     m_dev->CreateDepthStencilState(&dd, &m_noDepth);
@@ -233,6 +239,12 @@ bool Renderer::Init(ID3D11Device* device, ID3D11DeviceContext* ctx, std::string*
     bd.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_INV_SRC_ALPHA;
     bd.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
     m_dev->CreateBlendState(&bd, &m_lineBlend);
+    bd.RenderTarget[0].SrcBlend = D3D11_BLEND_ONE;
+    bd.RenderTarget[0].DestBlend = D3D11_BLEND_ONE;
+    m_dev->CreateBlendState(&bd, &m_addBlend);
+    bd.RenderTarget[0].SrcBlend = D3D11_BLEND_DEST_COLOR;
+    bd.RenderTarget[0].DestBlend = D3D11_BLEND_ZERO;
+    m_dev->CreateBlendState(&bd, &m_modBlend);
 
     UINT q = 0;
     if (FAILED(m_dev->CheckMultisampleQualityLevels(DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, 4, &q)) || !q) m_samples = 1;
@@ -470,10 +482,22 @@ void Renderer::BeginFrame(int width, int height, const Camera& cam, const DrawOp
         memcpy(ms.pData, &fc, sizeof(fc));
         m_ctx->Unmap(m_frameCb.Get(), 0);
     }
+    if (SUCCEEDED(m_ctx->Map(m_graphCb.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &ms))) {
+        double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+        float g[8] = {opt.time >= 0 ? opt.time : (float)(now - m_startTime), 0, 0, 0, (float)m_w, (float)m_h, 1.f / m_w, 1.f / m_h};
+        memcpy(ms.pData, g, sizeof(g));
+        m_ctx->Unmap(m_graphCb.Get(), 0);
+    }
     m_ctx->OMSetDepthStencilState(m_depth.Get(), 0);
     m_ctx->OMSetBlendState(m_opaqueBlend.Get(), nullptr, 0xffffffff);
     ID3D11SamplerState* s = m_sampler.Get();
     m_ctx->PSSetSamplers(0, 1, &s);
+}
+
+bool Renderer::CreatePixelShader(const std::string& source, const char* entry, ComPtr<ID3D11PixelShader>& out, std::string* error) const {
+    ComPtr<ID3DBlob> blob;
+    if (!Compile(source.c_str(), entry, "ps_5_0", blob, error)) return false;
+    return SUCCEEDED(m_dev->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &out));
 }
 
 void Renderer::DrawMesh(const GpuMesh& mesh, const Mat4* instances, u32 count) {
@@ -493,9 +517,9 @@ void Renderer::DrawMesh(const GpuMesh& mesh, const Mat4* instances, u32 count) {
     m_ctx->IASetIndexBuffer(mesh.ib.Get(), DXGI_FORMAT_R32_UINT, 0);
     m_ctx->VSSetShader(m_meshVs.Get(), nullptr, 0);
     m_ctx->PSSetShader(m_meshPs.Get(), nullptr, 0);
-    ID3D11Buffer* cbs[2] = {m_frameCb.Get(), m_materialCb.Get()};
+    ID3D11Buffer* cbs[3] = {m_frameCb.Get(), m_materialCb.Get(), m_graphCb.Get()};
     m_ctx->VSSetConstantBuffers(0, 2, cbs);
-    m_ctx->PSSetConstantBuffers(0, 2, cbs);
+    m_ctx->PSSetConstantBuffers(0, 3, cbs);
 
     for (auto& s : mesh.sections) {
         if (!s.indexCount) continue;
@@ -512,11 +536,28 @@ void Renderer::DrawMesh(const GpuMesh& mesh, const Mat4* instances, u32 count) {
             memcpy(ms.pData, &mc, sizeof(mc));
             m_ctx->Unmap(m_materialCb.Get(), 0);
         }
-        ID3D11ShaderResourceView* srvs[2] = {(mat->diffuse ? mat->diffuse : m_white)->srv.Get(), (mat->normal ? mat->normal : m_flatNormal)->srv.Get()};
-        m_ctx->PSSetShaderResources(0, 2, srvs);
-        bool noCull = mat->twoSided || mat->masked || !m_opt.backfaceCulling;
+        const GpuGraphShader* g = m_opt.graphMaterials && mat->graph && mat->graph->ps ? mat->graph.get() : nullptr;
+        if (g) {
+            ID3D11ShaderResourceView* srvs[32] = {};
+            for (size_t k = 0; k < g->textures.size() && k < 31; k++) srvs[k] = g->textures[k] ? g->textures[k]->srv.Get() : nullptr;
+            srvs[31] = m_white->srv.Get();
+            m_ctx->PSSetShaderResources(0, 32, srvs);
+            m_ctx->PSSetShader(g->ps.Get(), nullptr, 0);
+            ID3D11BlendState* bs = g->blend == 2 ? m_lineBlend.Get() : g->blend == 3 ? m_addBlend.Get() : g->blend == 4 ? m_modBlend.Get() : m_opaqueBlend.Get();
+            m_ctx->OMSetBlendState(bs, nullptr, 0xffffffff);
+            m_ctx->OMSetDepthStencilState(g->blend >= 2 ? m_depthNoWrite.Get() : m_depth.Get(), 0);
+        } else {
+            ID3D11ShaderResourceView* srvs[2] = {(mat->diffuse ? mat->diffuse : m_white)->srv.Get(), (mat->normal ? mat->normal : m_flatNormal)->srv.Get()};
+            m_ctx->PSSetShaderResources(0, 2, srvs);
+            m_ctx->PSSetShader(m_meshPs.Get(), nullptr, 0);
+        }
+        bool noCull = mat->twoSided || mat->masked || !m_opt.backfaceCulling || (g && g->blend >= 2);
         m_ctx->RSSetState(m_opt.wireframe ? m_rsWire.Get() : m_rsSolid[noCull ? 1 : 0].Get());
         m_ctx->DrawIndexedInstanced(s.indexCount, count, s.firstIndex, 0, 0);
+        if (g) {
+            m_ctx->OMSetBlendState(m_opaqueBlend.Get(), nullptr, 0xffffffff);
+            m_ctx->OMSetDepthStencilState(m_depth.Get(), 0);
+        }
         m_drawnTris += (u64)s.indexCount / 3 * count;
     }
 }

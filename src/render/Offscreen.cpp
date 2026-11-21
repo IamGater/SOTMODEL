@@ -46,6 +46,13 @@ bool RenderMeshPreviews(PackageCache& cache, const std::vector<MeshData>& meshes
         auto gm = h->assets->Mesh(mesh, req.lod, req.draw.textures);
         if (!gm) { if (error) *error = "mesh has no renderable geometry"; ok = false; break; }
         keep.push_back(gm);
+        if (req.draw.graphMaterials) {
+            h->assets->EnsureGraphShaders(*gm);
+            if (req.graphNotes && out.empty())
+                for (auto& m : gm->materials)
+                    if (m && m->graph)
+                        req.graphNotes->push_back(m->path + ": " + (m->graph->ps ? Fmt("compiled (%.0f ms, %zu textures)", m->graph->compileMs, m->graph->textures.size()) : m->graph->error));
+        }
         Camera cam;
         cam.Frame(bmin, bmax);
         cam.yaw = req.yaw;
@@ -116,4 +123,27 @@ bool RenderWorldPreview(PackageCache& cache, const WorldData& world, const World
     }
     h->assets->Trim();
     return ok;
+}
+
+MeshLod MakePreviewSphere(float radius, int seg, int rings) {
+    MeshLod l;
+    l.numUVs = 1;
+    for (int r = 0; r <= rings; r++) {
+        float v = (float)r / rings, th = v * kPi;
+        for (int s = 0; s <= seg; s++) {
+            float u = (float)s / seg, ph = u * 2 * kPi;
+            Vec3 n{sinf(th) * cosf(ph), sinf(th) * sinf(ph), cosf(th)};
+            l.positions.push_back(n * radius);
+            l.normals.push_back(n);
+            l.tangents.push_back({-sinf(ph), cosf(ph), 0, 1});
+            l.uvs.push_back({u * 2, v});
+        }
+    }
+    for (int r = 0; r < rings; r++)
+        for (int s = 0; s < seg; s++) {
+            u32 a = r * (seg + 1) + s, b = a + seg + 1;
+            l.indices.insert(l.indices.end(), {a, a + 1, b, a + 1, b + 1, b});
+        }
+    l.sections.push_back({0, 0, (u32)(l.indices.size() / 3), 0, (u32)l.positions.size() - 1, true, 0});
+    return l;
 }

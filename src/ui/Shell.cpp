@@ -1545,7 +1545,7 @@ void App::DrawDocTabs(float height) {
 
 void App::DrawDocContent(Document& d) {
     ImVec2 avail = ImGui::GetContentRegionAvail();
-    bool has3d = !d.loading && (d.hasMesh || d.anim || d.isWorld);
+    bool has3d = !d.loading && ((d.hasMesh && (!d.hasMaterial || d.materialSphere)) || d.anim || d.isWorld);
     bool hasImage = !d.loading && (d.texture || (d.hasMaterial && !d.materialTextures.empty()));
     bool hasAudio = !d.loading && (d.audio || d.isBank || !d.audioError.empty());
     bool hasTable = !d.loading && d.table != nullptr;
@@ -1728,6 +1728,10 @@ void App::DrawImagePanel(Document& d) {
         }
     } else if (!tex) {
         Text(dl, ImVec2(p.x + m, p.y + headH + m), kTextDim, "(texture not loaded)");
+    }
+    if (d.hasMaterial && d.mesh) {   // back to the 3D sphere (graph shader)
+        ImGui::SetCursorScreenPos(ImVec2(p.x + w - Dip(96), p.y + Dip(4)));
+        if (ImGui::SmallButton("Sphere 3D")) d.materialSphere = true;
     }
 }
 

@@ -4,6 +4,7 @@
 #include "ue/Blueprint.h"
 #include "ue/Collision.h"
 #include "ue/WorldLayout.h"
+#include "render/Offscreen.h"
 #include "imgui.h"
 #include "imgui_internal.h"
 #include <windows.h>
@@ -119,30 +120,6 @@ std::string GamePathToPackage(std::string_view p) {
 
 bool IsPackageFile(std::string_view p) { return IEndsWith(p, ".uasset") || IEndsWith(p, ".umap"); }
 
-// UV sphere used to preview materials
-static MeshLod MakeSphere(float radius, int seg, int rings) {
-    MeshLod l;
-    l.numUVs = 1;
-    for (int r = 0; r <= rings; r++) {
-        float v = (float)r / rings, th = v * kPi;
-        for (int s = 0; s <= seg; s++) {
-            float u = (float)s / seg, ph = u * 2 * kPi;
-            Vec3 n{sinf(th) * cosf(ph), sinf(th) * sinf(ph), cosf(th)};
-            l.positions.push_back(n * radius);
-            l.normals.push_back(n);
-            l.tangents.push_back({-sinf(ph), cosf(ph), 0, 1});
-            l.uvs.push_back({u * 2, v});
-        }
-    }
-    for (int r = 0; r < rings; r++)
-        for (int s = 0; s < seg; s++) {
-            u32 a = r * (seg + 1) + s, b = a + seg + 1;
-            l.indices.insert(l.indices.end(), {a, a + 1, b, a + 1, b + 1, b});
-        }
-    l.sections.push_back({0, 0, (u32)(l.indices.size() / 3), 0, (u32)l.positions.size() - 1, true, 0});
-    return l;
-}
-
 // ---------------------------------------------------------------- app
 
 App::App() { m_settings.Load(); }
@@ -188,7 +165,7 @@ bool App::Init(void* hwnd, ID3D11Device* dev, ID3D11DeviceContext* ctx) {
         LOGE("renderer: %s", err.c_str());
         return false;
     }
-    MeshLod sphere = MakeSphere(50, 64, 32);
+    MeshLod sphere = MakePreviewSphere(50, 64, 32);
     m_sphere = m_renderer->CreateMesh(sphere, {-50, -50, -50}, {50, 50, 50});
     LOGI("settings: %s", Narrow(Settings::Path()).c_str());
     if (startTab >= 0) m_leftTab = startTab;
@@ -459,6 +436,21 @@ void App::LoadDocument(std::shared_ptr<Document> d) {
                     auto s = std::make_shared<GpuMesh>(*m_sphere);
                     s->materials = {m_assets->Material(objPath)};
                     d->gpuMesh = s;
+                    auto sm = std::make_shared<MeshData>();   // the model view needs the mesh data too
+                    sm->name = "sphere";
+                    sm->lods.push_back(MakePreviewSphere(50, 64, 32));
+                    MeshMaterialSlot slot;
+                    slot.name = d->name;
+                    slot.materialPath = objPath;
+                    sm->materials.push_back(slot);
+                    sm->ComputeBounds();
+                    d->mesh = sm;
+                    d->hasMesh = true;
+                    d->draw.graphMaterials = true;
+                    if (auto g = m_assets->GraphShader(objPath)) {
+                        auto mat = s->materials[0];
+                        Post([mat, g] { if (mat && !mat->graph) mat->graph = g; });
+                    }
                     d->camera.Frame(s->boundsMin, s->boundsMax);
                     d->camera.yaw = 180;
                     d->camera.pitch = -10;
@@ -709,6 +701,17 @@ void App::DrawModel(Document& d) {
         FlowToggle("Sockets", &d.showSockets);
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Socket axes: X red, Y green, Z blue (%zu sockets)", d.sockets.size());
     }
+    if (FlowToggle("Graph shader", &d.draw.graphMaterials) && d.draw.graphMaterials) RequestGraphShaders(d);
+    if (ImGui::IsItemHovered()) {
+        std::string tip = "Draw each material with its translated node graph compiled as a pixel shader\n(textures, parameters, panners, blend modes; engine inputs are stubbed)";
+        if (d.gpuMesh)
+            for (auto& mat : d.gpuMesh->materials)
+                if (mat && mat->graph)
+                    tip += "\n" + mat->path.substr(mat->path.rfind('/') + 1) + ": " +
+                           (mat->graph->ps ? Fmt("ok, %.0f ms", mat->graph->compileMs) : mat->graph->error.substr(0, 200));
+        ImGui::SetTooltip("%s", tip.c_str());
+    }
+    if (d.hasMaterial && FlowButton("Texture pages")) d.materialSphere = false;
     if (FlowButton("Frame")) d.camera.Frame(d.gpuMesh->boundsMin, d.gpuMesh->boundsMax);
     EndToolbar();
 
@@ -1349,4 +1352,18 @@ void App::DrawSettings() {
         }
     }
     ImGui::EndPopup();
+}
+
+void App::RequestGraphShaders(Document& d) {
+    if (!d.gpuMesh) return;
+    std::vector<std::shared_ptr<GpuMaterial>> mats;
+    for (auto& m : d.gpuMesh->materials)
+        if (m && !m->graph && !m->path.empty()) mats.push_back(m);
+    if (mats.empty()) return;
+    m_jobs->Push([this, mats] {
+        for (auto& m : mats) {
+            auto g = m_assets->GraphShader(m->path);
+            Post([m, g] { if (!m->graph) m->graph = g; });
+        }
+    });
 }

@@ -76,6 +76,7 @@ or `/Game/Models/Props/Common/cmn_barrel_debris_02_a.cmn_barrel_debris_02_a`.
 | `get_animation_info` | AnimSequence: frames, length, fps, compression, skeleton, animated bones (+ a mesh that can show it) |
 | `preview_animation` | contact sheet PNG of an animation posed on a skeletal mesh (found automatically or `mesh=`) |
 | `get_anim_asset_info` | AnimMontage (sections, slot segments, notifies with times), BlendSpace / 1D / AimOffset (axes, samples; `x=`/`y=` adds the sample weights there), animation blueprint (baked state machines, transitions with crossfade, sequence / blend space players, notify events); plain sequences list their notifies |
+| `preview_material` | material on a sphere (or `mesh=`); `graph=true` renders the translated node graph compiled as a pixel shader (stubbed engine inputs), `graph=false` the simple viewer shading; reports the compile result, `shader_source=true` returns the generated shader |
 | `get_particle_system` | Cascade ParticleSystem: emitters (sprite / mesh / GPU / beam / ribbon, material + blend mode, mesh, alignment, duration / loops, subUV grid, spawn rate, bursts) and each module's baked distributions (`curves=true` adds sampled values) |
 | `preview_particles` | contact sheet PNG of the CPU-simulated sprites (`time`, `frames`, `size`, `yaw`, `pitch`) |
 | `preview_blend_space` | PNG of the blended pose of a blend space at `x`/`y` (`time` 0..1 of each sample, played in sync) |
@@ -129,6 +130,12 @@ Typical flow: `search` → `get_package` → `get_properties` / `preview_*` → 
   AnimBlueprintGeneratedClass.BakedStateMachines has states / transitions; the class defaults hold the
   `AnimGraphNode_*` player structs (node indices can't be mapped to states in cooked data). The GUI shows montages as a
   timeline over the posed mesh, blend spaces as a draggable grid with the blended pose, anim blueprints as a state graph.
+- Graph shaders (render/GraphShader.cpp): `get_material_hlsl` output + a stub UE environment (FMaterialPixelParameters,
+  View / Primitive structs, Texture2DSample & co, Transform*_AToB, noise, scene textures) -> `GraphPSMain` (ps_5_0).
+  Parameters become `static` constants, `Tex_*` get t-registers in declaration order with `Tex_*Sampler` -> one wrap
+  sampler, everything after `CalcVertexMaterialInputs` is dropped. Blend: masked clips OpacityMask at 1/3, translucent /
+  additive / modulate blend without depth writes. Scene depth / scene colour / clouds are constants, so depth fades and
+  refraction look flat. GUI: "Graph shader" toggle in the model view (material tabs open a sphere with it on).
 - Particles (Cascade): each module's `FRawDistribution*` property carries the cooked lookup table as tagged properties
   (`Table{Op, EntryCount, EntryStride, SubEntryStride, TimeScale, TimeBias, Values}`; Op 1 value, 2 random min..max,
   3 min or max); without a table the distribution export is read. SoT specifics: `Additional*` properties are per-group
