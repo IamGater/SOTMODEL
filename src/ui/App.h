@@ -4,6 +4,7 @@
 #include "render/WorldScene.h"
 #include "ue/Material.h"
 #include "ue/Mesh.h"
+#include "ue/MeshExtras.h"
 #include "ue/AnimPose.h"
 #include "export/Exporter.h"
 #include "audio/Player.h"
@@ -91,6 +92,13 @@ struct Document {
     std::string collisionNote;
     bool showCollision = false;
     std::vector<Vec3> collisionLines;
+    // mesh sockets / morph targets (read when the model view first shows)
+    bool meshExtrasLoaded = false, showSockets = false, morphDirty = false;
+    std::vector<MeshSocket> sockets;
+    std::vector<Vec3> socketLines[3];   // X / Y / Z axes
+    std::vector<MorphTarget> morphs;
+    std::vector<float> morphWeights;
+    char morphFilter[64] = {};
 
     // world (.umap)
     bool isWorld = false;

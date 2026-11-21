@@ -59,7 +59,7 @@ bool RenderMeshPreviews(PackageCache& cache, const std::vector<MeshData>& meshes
         }
         Mat4 id = Mat4::Identity();
         h->renderer.DrawMesh(*gm, &id, 1);
-        if (!req.lines.empty()) h->renderer.DrawLines(req.lines, req.lineColor);
+        for (auto& o : req.overlays) h->renderer.DrawLines(o.segments, o.color);
         h->renderer.EndFrame();
         Image img;
         if (!h->renderer.ReadOutput(img)) { if (error) *error = "readback failed"; ok = false; break; }

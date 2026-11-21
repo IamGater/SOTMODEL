@@ -1,5 +1,6 @@
 #include "app/Api.h"
 #include "ue/Collision.h"
+#include "ue/MeshExtras.h"
 #include "core/Json.h"
 #include "ue/Mesh.h"
 #include "ue/Material.h"
@@ -232,7 +233,8 @@ void RegisterMeshTools(Api& api) {
 
     api.Register({"get_mesh_info",
                   "Decoded static/skeletal mesh summary: LODs (vertices, triangles, UV sets, sections), material slots with paths, "
-                  "bounds in cm, simple collision (BodySetup / PhysicsAsset shape counts), and for skeletal meshes the bone hierarchy.",
+                  "bounds in cm, simple collision (BodySetup / PhysicsAsset shape counts), sockets (mesh + skeleton, bone, transform), morph targets "
+                  "and for skeletal meshes the bone hierarchy.",
                   R"({"type":"object","properties":{"path":{"type":"string"},"bones":{"type":"boolean","default":true}},"required":["path"]})", "path",
                   [](Api& a, const JsonValue& args) {
                       std::string err;
@@ -296,6 +298,43 @@ void RegisterMeshTools(Api& api) {
                           if (!col.traceFlag.empty()) w.KV("traceFlag", col.traceFlag);
                           w.EndObject();
                       }
+                      {
+                          std::vector<MeshSocket> sockets;
+                          ReadMeshSockets(*a.cache, *pkg, main - 1, m, sockets);
+                          if (!sockets.empty()) {
+                              w.Key("sockets");
+                              w.BeginArray();
+                              for (auto& so : sockets) {
+                                  w.BeginObject();
+                                  w.KV("name", so.name);
+                                  if (!so.bone.empty()) w.KV("bone", so.bone);
+                                  w.Key("location"); w.BeginArray(); w.Num(so.location.x); w.Num(so.location.y); w.Num(so.location.z); w.EndArray();
+                                  w.Key("rotation"); w.BeginArray(); w.Num(so.rotation.x); w.Num(so.rotation.y); w.Num(so.rotation.z); w.EndArray();
+                                  if (so.scale.x != 1 || so.scale.y != 1 || so.scale.z != 1) { w.Key("scale"); w.BeginArray(); w.Num(so.scale.x); w.Num(so.scale.y); w.Num(so.scale.z); w.EndArray(); }
+                                  Vec3 t = so.transform.Translation();
+                                  w.Key("meshSpace"); w.BeginArray(); w.Num(t.x); w.Num(t.y); w.Num(t.z); w.EndArray();
+                                  if (so.source != "mesh") w.KV("from", so.source);
+                                  w.EndObject();
+                              }
+                              w.EndArray();
+                          }
+                      }
+                      if (m.skeletal) {
+                          std::vector<MorphTarget> morphs;
+                          ReadMorphTargets(*pkg, main - 1, morphs);
+                          if (!morphs.empty()) {
+                              w.Key("morphTargets");
+                              w.BeginArray();
+                              for (auto& mt : morphs) {
+                                  w.BeginObject();
+                                  w.KV("name", mt.name);
+                                  w.KV("lod0Vertices", (i64)(mt.lods.empty() ? 0 : mt.lods[0].size()));
+                                  w.KV("lods", (i64)mt.lods.size());
+                                  w.EndObject();
+                              }
+                              w.EndArray();
+                          }
+                      }
                       if (m.skeletal) {
                           if (!m.skeletonPath.empty()) w.KV("skeleton", m.skeletonPath);
                           w.KV("boneCount", (i64)m.skeleton.size());
@@ -323,7 +362,9 @@ void RegisterMeshTools(Api& api) {
                   R"({"type":"object","properties":{"path":{"type":"string"},"width":{"type":"integer","default":768},"height":{"type":"integer","default":768},)"
                   R"("yaw":{"type":"number","default":-135},"pitch":{"type":"number","default":-20},"lod":{"type":"integer","default":0},)"
                   R"("textures":{"type":"boolean","default":true},"wireframe":{"type":"boolean","default":false},"grid":{"type":"boolean","default":true},)"
-                  R"("collision":{"type":"boolean","default":false,"description":"overlay the simple collision (boxes, spheres, capsules, convex hulls) as green wireframe"},"save_to":{"type":"string"}},"required":["path"]})",
+                  R"("collision":{"type":"boolean","default":false,"description":"overlay the simple collision (boxes, spheres, capsules, convex hulls) as green wireframe"},)"
+                  R"("sockets":{"type":"boolean","default":false,"description":"draw socket axes: X red, Y green, Z blue"},)"
+                  R"("morphs":{"type":"object","description":"skeletal meshes: morph target weights by name, e.g. {\"Female_N\": 1}"},"save_to":{"type":"string"}},"required":["path"]})",
                   "path",
                   [](Api& a, const JsonValue& args) {
                       std::string err;
@@ -343,8 +384,31 @@ void RegisterMeshTools(Api& api) {
                       req.draw.grid = args.GetBool("grid", true);
                       CollisionData col;
                       if (args.GetBool("collision", false) && ReadMeshCollision(*a.cache, *pkg, main - 1, m, col)) {
-                          CollisionLines(col, req.lines);
-                          req.lineColor = 0xff60ff40u;
+                          req.overlays.push_back({0xff60ff40u, {}});
+                          CollisionLines(col, req.overlays.back().segments);
+                      }
+                      std::vector<MeshSocket> sockets;
+                      if (args.GetBool("sockets", false) && ReadMeshSockets(*a.cache, *pkg, main - 1, m, sockets)) {
+                          float size = std::max(2.f, Length(m.boundsMax - m.boundsMin) * 0.06f);
+                          PreviewRequest::Overlay x{0xff4040ffu, {}}, y{0xff40ff40u, {}}, z{0xffff6040u, {}};
+                          SocketAxes(sockets, size, x.segments, y.segments, z.segments);
+                          req.overlays.push_back(std::move(x));
+                          req.overlays.push_back(std::move(y));
+                          req.overlays.push_back(std::move(z));
+                      }
+                      std::vector<std::string> applied;
+                      if (const JsonValue* mw = args.Get("morphs"); mw && !mw->obj.empty() && m.skeletal) {
+                          std::vector<MorphTarget> morphs;
+                          ReadMorphTargets(*pkg, main - 1, morphs);
+                          std::vector<float> weights(morphs.size(), 0.f);
+                          for (auto& [k, v] : mw->obj)
+                              for (size_t i = 0; i < morphs.size(); i++)
+                                  if (IEquals(morphs[i].name, k)) { weights[i] = (float)v.num; applied.push_back(morphs[i].name); }
+                          int lod = std::clamp(req.lod, 0, (int)m.lods.size() - 1);
+                          std::vector<Vec3> pos, nrm;
+                          ApplyMorphs(m.lods[lod], lod, morphs, weights, pos, nrm);
+                          m.lods[lod].positions = std::move(pos);
+                          m.lods[lod].normals = std::move(nrm);
                       }
                       Image img;
                       if (!RenderMeshPreview(*a.cache, m, req, img, &err)) return ApiResult::Error(err);

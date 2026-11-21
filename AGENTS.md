@@ -71,8 +71,8 @@ or `/Game/Models/Props/Common/cmn_barrel_debris_02_a.cmn_barrel_debris_02_a`.
 | `get_package` | cheap overview: exports + classes, dependencies, decoded native summaries |
 | `get_properties` | full FModel-style JSON (optionally one export) |
 | `preview_texture` | decoded texture as a PNG image + format info |
-| `get_mesh_info` | LODs, sections, material slots, bounds (and bones for skeletal meshes). Includes the simple collision: BodySetup (static) or PhysicsAsset (skeletal) box / sphere / capsule / convex counts |
-| `preview_mesh` | renders a mesh with its textures to a PNG (`yaw`/`pitch` orbit, `wireframe`, `lod`). `collision=true` overlays the simple collision as green wireframe |
+| `get_mesh_info` | LODs, sections, material slots, bounds (and bones for skeletal meshes). Includes the simple collision: BodySetup (static) or PhysicsAsset (skeletal) box / sphere / capsule / convex counts, sockets (mesh + skeleton: bone, relative and mesh-space transform) and morph targets (vertices per LOD) |
+| `preview_mesh` | renders a mesh with its textures to a PNG (`yaw`/`pitch` orbit, `wireframe`, `lod`). `collision=true` overlays the simple collision as green wireframe, `sockets=true` draws socket axes, `morphs={"Name":1}` applies morph target weights; `lod` picks the LOD |
 | `get_animation_info` | AnimSequence: frames, length, fps, compression, skeleton, animated bones (+ a mesh that can show it) |
 | `preview_animation` | contact sheet PNG of an animation posed on a skeletal mesh (found automatically or `mesh=`) |
 | `get_world_info` | a map (.umap) as a scene: sublevels, placed meshes with Blueprint templates resolved, landscape components, instance counts, unresolved components (`filter=rock,-small` narrows the meshes). `path=Athena/Content/Maps/World_Layout/sot_world_layout_2.umap` is the whole sea: every island placed by the world layout; `islands=wsp_,-fort` / `region=[minX,minY,maxX,maxY]` select islands, `proxies=true` loads each island's merged LOD proxy instead (whole sea in seconds). Also lists lights by type, decal materials, height fog and the water level |
@@ -119,6 +119,9 @@ Typical flow: `search` → `get_package` → `get_properties` / `preview_*` → 
 - Collision: cooked 4.10 static meshes keep their BodySetup as an export under the mesh (not a tagged property).
   Box X/Y/Z are full sizes; capsules (Sphyl) are along Z with Length = the cylinder part. Convex elements only store
   their points (VertexData); SOTModel rebuilds the hull. Skeletal meshes: PhysicsAsset bodies at their bones' reference pose.
+- Morph targets (UMorphTarget): after the tagged properties a 4-byte object-guid flag, the strip flags (2 bytes), then per
+  LOD `{PositionDelta, TangentZDelta, SourceIdx}` (28 bytes, SourceIdx = render vertex). SoT's `MeshPatchAsset` exports
+  in the same packages are a different (custom) thing.
 - Lights / decals / fog: UE 4.10 decals are a unit box scaled by the component (no DecalSize yet). Point / spot lights with
   inverse-squared falloff are in lumens (glTF candela = lumens / 4pi). The open world's sun, sky light and the two
   ExponentialHeightFog components (above / under water) are in `wsp_common/wsp_lighting`, the FFT water in `wsp_water`;

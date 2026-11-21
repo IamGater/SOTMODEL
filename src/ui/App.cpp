@@ -499,7 +499,10 @@ void App::RebuildMeshLod(Document& d) {
         auto gm = m_assets->Mesh(*mesh, lod);
         Post([this, gm, id] {
             for (auto& x : m_docs)
-                if (x->id == id && gm) x->gpuMesh = gm;
+                if (x->id == id && gm) {
+                    x->gpuMesh = gm;
+                    x->morphDirty = true;   // morph weights are re-applied on the new LOD
+                }
         });
     });
 }
@@ -572,11 +575,38 @@ static void DrawViewport(Renderer& r, Document& d, ImVec2 size, bool allowFly) {
         r.DrawMesh(*d.gpuMesh, &id, 1);
         if (!d.boneLines.empty()) r.DrawLines(d.boneLines, 0xff40d0ffu);
         if (d.showCollision && !d.collisionLines.empty()) r.DrawLines(d.collisionLines, 0xff60ff40u);
+        if (d.showSockets) {
+            static const u32 axis[3] = {0xff4040ffu, 0xff40ff40u, 0xffff6040u};
+            for (int k = 0; k < 3; k++)
+                if (!d.socketLines[k].empty()) r.DrawLines(d.socketLines[k], axis[k]);
+        }
     });
 }
 
 void App::DrawModel(Document& d) {
     auto& m = *d.mesh;
+    if (!d.meshExtrasLoaded) {
+        d.meshExtrasLoaded = true;
+        if (auto pkg = m_api->cache->LoadPath(d.gamePath); pkg && pkg->MainExport()) {
+            if (ReadMeshSockets(*m_api->cache, *pkg, pkg->MainExport() - 1, m, d.sockets)) {
+                float size = std::max(2.f, Length(m.boundsMax - m.boundsMin) * 0.05f);
+                SocketAxes(d.sockets, size, d.socketLines[0], d.socketLines[1], d.socketLines[2]);
+            }
+            if (m.skeletal && ReadMorphTargets(*pkg, pkg->MainExport() - 1, d.morphs)) d.morphWeights.assign(d.morphs.size(), 0.f);
+        }
+    }
+    if (d.morphDirty && !d.morphs.empty()) {   // morphs need the dynamic (CPU written) vertex buffer
+        d.morphDirty = false;
+        bool any = false;
+        for (float w : d.morphWeights) any |= w != 0;
+        if (any || (d.gpuMesh && !d.gpuMesh->cpuVertices.empty())) {
+            int lod = std::clamp(d.lod, 0, (int)m.lods.size() - 1);
+            if (!d.gpuMesh || d.gpuMesh->cpuVertices.empty()) d.gpuMesh = m_assets->Mesh(m, lod, true, true);
+            std::vector<Vec3> pos, nrm;
+            ApplyMorphs(m.lods[lod], lod, d.morphs, d.morphWeights, pos, nrm);
+            if (d.gpuMesh) m_renderer->UpdateMeshVertices(*d.gpuMesh, pos, nrm);
+        }
+    }
     BeginToolbar();
     if (m.lods.size() > 1) {
         ImGui::SetNextItemWidth(80 * ImGui::GetFontSize() / 16.f);
@@ -607,6 +637,10 @@ void App::DrawModel(Document& d) {
         } else d.collisionNote = "no simple collision: " + err;
     }
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Simple collision (BodySetup / PhysicsAsset) as green wireframe%s%s", d.collisionNote.empty() ? "" : "\n", d.collisionNote.c_str());
+    if (!d.sockets.empty()) {
+        FlowToggle("Sockets", &d.showSockets);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Socket axes: X red, Y green, Z blue (%zu sockets)", d.sockets.size());
+    }
     if (FlowButton("Frame")) d.camera.Frame(d.gpuMesh->boundsMin, d.gpuMesh->boundsMax);
     EndToolbar();
 
@@ -639,6 +673,39 @@ void App::DrawModel(Document& d) {
         ImGui::PopID();
     }
     if (m.skeletal) ImGui::TextDisabled("%zu bones", m.skeleton.size());
+    if (!d.sockets.empty()) {
+        ImGui::Separator();
+        ImGui::TextDisabled("Sockets (%zu)", d.sockets.size());
+        for (auto& so : d.sockets) {
+            ImGui::TextUnformatted(so.name.c_str());
+            if (!so.bone.empty()) { ImGui::SameLine(); ImGui::TextDisabled("@ %s", so.bone.c_str()); }
+            if (ImGui::IsItemHovered() || ImGui::IsItemClicked()) {
+                Vec3 t = so.transform.Translation();
+                ImGui::SetTooltip("location %.2f %.2f %.2f\nrotation P %.1f Y %.1f R %.1f\nscale %.2f %.2f %.2f\nmesh space %.2f %.2f %.2f%s", so.location.x,
+                                  so.location.y, so.location.z, so.rotation.x, so.rotation.y, so.rotation.z, so.scale.x, so.scale.y, so.scale.z, t.x, t.y, t.z,
+                                  so.source == "skeleton" ? "\n(from the skeleton)" : "");
+            }
+        }
+    }
+    if (!d.morphs.empty()) {
+        ImGui::Separator();
+        ImGui::TextDisabled("Morph targets (%zu)", d.morphs.size());
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Reset")) {
+            std::fill(d.morphWeights.begin(), d.morphWeights.end(), 0.f);
+            d.morphDirty = true;
+        }
+        ImGui::SetNextItemWidth(-1);
+        ImGui::InputTextWithHint("##mf", "filter morphs", d.morphFilter, sizeof(d.morphFilter));
+        std::string f = ToLower(d.morphFilter);
+        for (size_t i = 0; i < d.morphs.size(); i++) {
+            if (!f.empty() && ToLower(d.morphs[i].name).find(f) == std::string::npos) continue;
+            ImGui::PushID((int)i + 1000);
+            ImGui::SetNextItemWidth(-1);
+            if (ImGui::SliderFloat("##w", &d.morphWeights[i], 0, 1, (d.morphs[i].name + " %.2f").c_str())) d.morphDirty = true;
+            ImGui::PopID();
+        }
+    }
     ImGui::EndChild();
 }
 
