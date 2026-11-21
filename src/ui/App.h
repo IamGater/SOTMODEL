@@ -262,10 +262,8 @@ private:
     bool m_locInKeys = false;
     bool m_searchMatchCase = false, m_searchRegex = false;
     std::string m_searchError;
-    // reference index: package entry -> packages importing it (built once in the background, cached on disk)
-    std::unordered_map<u32, std::vector<u32>> m_refIndex;
-    std::mutex m_refMutex;
-    std::atomic<int> m_refDone{0}, m_refTotal{0}, m_refWorkers{0};
+    // reference index (Api::references): built once in the background, cached on disk
+    std::atomic<int> m_refDone{0}, m_refTotal{0};
     bool m_refReady = false, m_refBuilding = false;
     u32 m_refTarget = UINT32_MAX;
     // explorer texture thumbnails

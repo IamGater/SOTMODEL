@@ -254,103 +254,31 @@ static std::wstring DataDir() {
     return p.substr(0, p.find_last_of(L'\\'));
 }
 
-// identifies the mounted archive set, so a cached index is only reused for the same game files
-static u64 ArchiveSignature(const Vfs& vfs) {
-    u64 h = 1469598103934665603ull;
-    auto mix = [&](const void* p, size_t n) { for (size_t i = 0; i < n; i++) { h ^= ((const u8*)p)[i]; h *= 1099511628211ull; } };
-    u64 count = vfs.FileCount();
-    mix(&count, sizeof(count));
-    for (auto& p : vfs.Paks()) {
-        mix(p->name.data(), p->name.size());
-        mix(&p->fileCount, sizeof(p->fileCount));
-    }
-    return h;
-}
-
 void App::StartReferenceIndex() {
     if (m_refReady || m_refBuilding || m_mountState != MountState::Ready) return;
-    const Vfs& vfs = m_api->vfs;
-    u64 sig = ArchiveSignature(vfs);
-    std::wstring cache = DataDir() + L"\\References.bin";
-    // cached: "SOTREF1" sig targets{entry count refs...}
-    Bytes data;
-    if (ReadWholeFile(cache, data) && data.size() >= 20 && memcmp(data.data(), "SOTREF1", 7) == 0 && *(const u64*)(data.data() + 8) == sig) {
-        size_t pos = 16;
-        u32 n = *(const u32*)(data.data() + pos);
-        pos += 4;
-        for (u32 i = 0; i < n && pos + 8 <= data.size(); i++) {
-            u32 target = *(const u32*)(data.data() + pos), cnt = *(const u32*)(data.data() + pos + 4);
-            pos += 8;
-            if (pos + cnt * 4ull > data.size()) break;
-            auto& v = m_refIndex[target];
-            v.assign((const u32*)(data.data() + pos), (const u32*)(data.data() + pos) + cnt);
-            pos += cnt * 4ull;
-        }
+    if (m_api->references && m_api->references->Ready()) { m_refReady = true; return; }
+    auto idx = std::make_shared<ReferenceIndex>();
+    if (idx->LoadCache(m_api->vfs)) {
+        m_api->references = idx;
         m_refReady = true;
-        LOGI("references: loaded the index of %zu packages from cache", m_refIndex.size());
+        LOGI("references: loaded the index of %zu packages from cache", idx->Size());
         return;
     }
-    std::vector<u32> packages;
-    for (u32 i = 0; i < vfs.FileCount(); i++) if (IsPackageFile(vfs.Path(i))) packages.push_back(i);
     m_refBuilding = true;
     m_refDone = 0;
-    m_refTotal = (int)packages.size();
-    const int workers = 2;   // the job pool stays free for documents
-    m_refWorkers = workers;
-    auto shared = std::make_shared<std::vector<u32>>(std::move(packages));
-    LOGI("references: indexing imports of %d packages (once, then cached)...", m_refTotal.load());
-    for (int w = 0; w < workers; w++)
-        m_refThreads.emplace_back([this, shared, w, workers, sig, cache] {
-            const Vfs& vfs = m_api->vfs;
-            std::unordered_map<u32, std::vector<u32>> local;
-            for (size_t k = w; k < shared->size() && !m_shutdown; k += workers) {
-                u32 e = (*shared)[k];
-                Bytes bytes;
-                Package pkg;
-                if (vfs.Read(e, bytes) && pkg.Load(std::move(bytes), std::string(vfs.Path(e)))) {
-                    for (auto& im : pkg.Imports()) {
-                        if (im.outerIndex != 0 || im.className != "Package" || !IStartsWith(im.objectName, "/Game/")) continue;
-                        i64 t = vfs.FindPackage(im.objectName);
-                        if (t >= 0 && (u32)t != e) local[(u32)t].push_back(e);
-                    }
-                }
-                m_refDone++;
-            }
-            {
-                std::lock_guard lk(m_refMutex);
-                for (auto& [t, v] : local) {
-                    auto& dst = m_refIndex[t];
-                    dst.insert(dst.end(), v.begin(), v.end());
-                }
-            }
-            if (--m_refWorkers == 0 && !m_shutdown) {
-                Bytes out(16);
-                memcpy(out.data(), "SOTREF1", 8);
-                memcpy(out.data() + 8, &sig, 8);
-                {
-                    std::lock_guard lk(m_refMutex);
-                    u32 n = (u32)m_refIndex.size();
-                    out.insert(out.end(), (u8*)&n, (u8*)&n + 4);
-                    for (auto& [t, v] : m_refIndex) {
-                        std::sort(v.begin(), v.end());
-                        v.erase(std::unique(v.begin(), v.end()), v.end());
-                        u32 cnt = (u32)v.size();
-                        out.insert(out.end(), (const u8*)&t, (const u8*)&t + 4);
-                        out.insert(out.end(), (u8*)&cnt, (u8*)&cnt + 4);
-                        out.insert(out.end(), (const u8*)v.data(), (const u8*)(v.data() + v.size()));
-                    }
-                }
-                CreateDirectories(DataDir());
-                WriteWholeFile(cache, out.data(), out.size());
-                Post([this] {
-                    m_refBuilding = false;
-                    m_refReady = true;
-                    LOGI("references: index ready (%zu referenced packages)", m_refIndex.size());
-                });
-            }
+    m_refTotal = 0;
+    LOGI("references: indexing the imports of every package (once, then cached)...");
+    m_refThreads.emplace_back([this, idx] {   // 2 workers: the job pool stays free for documents
+        if (!idx->Build(m_api->vfs, 2, m_shutdown, &m_refDone, &m_refTotal)) return;
+        idx->SaveCache(m_api->vfs);
+        Post([this, idx] {
+            m_api->references = idx;
+            m_refBuilding = false;
+            m_refReady = true;
+            LOGI("references: index ready (%zu referenced packages)", idx->Size());
         });
+    });
 }
-
 void App::FindReferences(u32 entry) {
     if (m_mountState != MountState::Ready) return;
     m_refTarget = entry;
@@ -379,8 +307,8 @@ void App::DrawReferencesTab() {
     }
     if (m_refTarget == UINT32_MAX) return;
     static const std::vector<u32> none;
-    auto it = m_refIndex.find(m_refTarget);
-    const std::vector<u32>& refs = it == m_refIndex.end() ? none : it->second;
+    const std::vector<u32>* found = m_api->references ? m_api->references->Referencers(m_refTarget) : nullptr;
+    const std::vector<u32>& refs = found ? *found : none;
     ImGui::TextDisabled("%zu package(s) reference it", refs.size());
     if (ImGui::BeginTable("##refs", 2, ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable | ImGuiTableFlags_BordersInnerV)) {
         ImGui::TableSetupScrollFreeze(0, 1);

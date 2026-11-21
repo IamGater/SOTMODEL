@@ -89,6 +89,8 @@ or `/Game/Models/Props/Common/cmn_barrel_debris_02_a.cmn_barrel_debris_02_a`.
 | `get_material_graph` | the expression nodes of a material / function: type, caption, position (auto-laid out: cooked packages strip editor positions) and input links |
 | `search_localization` | the game's translated strings (.locres) by text / key in any shipped language (en, de-DE, ru-RU, zh-CN, ...) |
 | `get_localized_text` | one FText (namespace + key) in every language |
+| `find_references` | packages that import the given one (meshes using a material, maps placing a Blueprint, ...); index built once, then cached |
+| `search_content` | packages by main class, by what they use (`uses`), by property name / value (structs, arrays and DataTable rows searched) |
 | `get_material` | material instance chain with every texture / scalar / vector parameter resolved |
 | `export` | write files: textures (PNG/DDS), meshes (glTF/OBJ), animations (glTF with skeleton + skinned mesh), JSON; `raw=true` writes any file as stored |
 | `get_audio_info` | Wwise audio: a `.wem` (codec, channels, rate, length) or a sound bank (`WwiseBank` package / `.bnk`) with its embedded media |

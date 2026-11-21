@@ -276,7 +276,7 @@ void App::ReloadArchives() {
     for (auto& t : m_refThreads) t.join();
     m_refThreads.clear();
     m_shutdown = false;
-    m_refIndex.clear();
+    m_api->references.reset();
     m_refReady = m_refBuilding = false;
     m_jobs->WaitIdle();
     m_assets.reset();

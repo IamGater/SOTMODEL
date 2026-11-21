@@ -6,6 +6,7 @@
 #include "ue/Package.h"
 #include "app/Settings.h"
 #include "ue/Localization.h"
+#include "app/RefIndex.h"
 
 // Tool layer shared by the command line (--cli) and the MCP server (--mcp): every tool takes JSON arguments and
 // returns JSON text (plus optional images), so any AI agent or script can browse, inspect and export game data.
@@ -28,6 +29,7 @@ void RegisterWorldTools(Api& api);  // ApiWorld.cpp: map / scene tools
 void RegisterAudioTools(Api& api);  // ApiAudio.cpp: Wwise audio tools
 void RegisterExportTools(Api& api); // ApiExport.cpp: map / animation set glTF exports
 void RegisterLocalizationTools(Api& api);   // ApiLocalization.cpp
+void RegisterSearchTools(Api& api);         // ApiSearch.cpp: content search, references
 void RegisterShaderTools(Api& api);   // ApiShaders.cpp: compiled material / global shaders
 // Several AnimSequence packages of one skeleton -> one .glb (ApiExport.cpp; also used by the UI).
 bool ExportAnimationSet(PackageCache& cache, const std::vector<std::shared_ptr<Package>>& animPkgs, const std::string& meshPath, Bytes& glb, std::string& note, std::string* error);
@@ -55,6 +57,9 @@ public:
     // localised strings of settings.language (FText "LocalizedString" in JSON); replaced, never freed while in use
     std::shared_ptr<Localization> localization;
     bool SetLanguage(const std::string& culture, std::string* error = nullptr);
+    // package imports index (find references); null until loaded from cache or built
+    std::shared_ptr<ReferenceIndex> references;
+    ReferenceIndex* EnsureReferences(bool buildIfMissing, std::string* error = nullptr);
 
     // helpers for tools
     i64 ResolveFile(const std::string& path) const;   // game path, /Game path or object path

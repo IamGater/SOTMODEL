@@ -1,4 +1,5 @@
 #include "app/Api.h"
+#include <thread>
 #include "ue/Blueprint.h"
 #include "core/Json.h"
 #include "ue/AssetJson.h"
@@ -54,6 +55,7 @@ Api::Api(Settings& s) : settings(s) {
     RegisterAudioTools(*this);
     RegisterExportTools(*this);
     RegisterLocalizationTools(*this);
+    RegisterSearchTools(*this);
     RegisterShaderTools(*this);
 }
 
@@ -70,6 +72,20 @@ bool Api::EnsureMounted(std::string* error) {
     std::string lerr;
     if (!SetLanguage(settings.language.empty() ? "en" : settings.language, &lerr) && settings.language != "en") SetLanguage("en");
     return true;
+}
+
+ReferenceIndex* Api::EnsureReferences(bool build, std::string* error) {
+    if (references && references->Ready()) return references.get();
+    auto idx = std::make_shared<ReferenceIndex>();
+    if (!idx->LoadCache(vfs)) {
+        if (!build) { if (error) *error = "the reference index is not built yet"; return nullptr; }
+        std::atomic<bool> cancel{false};
+        LOGI("references: indexing the imports of every package (once, then cached)...");
+        if (!idx->Build(vfs, std::max(2u, std::thread::hardware_concurrency() / 2), cancel)) { if (error) *error = "indexing failed"; return nullptr; }
+        idx->SaveCache(vfs);
+    }
+    references = idx;
+    return idx.get();
 }
 
 bool Api::SetLanguage(const std::string& culture, std::string* error) {
