@@ -156,6 +156,62 @@ bool ExportAnimationsGlb(PackageCache& cache, const std::vector<const AnimSequen
 
 // ------------------------------------------------------------------ whole maps
 
+// glTF node matrix (column-major) placing a light at `pos` shining along the UE direction `dir` (glTF lights shine along -Z)
+static void LightMatrix(const Vec3& pos, const Vec3& dir, float out[16]) {
+    Vec3 d = Normalize(GltfBuilder::ConvertDir(dir));
+    Vec3 z = d * -1.f;
+    Vec3 up = fabsf(z.y) < 0.99f ? Vec3{0, 1, 0} : Vec3{1, 0, 0};
+    Vec3 x = Normalize(Cross(up, z));
+    Vec3 y = Cross(z, x);
+    Vec3 t = GltfBuilder::ConvertPos(pos);
+    float m[16] = {x.x, x.y, x.z, 0, y.x, y.y, y.z, 0, z.x, z.y, z.z, 0, t.x, t.y, t.z, 1};
+    memcpy(out, m, sizeof m);
+}
+
+static std::string JsonStr(const std::string& s) {
+    std::string o = "\"";
+    for (char c : s) { if (c == '"' || c == '\\') o += '\\'; o += c; }
+    return o + "\"";
+}
+
+static void ExportWorldEffects(GltfBuilder& g, const WorldData& w, const std::vector<int>& levelNodes) {
+    auto parentOf = [&](u32 level) { return levelNodes[std::min<size_t>(level, levelNodes.size() - 1)]; };
+    static const char* types[] = {"point", "spot", "directional"};
+    int n = 0;
+    for (auto& l : w.lights) {
+        if (l.type == WorldLight::Sky) continue;
+        float intensity = l.type == WorldLight::Directional ? l.intensity
+                          : l.inverseSquared ? l.intensity / (4 * kPi)   // lumens -> candela
+                                             : l.intensity * 100;          // unitless brightness
+        float range = l.type == WorldLight::Directional ? 0 : l.radius * 0.01f;
+        std::string name = Fmt("%s_%d", types[l.type], n++);
+        int li = g.AddLight(name, types[l.type], l.color, intensity, range, l.innerCone * kPi / 180, std::max(l.outerCone, l.innerCone + 0.5f) * kPi / 180);
+        float m[16];
+        LightMatrix(l.position, l.direction, m);
+        int node = g.AddNode(name, -1, m, parentOf(l.level));
+        g.SetNodeLight(node, li);
+    }
+    for (auto& d : w.decals) {
+        // an empty scaled to the decal box (half extents): Blender shows it as a cube
+        Mat4 t = Mat4::FromTRS({}, {0, 0, 0, 1}, d.size * 0.01f) * d.transform;   // half extents in metres
+        float m[16];
+        GltfBuilder::ConvertMatrix(&t.m[0][0], m);
+        std::string name = "Decal_" + d.material.substr(d.material.rfind('.') + 1);
+        int node = g.AddNode(name, -1, m, parentOf(d.level));
+        Vec3 ext{Length(d.transform.TransformDir({d.size.x, 0, 0})), Length(d.transform.TransformDir({0, d.size.y, 0})), Length(d.transform.TransformDir({0, 0, d.size.z}))};
+        g.SetNodeExtras(node, "{\"decalMaterial\":" + JsonStr(d.material) + Fmt(",\"halfExtentsCm\":[%g,%g,%g]}", ext.x, ext.y, ext.z));
+    }
+    std::string extras;
+    if (w.hasWater) extras += Fmt("\"waterLevel\":%g", w.waterLevel * 0.01f);
+    for (auto& f : w.fogs) {
+        if (!extras.empty()) extras += ",";
+        extras += Fmt("\"%s\":{\"density\":%g,\"heightFalloff\":%g,\"fogHeight\":%g,\"startDistance\":%g,\"maxOpacity\":%g,\"color\":[%g,%g,%g]}",
+                      f.underwater ? "underwaterFog" : "heightFog", f.density, f.heightFalloff, f.position.z * 0.01f, f.startDistance * 0.01f, f.maxOpacity,
+                      f.color.x, f.color.y, f.color.z);
+    }
+    if (!extras.empty()) g.SetSceneExtras("{" + extras + "}");
+}
+
 bool ExportWorldGlb(PackageCache& cache, const WorldData& w, const WorldExportOptions& wo, Bytes& out, std::string* error,
                     const std::function<void(int, int)>& progress) {
     GltfBuilder g;
@@ -212,6 +268,7 @@ bool ExportWorldGlb(PackageCache& cache, const WorldData& w, const WorldExportOp
             g.AddNode(l.name, mi, nullptr, landRoot);
         }
     }
+    if (wo.lights) ExportWorldEffects(g, w, levelNodes);
     if (progress) progress(total, total);
     if (!meshes && w.landscapes.empty()) { if (error) *error = "the map has no exportable meshes"; return false; }
     out = g.Finish();

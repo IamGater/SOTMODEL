@@ -170,6 +170,20 @@ int GltfBuilder::AddNode(const std::string& name, int mesh, const float* matrix,
     return m_nodeCount++;
 }
 
+int GltfBuilder::AddLight(const std::string& name, const char* type, const Vec3& color, float intensity, float range, float innerCone, float outerCone) {
+    std::string l = "{\"name\":" + Q(name) + ",\"type\":\"" + type + "\",\"color\":[" + F(color.x) + "," + F(color.y) + "," + F(color.z) + "],\"intensity\":" + F(intensity);
+    if (range > 0) l += ",\"range\":" + F(range);
+    if (std::string(type) == "spot") l += ",\"spot\":{\"innerConeAngle\":" + F(innerCone) + ",\"outerConeAngle\":" + F(outerCone) + "}";
+    Append(m_lights, l + "}");
+    return m_lightCount++;
+}
+
+void GltfBuilder::SetNodeLight(int node, int light) {
+    m_nodeJson[node] += ",\"extensions\":{\"KHR_lights_punctual\":{\"light\":" + std::to_string(light) + "}}";
+}
+
+void GltfBuilder::SetNodeExtras(int node, const std::string& extras) { m_nodeJson[node] += ",\"extras\":" + extras; }
+
 void GltfBuilder::SetNodeSkin(int node, int skin) { m_nodeJson[node] += ",\"skin\":" + std::to_string(skin); }
 
 int GltfBuilder::AddSkin(const std::vector<Bone>& bones, int parentNode, std::vector<int>* boneNodes) {
@@ -299,7 +313,10 @@ Bytes GltfBuilder::Finish() {
     std::string roots;
     for (int r : m_roots) Append(roots, std::to_string(r));
     while (m_bin.size() % 4) m_bin.push_back(0);
-    std::string j = "{\"asset\":{\"version\":\"2.0\",\"generator\":\"SOTModel\"},\"scene\":0,\"scenes\":[{\"nodes\":[" + roots + "]}]";
+    std::string j = "{\"asset\":{\"version\":\"2.0\",\"generator\":\"SOTModel\"},\"scene\":0,\"scenes\":[{\"nodes\":[" + roots + "]" +
+                    (m_sceneExtras.empty() ? std::string() : ",\"extras\":" + m_sceneExtras) + "}]";
+    if (m_lightCount)
+        j += ",\"extensionsUsed\":[\"KHR_lights_punctual\"],\"extensions\":{\"KHR_lights_punctual\":{\"lights\":[" + m_lights + "]}}";
     if (m_nodeCount) j += ",\"nodes\":[" + nodes + "]";
     if (m_meshCount) j += ",\"meshes\":[" + m_meshes + "]";
     if (m_materialCount) j += ",\"materials\":[" + m_materials + "]";

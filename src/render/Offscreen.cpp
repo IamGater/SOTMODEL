@@ -102,8 +102,13 @@ bool RenderWorldPreview(PackageCache& cache, const WorldData& world, const World
         }
         cam.nearZ = std::max(1.f, cam.distance * 0.0005f);
         int w = std::clamp(req.width, 16, 4096), hgt = std::clamp(req.height, 16, 4096);
-        h->renderer.BeginFrame(w, hgt, cam, req.draw);
+        SceneLighting lighting;
+        scene.Lighting(cam, req.world, lighting);
+        DrawOptions dopt = req.draw;
+        dopt.lighting = &lighting;
+        h->renderer.BeginFrame(w, hgt, cam, dopt);
         scene.Draw(cam, (float)hgt, req.world);
+        scene.DrawOverlays(cam, req.world);
         h->renderer.EndFrame();
         if (!h->renderer.ReadOutput(out)) { if (error) *error = "readback failed"; ok = false; }
         else for (size_t i = 3; i < out.rgba.size(); i += 4) out.rgba[i] = 255;

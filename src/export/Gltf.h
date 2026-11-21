@@ -25,6 +25,12 @@ public:
     struct Track { int node; std::vector<float> times; std::vector<Vec3> translations; std::vector<Vec4> rotations; std::vector<Vec3> scales; };
     void AddAnimation(const std::string& name, const std::vector<Track>& tracks);
     void AddRootNode(int node) { m_roots.push_back(node); }
+    // KHR_lights_punctual: type "point" / "spot" / "directional"; intensity in candela (point, spot) or lux; range in m
+    // (0 = infinite); cones in radians. The light shines along the node's -Z.
+    int AddLight(const std::string& name, const char* type, const Vec3& color, float intensity, float range, float innerCone = 0, float outerCone = 0.785f);
+    void SetNodeLight(int node, int light);
+    void SetNodeExtras(int node, const std::string& extrasJson);   // a JSON object
+    void SetSceneExtras(const std::string& extrasJson) { m_sceneExtras = extrasJson; }
 
     Bytes Finish();
 
@@ -43,4 +49,6 @@ private:
     std::vector<std::vector<int>> m_nodeChildren;
     std::vector<int> m_nodeParent;
     std::vector<int> m_roots;
+    std::string m_lights, m_sceneExtras;
+    int m_lightCount = 0;
 };

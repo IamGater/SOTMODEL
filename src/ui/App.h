@@ -93,7 +93,8 @@ struct Document {
     std::shared_ptr<WorldData> world;
     std::shared_ptr<WorldScene> worldScene;
     WorldDrawOptions worldDraw;
-    bool worldWater = true, worldLoading = false;
+    bool worldLoading = false;
+    SceneLighting worldLighting;   // rebuilt every frame from the camera
     int worldDone = 0, worldTotal = 0;
     std::string worldStage;
     char worldFilter[128] = {};
@@ -233,7 +234,7 @@ private:
     std::unique_ptr<JobPool> m_jobs;
     std::unique_ptr<Renderer> m_renderer;
     std::unique_ptr<GpuAssets> m_assets;
-    std::shared_ptr<GpuMesh> m_sphere, m_water;
+    std::shared_ptr<GpuMesh> m_sphere;
     void* m_hwnd = nullptr;
 
     std::mutex m_postMutex;

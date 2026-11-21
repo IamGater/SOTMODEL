@@ -63,6 +63,27 @@ void DeformSplineMesh(MeshLod& lod, const Vec3& bmin, const Vec3& bmax, const Sp
 
 void WorldScene::Build(const WorldData& wd, const std::function<bool()>& cancel, const std::function<void(int, int)>& progress) {
     m_items.clear();
+    m_lights = wd.lights;
+    m_decals = wd.decals;
+    m_fogs = wd.fogs;
+    m_waterLevel = wd.waterLevel;
+    {   // sea plane (unit quad, scaled when drawn)
+        MeshLod quad;
+        quad.positions = {{-1, -1, 0}, {1, -1, 0}, {1, 1, 0}, {-1, 1, 0}};
+        quad.normals.assign(4, Vec3{0, 0, 1});
+        quad.indices = {0, 2, 1, 0, 3, 2};
+        MeshSection sec;
+        sec.numTriangles = 2;
+        sec.maxVertex = 3;
+        quad.sections.push_back(sec);
+        m_water = m_r.CreateMesh(quad, {-1, -1, 0}, {1, 1, 0});
+        if (m_water) {
+            auto wm = std::make_shared<GpuMaterial>();
+            wm->color[0] = 0.02f; wm->color[1] = 0.11f; wm->color[2] = 0.16f;
+            wm->twoSided = true;
+            m_water->materials = {wm};
+        }
+    }
     m_gpuBytes = 0;
     m_missing = 0;
     m_bmin = {1e30f, 1e30f, 1e30f};
@@ -185,4 +206,114 @@ void WorldScene::Draw(const Camera& cam, float viewHeightPx, const WorldDrawOpti
             m_stats.instancesDrawn += (u32)m_visible.size();
         }
     }
+}
+
+void WorldScene::Lighting(const Camera& cam, const WorldDrawOptions& opt, SceneLighting& out) const {
+    out = SceneLighting{};
+    Vec3 eye = cam.Eye();
+    if (opt.lights) {
+        for (auto& l : m_lights) {
+            if (l.type == WorldLight::Directional && !out.sun && l.intensity > 0) {
+                out.sun = true;
+                out.sunDir = l.direction;
+                out.sunColor = l.color * (0.95f * std::clamp(l.intensity / 2.5f, 0.3f, 1.6f));
+            } else if (l.type == WorldLight::Sky && l.intensity > 0) {
+                float k = std::clamp(l.intensity / 1.2f, 0.3f, 2.f);
+                out.ambientScale = Vec3{0.6f + 0.4f * l.color.x, 0.6f + 0.4f * l.color.y, 0.6f + 0.4f * l.color.z} * k;
+            }
+        }
+        // the local lights whose range is nearest the eye
+        std::vector<std::pair<float, const WorldLight*>> closest;
+        for (auto& l : m_lights) {
+            if (l.type > WorldLight::Spot || l.intensity <= 0 || l.radius <= 0) continue;
+            float d = Length(l.position - eye) - l.radius;
+            if (d < 30000) closest.push_back({d, &l});
+        }
+        size_t n = std::min<size_t>(closest.size(), kMaxSceneLights);
+        std::partial_sort(closest.begin(), closest.begin() + n, closest.end(), [](auto& a, auto& b) { return a.first < b.first; });
+        for (size_t i = 0; i < n; i++) {
+            const WorldLight& l = *closest[i].second;
+            SceneLight s;
+            s.position = l.position;
+            s.radius = l.radius;
+            float k = l.inverseSquared ? std::clamp(l.intensity / 1000.f, 0.f, 20.f) : std::clamp(l.intensity, 0.f, 10.f);
+            s.color = l.color * k;
+            s.spot = l.type == WorldLight::Spot;
+            s.direction = l.direction;
+            s.cosOuter = cosf(std::clamp(l.outerCone, 1.f, 89.f) * kPi / 180);
+            s.cosInner = cosf(std::clamp(std::min(l.innerCone, l.outerCone - 0.5f), 0.f, 89.f) * kPi / 180);
+            out.lights.push_back(s);
+        }
+    }
+    if (opt.fog) {
+        bool under = eye.z < m_waterLevel;
+        const WorldFog* pick = nullptr;
+        for (auto& f : m_fogs)
+            if (f.underwater == under) { pick = &f; break; }
+        if (!pick && !under && !m_fogs.empty() && !m_fogs[0].underwater) pick = &m_fogs[0];
+        if (pick) {
+            out.fog = true;
+            out.fogColor = pick->color;
+            out.fogDensity = pick->density;
+            out.fogFalloff = pick->heightFalloff;
+            out.fogHeight = pick->position.z;
+            out.fogStart = pick->startDistance;
+            out.fogMaxOpacity = pick->maxOpacity;
+        }
+    }
+}
+
+void WorldScene::DrawOverlays(const Camera& cam, const WorldDrawOptions& opt) {
+    Vec3 eye = cam.Eye();
+    if (opt.water && m_water) {
+        float half = std::max(Length(m_bmax - m_bmin), 2e6f);
+        Mat4 m = Mat4::FromTRS({eye.x, eye.y, m_waterLevel}, {0, 0, 0, 1}, {half, half, 1});
+        m_r.DrawMesh(*m_water, &m, 1);
+    }
+    if (!opt.gizmos) return;
+    const float range = 30000;
+    std::vector<Vec3> pts, spots, decals;
+    auto circle = [](std::vector<Vec3>& v, const Vec3& c, const Vec3& u, const Vec3& w, float r, int seg) {
+        for (int k = 0; k < seg; k++) {
+            float a0 = 2 * kPi * k / seg, a1 = 2 * kPi * (k + 1) / seg;
+            v.push_back(c + u * (cosf(a0) * r) + w * (sinf(a0) * r));
+            v.push_back(c + u * (cosf(a1) * r) + w * (sinf(a1) * r));
+        }
+    };
+    auto basis = [](const Vec3& d, Vec3& u, Vec3& w) {
+        Vec3 up = fabsf(d.z) < 0.95f ? Vec3{0, 0, 1} : Vec3{1, 0, 0};
+        u = Normalize(Cross(d, up));
+        w = Cross(d, u);
+    };
+    for (auto& l : m_lights) {
+        if (l.type > WorldLight::Spot || Length(l.position - eye) > range) continue;
+        float s = 20;
+        for (Vec3 a : {Vec3{1, 0, 0}, Vec3{0, 1, 0}, Vec3{0, 0, 1}}) { pts.push_back(l.position - a * s); pts.push_back(l.position + a * s); }
+        if (l.type == WorldLight::Point) {
+            circle(pts, l.position, {1, 0, 0}, {0, 1, 0}, l.radius, 32);
+        } else {
+            Vec3 u, w;
+            basis(l.direction, u, w);
+            float len = std::min(l.radius, 2000.f);
+            float r = len * tanf(std::clamp(l.outerCone, 1.f, 89.f) * kPi / 180);
+            Vec3 end = l.position + l.direction * len;
+            circle(spots, end, u, w, r, 24);
+            for (int k = 0; k < 4; k++) {
+                float a = kPi * 0.5f * k;
+                spots.push_back(l.position);
+                spots.push_back(end + u * (cosf(a) * r) + w * (sinf(a) * r));
+            }
+        }
+    }
+    for (auto& d : m_decals) {
+        if (Length(d.transform.Translation() - eye) > range) continue;
+        Vec3 c[8];
+        for (int k = 0; k < 8; k++)
+            c[k] = d.transform.TransformPoint({(k & 1) ? d.size.x : -d.size.x, (k & 2) ? d.size.y : -d.size.y, (k & 4) ? d.size.z : -d.size.z});
+        static const int e[12][2] = {{0, 1}, {2, 3}, {4, 5}, {6, 7}, {0, 2}, {1, 3}, {4, 6}, {5, 7}, {0, 4}, {1, 5}, {2, 6}, {3, 7}};
+        for (auto& ed : e) { decals.push_back(c[ed[0]]); decals.push_back(c[ed[1]]); }
+    }
+    if (!pts.empty()) m_r.DrawLines(pts, 0xff40e0ffu);
+    if (!spots.empty()) m_r.DrawLines(spots, 0xff40a0ffu);
+    if (!decals.empty()) m_r.DrawLines(decals, 0xffffc040u);
 }

@@ -50,6 +50,25 @@ struct Camera {
     void Frame(const Vec3& mn, const Vec3& mx);
 };
 
+// Lights / fog of a map applied by the mesh shader (all in UE world space).
+struct SceneLight {
+    Vec3 position; float radius = 1000;
+    Vec3 color;                 // linear colour already scaled by the brightness
+    bool spot = false;
+    Vec3 direction{1, 0, 0};
+    float cosOuter = -1, cosInner = 1;
+};
+constexpr int kMaxSceneLights = 32;
+struct SceneLighting {
+    bool sun = false;
+    Vec3 sunDir{0, 0, -1}, sunColor{1, 1, 1}, ambientScale{1, 1, 1};
+    bool fog = false;                       // UE exponential height fog
+    Vec3 fogColor;
+    float fogDensity = 0, fogFalloff = 0;   // as on the component (divided by 1000 in the shader math)
+    float fogHeight = 0, fogStart = 0, fogMaxOpacity = 1;
+    std::vector<SceneLight> lights;         // the first kMaxSceneLights are used
+};
+
 struct DrawOptions {
     bool wireframe = false;
     bool textures = true;
@@ -57,6 +76,7 @@ struct DrawOptions {
     bool vertexColors = false;
     bool grid = true;
     bool backfaceCulling = true;
+    const SceneLighting* lighting = nullptr;   // map lights / fog (null: the viewer's key light)
 };
 
 class Renderer {

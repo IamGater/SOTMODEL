@@ -8,6 +8,10 @@ struct WorldDrawOptions {
     bool meshes = true, landscape = true, splines = true;
     float drawDistanceScale = 1;   // multiplies the game's per-mesh draw distances (0 = ignore them)
     float minScreenSize = 0.0015f; // cull instances whose bounding sphere covers less than this fraction of the view height
+    bool lights = true;            // light the scene with the map's sun / sky light / point and spot lights
+    bool fog = true;               // the map's exponential height fog
+    bool water = true;             // sea plane at the map's water level
+    bool gizmos = false;           // light and decal outlines
 };
 
 struct WorldDrawStats {
@@ -21,6 +25,14 @@ public:
     void Build(const WorldData& wd, const std::function<bool()>& cancel = {}, const std::function<void(int, int)>& progress = {});
     // Main thread, between Renderer::BeginFrame and EndFrame.
     void Draw(const Camera& cam, float viewHeightPx, const WorldDrawOptions& opt);
+    // The map's lighting for a camera (sun, sky light, the lights nearest the eye, the height fog above / below the water).
+    // Pass it in DrawOptions::lighting to Renderer::BeginFrame.
+    void Lighting(const Camera& cam, const WorldDrawOptions& opt, SceneLighting& out) const;
+    // Water plane and gizmos: after Draw.
+    void DrawOverlays(const Camera& cam, const WorldDrawOptions& opt);
+    float WaterLevel() const { return m_waterLevel; }
+    size_t LightCount() const { return m_lights.size(); }
+    size_t DecalCount() const { return m_decals.size(); }
     const WorldDrawStats& Stats() const { return m_stats; }
     size_t GpuBytes() const { return m_gpuBytes; }
     u32 MissingMeshes() const { return m_missing; }
@@ -47,6 +59,11 @@ private:
     size_t m_gpuBytes = 0;
     u32 m_missing = 0;
     Vec3 m_bmin, m_bmax, m_fmin, m_fmax;
+    std::vector<WorldLight> m_lights;
+    std::vector<WorldDecal> m_decals;
+    std::vector<WorldFog> m_fogs;
+    float m_waterLevel = 0;
+    std::shared_ptr<GpuMesh> m_water;
 };
 
 // CPU deformation of a mesh LOD along a SplineMeshComponent's Hermite curve (component space).

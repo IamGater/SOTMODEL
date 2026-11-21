@@ -596,6 +596,69 @@ void WorldLoader::AddLevel(const Package& pkg, const Mat4& levelTransform, const
         lvl.landscapeComponents++;
     };
 
+    // ---- lights, decals, height fog, the water plane. Returns true when the component was one of them.
+    auto AddEffect = [&](size_t i) -> bool {
+        const std::string& c = cls[i];
+        bool point = IEquals(c, "PointLightComponent"), spot = IEquals(c, "SpotLightComponent"), dir = IEquals(c, "DirectionalLightComponent"),
+             sky = IEquals(c, "SkyLightComponent");
+        if (point || spot || dir || sky) {
+            const CompView& v = View(i);
+            if (!v.Bool("bVisible", true)) return true;
+            Mat4 w = World(i) * levelTransform;
+            WorldLight& L = out.lights.emplace_back();
+            L.type = spot ? WorldLight::Spot : dir ? WorldLight::Directional : sky ? WorldLight::Sky : WorldLight::Point;
+            L.position = w.Translation();
+            L.direction = Normalize(w.TransformDir({1, 0, 0}));
+            if (auto col = v.Get("LightColor"); col && col->Fields()) {
+                auto ch = [&](const char* n) { auto x = col->Field(n); return x ? (float)x->AsFloat(255) / 255.f : 1.f; };
+                auto lin = [](float x) { return x <= 0.04045f ? x / 12.92f : std::pow((x + 0.055f) / 1.055f, 2.4f); };
+                L.color = {lin(ch("R")), lin(ch("G")), lin(ch("B"))};
+            }
+            L.intensity = v.Float("Intensity", dir ? 3.14159f : sky ? 1.f : 5000.f);
+            L.radius = v.Float("AttenuationRadius", 1000);
+            L.innerCone = v.Float("InnerConeAngle", 0);
+            L.outerCone = v.Float("OuterConeAngle", 44);
+            L.inverseSquared = v.Bool("bUseInverseSquaredFalloff", true);
+            L.castShadows = v.Bool("CastShadows", true);
+            L.level = levelIndex;
+            return true;
+        }
+        if (IEquals(c, "DecalComponent")) {
+            const CompView& v = View(i);
+            if (!v.Bool("bVisible", true) || v.Bool("bHiddenInGame", false)) return true;
+            WorldDecal& d = out.decals.emplace_back();
+            const PropLayer* from = nullptr;
+            if (auto m = v.Get("DecalMaterial", &from)) d.material = ObjectPathOf(*from->pkg, *m);
+            d.transform = World(i) * levelTransform;
+            d.size = VecOf(v.Get("DecalSize"), {1, 1, 1});
+            d.level = levelIndex;
+            return true;
+        }
+        if (IEquals(c, "ExponentialHeightFogComponent")) {
+            const CompView& v = View(i);
+            WorldFog& f = out.fogs.emplace_back();
+            f.position = (World(i) * levelTransform).Translation();
+            f.density = v.Float("FogDensity", 0.02f);
+            f.heightFalloff = v.Float("FogHeightFalloff", 0.2f);
+            f.maxOpacity = v.Float("FogMaxOpacity", 1);
+            f.startDistance = v.Float("StartDistance", 0);
+            f.underwater = ToLower(exps[i].objectName).find("underwater") != std::string::npos;
+            if (auto col = v.Get("FogInscatteringColor"); col && col->Fields()) {
+                auto ch = [&](const char* n, float d) { auto x = col->Field(n); return x ? (float)x->AsFloat(d) : d; };
+                f.color = {ch("R", 0.447f), ch("G", 0.639f), ch("B", 1.f)};
+            }
+            f.level = levelIndex;
+            return true;
+        }
+        if (IEquals(c, "FFTWaterComponent")) {
+            float z = (World(i) * levelTransform).Translation().z;
+            if (!out.hasWater) out.waterLevel = z;
+            out.hasWater = true;
+            return true;
+        }
+        return false;
+    };
+
     std::string levelName = StemOf(pkg.GamePath());
     for (size_t i = 0; i < n; i++) {
         if (opt.cancel && (i & 63) == 0 && opt.cancel()) return;
@@ -605,6 +668,7 @@ void WorldLoader::AddLevel(const Package& pkg, const Mat4& levelTransform, const
             if (opt.landscape) AddLandscape(i);
             continue;
         }
+        if (opt.lights && !(exps[i].objectFlags & (RF_ClassDefaultObject | RF_ArchetypeObject)) && AddEffect(i)) continue;
         if (!IsMeshComponentClass(c)) continue;
         if (exps[i].objectFlags & (RF_ClassDefaultObject | RF_ArchetypeObject)) continue;
         bool skeletal = IEquals(c, "SkeletalMeshComponent") || IEquals(c, "PoseableMeshComponent") || IEquals(c, "DestructibleComponent");
@@ -758,6 +822,9 @@ bool WorldLoader::Load(std::string_view mapPath, const WorldOptions& opt, WorldD
                 items.push_back(std::move(it));
             }
         }
+        if (opt.lights)   // the open world's one FFT water actor and its sun / sky light / height fog
+            for (const char* p : {"/Game/Maps/wide_sea_of_plunder/wsp_common/wsp_water", "/Game/Maps/wide_sea_of_plunder/wsp_common/wsp_lighting"})
+                if (i64 e = m->cache.FileSystem().FindPackage(p); e >= 0) items.push_back({std::string(m->cache.FileSystem().Path((u32)e)), {}, Mat4::Identity()});
         out.root = L->layoutMap;
         for (size_t i = 0; i < items.size(); i++) {
             if (opt.cancel && opt.cancel()) { if (error) *error = "cancelled"; return false; }

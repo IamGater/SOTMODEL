@@ -117,7 +117,7 @@ void RegisterExportTools(Api& api) {
                   "Export a whole map (.umap) as one glTF .glb for Blender: a node per level, every placed mesh (with material overrides and "
                   "textures, downscaled to max_texture_size) and the landscape terrain. Large maps take a while. path = sot_world_layout_2 exports "
                   "the open world: pick islands ('islands' terms, 'region' [minX,minY,maxX,maxY] cm) or 'proxies' for the whole sea.",
-                  R"({"type":"object","properties":{"path":{"type":"string"},"output_dir":{"type":"string"},"textures":{"type":"boolean","default":true},"max_texture_size":{"type":"integer","default":1024},"lod":{"type":"integer","default":0},"landscape":{"type":"boolean","default":true},"sublevels":{"type":"boolean","default":true},"filter":{"type":"string"},"islands":{"type":"string"},"proxies":{"type":"boolean","default":false},"region":{"type":"array","items":{"type":"number"}}},"required":["path"]})",
+                  R"({"type":"object","properties":{"path":{"type":"string"},"output_dir":{"type":"string"},"textures":{"type":"boolean","default":true},"max_texture_size":{"type":"integer","default":1024},"lod":{"type":"integer","default":0},"landscape":{"type":"boolean","default":true},"sublevels":{"type":"boolean","default":true},"filter":{"type":"string"},"islands":{"type":"string"},"proxies":{"type":"boolean","default":false},"lights":{"type":"boolean","default":true,"description":"lights (KHR_lights_punctual), decal boxes, fog / water level as scene extras"},"region":{"type":"array","items":{"type":"number"}}},"required":["path"]})",
                   "path",
                   [](Api& a, const JsonValue& args) {
                       WorldLoader loader(*a.cache);
@@ -125,6 +125,7 @@ void RegisterExportTools(Api& api) {
                       opt.sublevels = args.GetBool("sublevels", true);
                       opt.landscape = args.GetBool("landscape", true);
                       opt.meshFilter = args.GetStr("filter");
+                      opt.lights = args.GetBool("lights", true);
                       SeaOptionsFrom(args, opt);
                       WorldData world;
                       std::string err;
@@ -137,6 +138,7 @@ void RegisterExportTools(Api& api) {
                       wo.maxTextureSize = (int)args.GetNum("max_texture_size", 1024);
                       wo.lod = (int)args.GetNum("lod", 0);
                       wo.landscape = opt.landscape;
+                      wo.lights = opt.lights;
                       Bytes glb;
                       if (!ExportWorldGlb(*a.cache, world, wo, glb, &err)) return ApiResult::Error(err);
                       std::string name = gp;

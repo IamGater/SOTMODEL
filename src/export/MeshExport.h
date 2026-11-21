@@ -46,6 +46,7 @@ struct WorldExportOptions {
     bool textures = true;
     int maxTextureSize = 1024;
     bool landscape = true;
+    bool lights = true;   // lights (KHR_lights_punctual), decal boxes (empties with extras), fog + water level (scene extras)
 };
 bool ExportWorldGlb(PackageCache& cache, const WorldData& world, const WorldExportOptions& opt, Bytes& out, std::string* error = nullptr,
                     const std::function<void(int, int)>& progress = {});

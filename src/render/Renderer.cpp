@@ -8,6 +8,12 @@ cbuffer Frame : register(b0) {
     float4 EyePos;
     float4 LightDir;
     float4 Flags;   // x textures, y normal maps, z vertex colours
+    float4 SunColor;    // rgb, w > 0: the map's sun replaces the key light
+    float4 Ambient;     // rgb scale of the hemisphere ambient
+    float4 FogColor;    // rgb inscattering, w density (already / 1000)
+    float4 FogParams;   // x height falloff (/ 1000), y fog height, z start distance, w max opacity (0 = no fog)
+    float4 LightCount;
+    float4 Lights[96];  // per light: (pos, radius) (colour, cos inner or -2 = point) (direction, cos outer)
 };
 cbuffer Material : register(b1) {
     float4 BaseColor;
@@ -58,12 +64,35 @@ float4 PSMain(PSIn i, bool front : SV_IsFrontFace) : SV_Target {
     float3 l = normalize(-LightDir.xyz);
     float ndl = saturate(dot(n, l));
     float hemi = 0.5 + 0.5 * n.z;
-    float3 ambient = lerp(float3(0.16, 0.15, 0.14), float3(0.34, 0.37, 0.42), hemi);
+    float3 ambient = lerp(float3(0.16, 0.15, 0.14), float3(0.34, 0.37, 0.42), hemi) * Ambient.rgb;
     float3 h = normalize(l + v);
+    float3 sun = SunColor.w > 0 ? SunColor.rgb : float3(0.95, 0.92, 0.85);
     float spec = pow(saturate(dot(n, h)), 32) * 0.12;
-    float3 c = base.rgb * (ambient + ndl * float3(0.95, 0.92, 0.85)) + spec;
+    float3 c = base.rgb * (ambient + ndl * sun) + spec * sun;
+    for (int k = 0; k < (int)LightCount.x; k++) {
+        float4 a = Lights[k * 3], b = Lights[k * 3 + 1], d = Lights[k * 3 + 2];
+        float3 L = a.xyz - i.wpos;
+        float dist = length(L);
+        if (dist >= a.w) continue;
+        L /= max(dist, 1e-3);
+        float win = saturate(1 - pow(dist / a.w, 4));
+        float att = win * win / (1 + dist * dist * 0.0001);
+        if (b.w > -1.5) att *= saturate((dot(-L, d.xyz) - d.w) / max(b.w - d.w, 1e-3));
+        c += base.rgb * b.rgb * saturate(dot(n, L)) * att;
+    }
     float rim = pow(1 - saturate(dot(n, v)), 4) * 0.08;
-    return float4(c + rim, 1);
+    c += rim;
+    if (FogParams.w > 0) {   // UE 4.10 exponential height fog
+        float3 ray = i.wpos - EyePos.xyz;
+        float len = length(ray);
+        float f0 = FogColor.w * exp2(-FogParams.x * (EyePos.z - FogParams.y));
+        float fx = max(-127, FogParams.x * ray.z);
+        float lineInt = abs(fx) > 0.01 ? (1 - exp2(-fx)) / fx : 0.6931 - 0.2402 * fx;
+        float amount = f0 * lineInt * max(len - FogParams.z, 0);
+        float fog = min(1 - saturate(exp2(-amount)), FogParams.w);
+        c = lerp(c, FogColor.rgb, fog);
+    }
+    return float4(c, 1);
 }
 )";
 
@@ -94,6 +123,8 @@ struct LineVertex {
 struct FrameConstants {
     Mat4 viewProj;
     float eye[4], light[4], flags[4];
+    float sun[4], ambient[4], fogColor[4], fogParams[4], lightCount[4];
+    float lights[kMaxSceneLights * 3][4];
 };
 struct MaterialConstants {
     float color[4];
@@ -375,6 +406,12 @@ void Renderer::BeginFrame(int width, int height, const Camera& cam, const DrawOp
     m_opt = opt;
     m_drawnTris = 0;
     float clear[4] = {0.011f, 0.012f, 0.016f, 1};   // linear (the target is sRGB)
+    if (opt.lighting && opt.lighting->fog) {         // the sky behind fogged geometry
+        float o = std::min(1.f, opt.lighting->fogMaxOpacity);
+        clear[0] = clear[0] * (1 - o) + opt.lighting->fogColor.x * o;
+        clear[1] = clear[1] * (1 - o) + opt.lighting->fogColor.y * o;
+        clear[2] = clear[2] * (1 - o) + opt.lighting->fogColor.z * o;
+    }
     m_ctx->ClearRenderTargetView(m_msaaRtv.Get(), clear);
     m_ctx->ClearDepthStencilView(m_dsv.Get(), D3D11_CLEAR_DEPTH, 0.0f, 0);
     ID3D11RenderTargetView* rtv = m_msaaRtv.Get();
@@ -401,6 +438,35 @@ void Renderer::BeginFrame(int width, int height, const Camera& cam, const DrawOp
         fc.flags[1] = opt.normalMaps ? 1.f : 0.f;
         fc.flags[2] = opt.vertexColors ? 1.f : 0.f;
         fc.flags[3] = 0;
+        fc.ambient[0] = fc.ambient[1] = fc.ambient[2] = 1;
+        if (const SceneLighting* sl = opt.lighting) {
+            if (sl->sun) {
+                Vec3 d = Normalize(sl->sunDir);
+                fc.light[0] = d.x; fc.light[1] = d.y; fc.light[2] = d.z;
+                fc.sun[0] = sl->sunColor.x; fc.sun[1] = sl->sunColor.y; fc.sun[2] = sl->sunColor.z; fc.sun[3] = 1;
+            }
+            fc.ambient[0] = sl->ambientScale.x; fc.ambient[1] = sl->ambientScale.y; fc.ambient[2] = sl->ambientScale.z;
+            if (sl->fog) {
+                fc.fogColor[0] = sl->fogColor.x; fc.fogColor[1] = sl->fogColor.y; fc.fogColor[2] = sl->fogColor.z;
+                fc.fogColor[3] = sl->fogDensity / 1000;
+                fc.fogParams[0] = sl->fogFalloff / 1000;
+                fc.fogParams[1] = sl->fogHeight;
+                fc.fogParams[2] = sl->fogStart;
+                fc.fogParams[3] = std::max(1e-4f, sl->fogMaxOpacity);
+            }
+            int nl = (int)std::min<size_t>(sl->lights.size(), kMaxSceneLights);
+            fc.lightCount[0] = (float)nl;
+            for (int k = 0; k < nl; k++) {
+                const SceneLight& L = sl->lights[k];
+                float* a = fc.lights[k * 3];
+                float* b = fc.lights[k * 3 + 1];
+                float* d = fc.lights[k * 3 + 2];
+                a[0] = L.position.x; a[1] = L.position.y; a[2] = L.position.z; a[3] = L.radius;
+                b[0] = L.color.x; b[1] = L.color.y; b[2] = L.color.z; b[3] = L.spot ? L.cosInner : -2.f;
+                Vec3 dir = Normalize(L.direction);
+                d[0] = dir.x; d[1] = dir.y; d[2] = dir.z; d[3] = L.cosOuter;
+            }
+        }
         memcpy(ms.pData, &fc, sizeof(fc));
         m_ctx->Unmap(m_frameCb.Get(), 0);
     }

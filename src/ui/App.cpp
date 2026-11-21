@@ -189,18 +189,6 @@ bool App::Init(void* hwnd, ID3D11Device* dev, ID3D11DeviceContext* ctx) {
     }
     MeshLod sphere = MakeSphere(50, 64, 32);
     m_sphere = m_renderer->CreateMesh(sphere, {-50, -50, -50}, {50, 50, 50});
-    // sea level plane for map views (unit quad, scaled when drawn)
-    MeshLod quad;
-    quad.positions = {{-1, -1, 0}, {1, -1, 0}, {1, 1, 0}, {-1, 1, 0}};
-    quad.normals.assign(4, Vec3{0, 0, 1});
-    quad.indices = {0, 2, 1, 0, 3, 2};
-    m_water = m_renderer->CreateMesh(quad, {-1, -1, 0}, {1, 1, 0});
-    if (m_water) {
-        auto wm = std::make_shared<GpuMaterial>();
-        wm->color[0] = 0.02f; wm->color[1] = 0.11f; wm->color[2] = 0.16f;
-        wm->twoSided = true;
-        m_water->materials = {wm};
-    }
     LOGI("settings: %s", Narrow(Settings::Path()).c_str());
     if (startTab >= 0) m_leftTab = startTab;
     StartMount();
@@ -747,7 +735,12 @@ void App::DrawWorld(Document& d) {
     BeginToolbar();
     FlowToggle("Meshes", &d.worldDraw.meshes, true);
     FlowToggle("Landscape", &d.worldDraw.landscape);
-    FlowToggle("Water", &d.worldWater);
+    FlowToggle("Water", &d.worldDraw.water);
+    FlowToggle("Lights", &d.worldDraw.lights);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("The map's sun, sky light and the %d point / spot lights nearest the camera", kMaxSceneLights);
+    FlowToggle("Fog", &d.worldDraw.fog);
+    FlowToggle("Gizmos", &d.worldDraw.gizmos);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Light ranges / spot cones (yellow) and decal boxes (blue) within 300 m");
     FlowToggle("Textures", &d.draw.textures);
     FlowToggle("Wireframe", &d.draw.wireframe);
     FlowNext(130);
@@ -773,22 +766,19 @@ void App::DrawWorld(Document& d) {
     seaOptions();
     const auto& st = sc.Stats();
     ImGui::PushTextWrapPos(0);
-    ImGui::TextDisabled("%zu levels | %zu instances of %zu meshes, %zu landscape patches | drawn: %u instances, %u meshes, %u patches, %.2fM tris | %s GPU",
-                        w.levels.size(), w.InstanceCount(), w.groups.size(), w.landscapes.size(), st.instancesDrawn, st.meshesDrawn, st.landscapesDrawn,
-                        m_renderer->DrawnTriangles() / 1e6, HumanSize(sc.GpuBytes()).c_str());
+    ImGui::TextDisabled("%zu levels | %zu instances of %zu meshes, %zu landscape patches, %zu lights, %zu decals | drawn: %u instances, %u meshes, %u patches, %.2fM tris | %s GPU",
+                        w.levels.size(), w.InstanceCount(), w.groups.size(), w.landscapes.size(), w.lights.size(), w.decals.size(), st.instancesDrawn, st.meshesDrawn,
+                        st.landscapesDrawn, m_renderer->DrawnTriangles() / 1e6, HumanSize(sc.GpuBytes()).c_str());
     ImGui::PopTextWrapPos();
 
     ImVec2 avail = MinViewportAvail();
     float side = avail.x > 640 ? std::min(360.f, avail.x * 0.3f) : 0.f;   // the outliner is dropped in narrow windows
     Camera& cam = d.camera;
+    sc.Lighting(cam, d.worldDraw, d.worldLighting);
+    d.draw.lighting = &d.worldLighting;
     DrawViewportScene(*m_renderer, cam, d.draw, ImVec2(side > 0 ? avail.x - side - ImGui::GetStyle().ItemSpacing.x : avail.x, avail.y), true, frameWorld, [&] {
         sc.Draw(cam, avail.y, d.worldDraw);
-        if (d.worldWater && m_water) {
-            Vec3 c = cam.Eye();
-            float half = std::max(Length(sc.BoundsMax() - sc.BoundsMin()), 2e6f);
-            Mat4 m = Mat4::FromTRS({c.x, c.y, 0}, {0, 0, 0, 1}, {half, half, 1});
-            m_renderer->DrawMesh(*m_water, &m, 1);
-        }
+        sc.DrawOverlays(cam, d.worldDraw);
     });
     if (side <= 0) return;
     ImGui::SameLine();

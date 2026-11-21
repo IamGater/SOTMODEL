@@ -1,4 +1,5 @@
 #include "app/Api.h"
+#include <map>
 #include "core/Json.h"
 #include "ue/World.h"
 #include "ue/WorldLayout.h"
@@ -28,6 +29,62 @@ static WorldOptions WorldOptionsFrom(const JsonValue& args) {
     return o;
 }
 
+// lights / decals / fog / water of a loaded world: totals plus the first `limit` of each
+static void WriteWorldEffects(JsonWriter& w, const WorldData& wd, int limit) {
+    auto v3 = [&](const char* k, const Vec3& v) { w.Key(k); w.BeginArray(); w.Num(v.x); w.Num(v.y); w.Num(v.z); w.EndArray(); };
+    static const char* types[] = {"point", "spot", "directional", "sky"};
+    int count[4] = {};
+    for (auto& l : wd.lights) count[l.type]++;
+    w.Key("lights");
+    w.BeginObject();
+    for (int t = 0; t < 4; t++) w.KV(types[t], (i64)count[t]);
+    w.Key("sample");
+    w.BeginArray();
+    for (size_t i = 0; i < wd.lights.size() && (int)i < limit; i++) {
+        auto& l = wd.lights[i];
+        w.BeginObject();
+        w.KV("type", types[l.type]);
+        v3("position", l.position);
+        if (l.type != WorldLight::Point) v3("direction", l.direction);
+        v3("color", l.color);
+        w.KV("intensity", (double)l.intensity);
+        if (l.type <= WorldLight::Spot) w.KV("radius", (double)l.radius);
+        if (l.type == WorldLight::Spot) { w.KV("innerCone", (double)l.innerCone); w.KV("outerCone", (double)l.outerCone); }
+        w.KV("level", wd.levels[l.level].path.substr(wd.levels[l.level].path.find_last_of('/') + 1));
+        w.EndObject();
+    }
+    w.EndArray();
+    w.EndObject();
+    w.Key("decals");
+    w.BeginObject();
+    w.KV("count", (i64)wd.decals.size());
+    std::map<std::string, int> mats;
+    for (auto& d : wd.decals) mats[d.material]++;
+    w.Key("materials");
+    w.BeginObject();
+    int k = 0;
+    for (auto& [m, c] : mats) { if (k++ >= limit) break; w.KV(m.empty() ? "(none)" : m, (i64)c); }
+    w.EndObject();
+    w.EndObject();
+    if (!wd.fogs.empty()) {
+        w.Key("heightFog");
+        w.BeginArray();
+        for (auto& f : wd.fogs) {
+            w.BeginObject();
+            v3("position", f.position);
+            w.KV("density", (double)f.density);
+            w.KV("heightFalloff", (double)f.heightFalloff);
+            w.KV("maxOpacity", (double)f.maxOpacity);
+            w.KV("startDistance", (double)f.startDistance);
+            if (f.underwater) w.KV("underwater", true);
+            v3("color", f.color);
+            w.EndObject();
+        }
+        w.EndArray();
+    }
+    if (wd.hasWater) w.KV("waterLevel", (double)wd.waterLevel);
+}
+
 static const char* kWorldArgs =
     R"J("path":{"type":"string","description":"a .umap (persistent map or sublevel)"},)J"
     R"J("sublevels":{"type":"boolean","default":true,"description":"also load the world-composition sublevels under the map's folder"},)J"
@@ -45,7 +102,8 @@ void RegisterWorldTools(Api& api) {
                   "expanded and the world-composition sublevels included. Returns the levels, totals and the most used meshes.",
                   std::string(R"J({"type":"object","properties":{)J") + kWorldArgs +
                       R"J(,"meshes":{"type":"integer","default":50,"description":"how many meshes to list (most instances first)"},)J"
-                      R"J("unresolved":{"type":"integer","default":20,"description":"how many unresolved components to list"}},"required":["path"]})J",
+                      R"J("unresolved":{"type":"integer","default":20,"description":"how many unresolved components to list"},)J"
+                      R"J("effects":{"type":"integer","default":20,"description":"how many lights / decal materials to list"}},"required":["path"]})J",
                   "path",
                   [](Api& a, const JsonValue& args) {
                       WorldLoader loader(*a.cache);
@@ -62,6 +120,7 @@ void RegisterWorldTools(Api& api) {
                       w.KV("unresolvedComponents", (i64)wd.unresolved.size());
                       w.Key("boundsMin"); w.BeginArray(); w.Num(wd.boundsMin.x); w.Num(wd.boundsMin.y); w.Num(wd.boundsMin.z); w.EndArray();
                       w.Key("boundsMax"); w.BeginArray(); w.Num(wd.boundsMax.x); w.Num(wd.boundsMax.y); w.Num(wd.boundsMax.z); w.EndArray();
+                      WriteWorldEffects(w, wd, (int)args.GetNum("effects", 20));
                       w.Key("levels");
                       w.BeginArray();
                       for (auto& l : wd.levels) {
@@ -117,7 +176,11 @@ void RegisterWorldTools(Api& api) {
                       R"J(,"width":{"type":"integer","default":1280},"height":{"type":"integer","default":720},)J"
                       R"J("yaw":{"type":"number","default":-135},"pitch":{"type":"number","default":-35},"zoom":{"type":"number","default":1},)J"
                       R"J("eye":{"type":"array","items":{"type":"number"}},"target":{"type":"array","items":{"type":"number"}},)J"
-                      R"J("textures":{"type":"boolean","default":true},"draw_distance_scale":{"type":"number","default":1},"save_to":{"type":"string"}},"required":["path"]})J",
+                      R"J("textures":{"type":"boolean","default":true},"draw_distance_scale":{"type":"number","default":1},)J"
+                      R"J("lights":{"type":"boolean","default":true,"description":"the map's sun, sky light and nearest point / spot lights"},)J"
+                      R"J("fog":{"type":"boolean","default":true,"description":"the map's exponential height fog"},)J"
+                      R"J("water":{"type":"boolean","default":true,"description":"sea plane at the water level"},)J"
+                      R"J("gizmos":{"type":"boolean","default":false,"description":"outlines of lights (range circles, spot cones) and decal boxes"},"save_to":{"type":"string"}},"required":["path"]})J",
                   "path",
                   [](Api& a, const JsonValue& args) {
                       WorldLoader loader(*a.cache);
@@ -135,6 +198,10 @@ void RegisterWorldTools(Api& api) {
                       req.draw.textures = args.GetBool("textures", true);
                       req.draw.grid = false;
                       req.world.drawDistanceScale = (float)args.GetNum("draw_distance_scale", 1);
+                      req.world.lights = args.GetBool("lights", true);
+                      req.world.fog = args.GetBool("fog", true);
+                      req.world.water = args.GetBool("water", true);
+                      req.world.gizmos = args.GetBool("gizmos", false);
                       auto vec = [&](const char* k, Vec3& v) {
                           const JsonValue* j = args.Get(k);
                           if (!j || j->arr.size() < 3) return false;
@@ -156,6 +223,9 @@ void RegisterWorldTools(Api& api) {
                       w.KV("levels", (i64)wd.levels.size());
                       w.KV("meshInstances", (i64)wd.InstanceCount());
                       w.KV("landscapeComponents", (i64)wd.landscapes.size());
+                      w.KV("lights", (i64)wd.lights.size());
+                      w.KV("decals", (i64)wd.decals.size());
+                      if (wd.hasWater) w.KV("waterLevel", (double)wd.waterLevel);
                       if (!save.empty()) w.KV("savedTo", save);
                       w.EndObject();
                       r.json = w.Take();

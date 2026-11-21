@@ -47,6 +47,34 @@ struct WorldLandscape {
     std::vector<std::string> layers;   // paint layer names
 };
 
+// A light component (colour linear 0..1 from the FColor, intensity in the engine's units).
+struct WorldLight {
+    enum Type : u8 { Point, Spot, Directional, Sky } type = Point;
+    Vec3 position, direction{1, 0, 0};   // direction = the component's +X
+    Vec3 color{1, 1, 1};
+    float intensity = 5000, radius = 1000, innerCone = 0, outerCone = 44;   // radius = AttenuationRadius (cm), cones in degrees
+    bool inverseSquared = true, castShadows = true;
+    u32 level = 0;
+};
+
+// A deferred decal: a unit box (+-1) through the component transform, projected along X. In UE 4.10 the extent is the
+// component scale (a DecalActor starts at 128 x 256 x 256); DecalSize (4.11+) multiplies it when present.
+struct WorldDecal {
+    std::string material;
+    Mat4 transform;   // component -> world
+    Vec3 size{1, 1, 1};
+    u32 level = 0;
+};
+
+// ExponentialHeightFogComponent (UE 4.10 units: density and falloff are divided by 1000 when rendering).
+struct WorldFog {
+    Vec3 position;
+    float density = 0.02f, heightFalloff = 0.2f, maxOpacity = 1, startDistance = 0;
+    Vec3 color{0.447f, 0.639f, 1.0f};   // FogInscatteringColor
+    bool underwater = false;            // SoT's second fog component ("UnderwaterFog"), used below the water surface
+    u32 level = 0;
+};
+
 struct WorldLevel {
     std::string path;    // game path of the .umap
     Mat4 transform = Mat4::Identity();   // level -> world
@@ -60,6 +88,11 @@ struct WorldData {
     std::vector<WorldMeshGroup> groups;
     std::vector<WorldSpline> splines;
     std::vector<WorldLandscape> landscapes;
+    std::vector<WorldLight> lights;
+    std::vector<WorldDecal> decals;
+    std::vector<WorldFog> fogs;
+    bool hasWater = false;
+    float waterLevel = 0;   // Z of the FFT water plane (FFTWaterComponent); 0 when the map has none
     std::vector<std::string> unresolved;   // "level: Actor.Component" of mesh components whose mesh could not be found
     Vec3 boundsMin{1e30f, 1e30f, 1e30f}, boundsMax{-1e30f, -1e30f, -1e30f};   // of instance origins
     size_t InstanceCount() const;
@@ -70,6 +103,7 @@ struct WorldOptions {
     bool skipNonVisual = true;   // skip audio / tall-tale / arena sublevels and helper meshes (shapes, clouds, volumes)
     bool skeletal = true;        // include skeletal mesh components (shown in their reference pose)
     bool landscape = true;       // build Landscape terrain meshes from the heightmaps
+    bool lights = true;          // collect lights, decals, height fog and the water plane
     int landscapeStep = 1;
     // mesh path filter: comma separated substrings (case insensitive); a mesh must match one of the plain terms (if any)
     // and none of the '-' terms, e.g. "rock,-small"
