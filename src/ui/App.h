@@ -176,6 +176,7 @@ private:
     void FindReferences(u32 entry);
     void StartReferenceIndex();
     void DrawReferencesTab();
+    void DrawLocalizationTab();
     void DrawBackupWindow();
     void CompareBackup(const std::wstring& file);
     std::shared_ptr<GpuTexture> Thumbnail(u32 entry);   // asynchronous; nullptr until decoded (or not a texture)
@@ -237,7 +238,11 @@ private:
     i64 m_selected = -1;            // selected package (Packages list / explorer)
     u32 m_selFolder = UINT32_MAX;   // folder card selected in the explorer
     bool m_showSearch = false, m_focusGlobalSearch = false;   // Packages > Search window
-    int m_searchTab = 0;                       // 0 search, 1 references
+    int m_searchTab = 0;                       // 0 search, 1 references, 2 localization
+    char m_locQuery[256] = {};
+    std::string m_locLast;
+    std::vector<const LocEntry*> m_locResults;
+    bool m_locInKeys = false;
     bool m_searchMatchCase = false, m_searchRegex = false;
     std::string m_searchError;
     // reference index: package entry -> packages importing it (built once in the background, cached on disk)

@@ -5,6 +5,7 @@
 #include "core/Vfs.h"
 #include "ue/Package.h"
 #include "app/Settings.h"
+#include "ue/Localization.h"
 
 // Tool layer shared by the command line (--cli) and the MCP server (--mcp): every tool takes JSON arguments and
 // returns JSON text (plus optional images), so any AI agent or script can browse, inspect and export game data.
@@ -26,6 +27,7 @@ void RegisterMeshTools(Api& api);   // ApiModels.cpp: mesh / animation / materia
 void RegisterWorldTools(Api& api);  // ApiWorld.cpp: map / scene tools
 void RegisterAudioTools(Api& api);  // ApiAudio.cpp: Wwise audio tools
 void RegisterExportTools(Api& api); // ApiExport.cpp: map / animation set glTF exports
+void RegisterLocalizationTools(Api& api);   // ApiLocalization.cpp
 // Several AnimSequence packages of one skeleton -> one .glb (ApiExport.cpp; also used by the UI).
 bool ExportAnimationSet(PackageCache& cache, const std::vector<std::shared_ptr<Package>>& animPkgs, const std::string& meshPath, Bytes& glb, std::string& note, std::string* error);
 struct ApiTool {
@@ -49,6 +51,9 @@ public:
     Settings& settings;
     Vfs vfs;
     std::unique_ptr<PackageCache> cache;
+    // localised strings of settings.language (FText "LocalizedString" in JSON); replaced, never freed while in use
+    std::shared_ptr<Localization> localization;
+    bool SetLanguage(const std::string& culture, std::string* error = nullptr);
 
     // helpers for tools
     i64 ResolveFile(const std::string& path) const;   // game path, /Game path or object path

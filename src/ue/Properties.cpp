@@ -1,6 +1,7 @@
 #include "ue/Properties.h"
 #include "ue/Package.h"
 #include "core/Json.h"
+#include "ue/Localization.h"
 #include <cmath>
 
 // ---------------------------------------------------------------- accessors
@@ -380,6 +381,8 @@ void ReadTaggedProperties(const Package& pkg, Reader& r, size_t limit, PropertyL
 // ---------------------------------------------------------------- JSON
 static void WriteObjectRef(JsonWriter& w, const PropValue& v, const Package* pkg);
 static thread_local const Package* t_jsonPackage = nullptr;
+static const Localization* g_jsonLoc = nullptr;
+void SetJsonLocalization(const Localization* loc) { g_jsonLoc = loc; }
 
 void WriteValue(JsonWriter& w, const PropValue& v) {
     switch (v.type) {
@@ -393,6 +396,8 @@ void WriteValue(JsonWriter& w, const PropValue& v) {
         w.BeginObject();
         if (v.items.size() == 2) { w.KV("Namespace", v.items[0].str); w.KV("Key", v.items[1].str); }
         w.KV("SourceString", v.str);
+        if (g_jsonLoc && v.items.size() == 2)   // the text in the chosen game language
+            if (const std::string* loc = g_jsonLoc->Find(v.items[0].str, v.items[1].str)) w.KV("LocalizedString", *loc);
         w.EndObject();
         break;
     case PropType::Object: WriteObjectRef(w, v, t_jsonPackage); break;

@@ -2359,10 +2359,10 @@ void App::DrawSearchWindow() {
     // Search / References (FModel SearchView tabs)
     {
         ImDrawList* dl = ImGui::GetWindowDrawList();
-        const char* names[2] = {"Search", "References"};
+        const char* names[3] = {"Search", "References", "Localization"};
         float tw = Dip(120), th = Dip(24);
         ImVec2 p = ImGui::GetCursorScreenPos();
-        for (int i = 0; i < 2; i++) {
+        for (int i = 0; i < 3; i++) {
             ImGui::SetCursorScreenPos(ImVec2(p.x + tw * i, p.y));
             ImGui::PushID(i);
             if (ImGui::InvisibleButton("##stab", ImVec2(tw, th))) m_searchTab = i;
@@ -2376,8 +2376,9 @@ void App::DrawSearchWindow() {
         dl->AddRectFilled(ImVec2(p.x, p.y + th), ImVec2(p.x + w, p.y + th + Dip(4)), kTabSel);
         ImGui::SetCursorScreenPos(ImVec2(p.x, p.y + th + Dip(10)));
     }
-    if (m_searchTab == 1) {
-        DrawReferencesTab();
+    if (m_searchTab == 1 || m_searchTab == 2) {
+        if (m_searchTab == 1) DrawReferencesTab();
+        else DrawLocalizationTab();
         ImGui::End();
         ImGui::PopStyleColor(3);
         return;
@@ -2439,6 +2440,68 @@ void App::DrawSearchWindow() {
     }
     ImGui::End();
     ImGui::PopStyleColor(3);
+}
+
+// Localization tab: translated strings by text / key in the chosen language
+void App::DrawLocalizationTab() {
+    auto loc = m_api->localization;
+    if (!loc) {
+        ImGui::TextDisabled("No localisation loaded");
+        return;
+    }
+    float cw = Dip(120);
+    SearchBox("##locq", m_locQuery, sizeof(m_locQuery), "Search translated text (all words must match)...", ImGui::GetContentRegionAvail().x - cw - Dip(6), false);
+    ImGui::SameLine(0, Dip(6));
+    ImGui::SetNextItemWidth(cw);
+    PushFieldStyle();
+    if (ImGui::BeginCombo("##locc", loc->Culture().c_str())) {
+        static std::vector<std::string> cultures;
+        if (cultures.empty()) cultures = Localization::Cultures(m_api->vfs);
+        for (auto& c : cultures)
+            if (ImGui::Selectable(c.c_str(), c == loc->Culture())) {
+                std::string err;
+                if (m_api->SetLanguage(c, &err)) { m_settings.language = c; m_settings.Save(); m_locLast.clear(); }
+                else LOGW("language %s: %s", c.c_str(), err.c_str());
+            }
+        ImGui::EndCombo();
+    }
+    PopFieldStyle();
+    ImGui::Checkbox("Search keys too", &m_locInKeys);
+    std::string key = Fmt("%s|%s|%d", m_locQuery, loc->Culture().c_str(), (int)m_locInKeys);
+    if (key != m_locLast) {
+        m_locLast = key;
+        m_locResults = loc->Search(m_locQuery, 5000, m_locInKeys);
+    }
+    ImGui::TextDisabled("%zu result(s) of %zu strings", m_locResults.size(), loc->Size());
+    if (ImGui::BeginTable("##loc", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable | ImGuiTableFlags_BordersInnerV)) {
+        ImGui::TableSetupScrollFreeze(0, 1);
+        ImGui::TableSetupColumn("Text", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn("Key", ImGuiTableColumnFlags_WidthFixed, Dip(260));
+        ImGui::TableSetupColumn("Namespace", ImGuiTableColumnFlags_WidthFixed, Dip(110));
+        ImGui::TableHeadersRow();
+        ImGuiListClipper clip;
+        clip.Begin((int)m_locResults.size());
+        while (clip.Step())
+            for (int i = clip.DisplayStart; i < clip.DisplayEnd; i++) {
+                const LocEntry* e = m_locResults[i];
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::PushID(i);
+                ImGui::Selectable(e->text.c_str(), false, ImGuiSelectableFlags_SpanAllColumns);
+                if (ImGui::IsItemHovered() && e->text.size() > 60) ImGui::SetTooltip("%s", e->text.c_str());
+                if (ImGui::BeginPopupContextItem("##lctx")) {
+                    if (ImGui::MenuItem("Copy Text")) CopyToClipboard(e->text);
+                    if (ImGui::MenuItem("Copy Key")) CopyToClipboard(e->key);
+                    ImGui::EndPopup();
+                }
+                ImGui::TableNextColumn();
+                ImGui::TextDisabled("%s", e->key.c_str());
+                ImGui::TableNextColumn();
+                ImGui::TextDisabled("%s", e->ns.empty() ? "(none)" : e->ns.c_str());
+                ImGui::PopID();
+            }
+        ImGui::EndTable();
+    }
 }
 
 // ================================================================== file context menu (FModel FileContextMenu)

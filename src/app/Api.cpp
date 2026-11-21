@@ -53,6 +53,7 @@ Api::Api(Settings& s) : settings(s) {
     RegisterWorldTools(*this);
     RegisterAudioTools(*this);
     RegisterExportTools(*this);
+    RegisterLocalizationTools(*this);
 }
 
 bool Api::EnsureMounted(std::string* error) {
@@ -65,6 +66,19 @@ bool Api::EnsureMounted(std::string* error) {
     if (!vfs.Mount(settings.PaksDir())) { if (error) *error = "no pak files found in " + Narrow(settings.PaksDir()); return false; }
     cache = std::make_unique<PackageCache>(vfs, 256ull << 20);
     m_mounted = true;
+    std::string lerr;
+    if (!SetLanguage(settings.language.empty() ? "en" : settings.language, &lerr) && settings.language != "en") SetLanguage("en");
+    return true;
+}
+
+bool Api::SetLanguage(const std::string& culture, std::string* error) {
+    auto loc = std::make_shared<Localization>();
+    if (!loc->Load(vfs, culture, error)) return false;
+    static std::vector<std::shared_ptr<Localization>> retired;   // JSON writers on other threads may still read the old table
+    if (localization) retired.push_back(localization);
+    localization = loc;
+    SetJsonLocalization(loc.get());
+    LOGI("localisation: %zu strings (%s)", loc->Size(), culture.c_str());
     return true;
 }
 

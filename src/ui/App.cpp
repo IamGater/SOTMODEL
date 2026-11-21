@@ -1046,6 +1046,25 @@ void App::DrawSettings() {
     ImGui::Checkbox("Keep folder structure when exporting", &m_settings.exportKeepDirectories);
     row("");
     ImGui::Checkbox("Show grid in model viewer", &m_settings.showGrid);
+    row("Game language");
+    ImGui::SetNextItemWidth(200);
+    if (ImGui::BeginCombo("##lang", m_settings.language.c_str())) {   // FText values show this translation
+        if (m_mountState == MountState::Ready) {
+            static std::vector<std::string> cultures;
+            if (cultures.empty()) cultures = Localization::Cultures(m_api->vfs);
+            for (auto& c : cultures)
+                if (ImGui::Selectable(c.c_str(), c == m_settings.language)) {
+                    std::string err;
+                    if (m_api->SetLanguage(c, &err)) {
+                        m_settings.language = c;
+                        m_settings.Save();
+                    } else {
+                        LOGW("language %s: %s", c.c_str(), err.c_str());
+                    }
+                }
+        }
+        ImGui::EndCombo();
+    }
     ImGui::Separator();
     if (ImGui::Button("Import from FModel")) {
         Settings tmp = m_settings;
