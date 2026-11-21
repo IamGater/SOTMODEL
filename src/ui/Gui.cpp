@@ -250,7 +250,8 @@ void ApplyTheme(float scale) {
     s.FrameRounding = 0;
     s.PopupRounding = 3;
     s.ScrollbarRounding = 0;
-    s.GrabRounding = 3;
+    s.GrabRounding = 2;
+    s.GrabMinSize = 5;   // a thin handle: slider captions ("speed 1.00x") stay readable under it
     s.TabRounding = 0;
     s.WindowBorderSize = 0;
     s.FrameBorderSize = 0;
