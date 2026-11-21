@@ -75,6 +75,13 @@ struct WorldDecal {
     u32 level = 0;
 };
 
+// A ParticleSystemComponent: the Cascade system it plays (simulated near the camera by the viewer).
+struct WorldEmitter {
+    std::string system;   // object path of the ParticleSystem
+    Mat4 transform;       // component -> world
+    u32 level = 0;
+};
+
 // ExponentialHeightFogComponent (UE 4.10 units: density and falloff are divided by 1000 when rendering).
 struct WorldFog {
     Vec3 position;
@@ -100,6 +107,7 @@ struct WorldData {
     std::vector<WorldLandscape> landscapes;
     std::vector<WorldLight> lights;
     std::vector<WorldDecal> decals;
+    std::vector<WorldEmitter> emitters;
     std::vector<WorldFog> fogs;
     bool hasWater = false;
     float waterLevel = 0;   // Z of the FFT water plane (FFTWaterComponent); 0 when the map has none

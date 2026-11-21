@@ -1,17 +1,9 @@
 // Particle system view: simulated sprite preview, emitter list and module curves.
 #include "ui/App.h"
 #include "ui/UiCommon.h"
+#include "render/ParticleDraw.h"
 #include "imgui.h"
 #include <cmath>
-
-namespace {
-
-ImU32 Col(const Vec4& c, float alphaScale = 1) {
-    auto ch = [](float v) { return (int)std::clamp(v * 255.f, 0.f, 255.f); };
-    return IM_COL32(ch(c.x), ch(c.y), ch(c.z), ch(c.w * alphaScale));
-}
-
-}   // namespace
 
 void App::DrawParticlePanel(Document& d) {
     ParticleSystemInfo& ps = *d.particles;
@@ -36,79 +28,29 @@ void App::DrawParticlePanel(Document& d) {
         m_busyFrames = 3;
     }
     sim.AdvanceTo(d.psTime);
-    // viewport
+    // viewport (the 3D renderer: sprites are depth sorted and blended like the game's translucent / additive materials)
     float listH = std::min(fs * 16, ImGui::GetContentRegionAvail().y * 0.42f);
     ImVec2 size(ImGui::GetContentRegionAvail().x, std::max(fs * 10, ImGui::GetContentRegionAvail().y - listH));
     ImVec2 p = ImGui::GetCursorScreenPos();
-    ImGui::InvisibleButton("##psview", size, ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight);
-    if (ImGui::IsItemActive()) {
-        ImVec2 md = ImGui::GetIO().MouseDelta;
-        d.psYaw += md.x * 0.4f;
-        d.psPitch = std::clamp(d.psPitch - md.y * 0.4f, -89.f, 89.f);
-    }
-    if (ImGui::IsItemHovered() && ImGui::GetIO().MouseWheel != 0) d.psDist *= powf(0.88f, ImGui::GetIO().MouseWheel);
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-    dl->PushClipRect(p, ImVec2(p.x + size.x, p.y + size.y), true);
-    dl->AddRectFilledMultiColor(p, ImVec2(p.x + size.x, p.y + size.y), IM_COL32(44, 46, 54, 255), IM_COL32(44, 46, 54, 255), IM_COL32(24, 25, 30, 255),
-                                IM_COL32(24, 25, 30, 255));
-    Vec3 eye, right, up, fwd;
-    ParticleCamera(d.psCentre, d.psDist, d.psYaw, d.psPitch, eye, right, up, fwd);
-    float focal = size.y / (2 * tanf(30 * kPi / 180));
-    auto project = [&](Vec3 w, ImVec2& out, float& depth) {
-        Vec3 v = w - eye;
-        depth = Dot(v, fwd);
-        if (depth < 1) return false;
-        out = ImVec2(p.x + size.x / 2 + Dot(v, right) / depth * focal, p.y + size.y / 2 - Dot(v, up) / depth * focal);
-        return true;
-    };
-    if (d.psGrid) {   // ground grid around the origin
-        float step = std::max(10.f, powf(10, floorf(log10f(std::max(10.f, d.psDist * 0.3f)))));
-        for (int i = -10; i <= 10; i++) {
-            ImVec2 a, b;
-            float da, db;
-            ImU32 c = i == 0 ? IM_COL32(110, 110, 120, 160) : IM_COL32(80, 82, 90, 110);
-            if (project({i * step, -10 * step, 0}, a, da) && project({i * step, 10 * step, 0}, b, db)) dl->AddLine(a, b, c);
-            if (project({-10 * step, i * step, 0}, a, da) && project({10 * step, i * step, 0}, b, db)) dl->AddLine(a, b, c);
-        }
-    }
     std::vector<ParticleSprite> sprites;
     sim.Sprites(sprites);
-    std::vector<std::pair<float, size_t>> order;
-    for (size_t i = 0; i < sprites.size(); i++) {
-        int e = sprites[i].emitter;
-        if (e < (int)d.psVisible.size() && !d.psVisible[e]) continue;
-        if (d.psSel >= 0 && d.psSolo && e != d.psSel) continue;
-        order.push_back({Dot(sprites[i].pos - eye, fwd), i});
-    }
-    std::sort(order.begin(), order.end(), [](auto& a, auto& b) { return a.first > b.first; });
-    for (auto& [depth, i] : order) {
-        const ParticleSprite& s = sprites[i];
-        const ParticleEmitterInfo& e = ps.emitters[s.emitter];
-        ImVec2 c;
-        float dz;
-        if (!project(s.pos, c, dz)) continue;
-        float hx = s.size.x * 0.5f / dz * focal, hy = s.size.y * 0.5f / dz * focal;
-        float ax = cosf(s.rotation), ay = sinf(s.rotation);
-        if (e.screenAlignment.find("Velocity") != std::string::npos && Length(s.velocity) > 1e-3f) {
-            float vx = Dot(s.velocity, right), vy = -Dot(s.velocity, up), l = sqrtf(vx * vx + vy * vy);
-            if (l > 1e-4f) { ax = vy / l; ay = -vx / l; }
+    std::vector<ParticleLook> looks = ParticleLooks(ps, d.psTextures);
+    for (size_t e = 0; e < looks.size(); e++)
+        looks[e].visible = (e >= d.psVisible.size() || d.psVisible[e]) && !(d.psSel >= 0 && d.psSolo && (int)e != d.psSel);
+    int drawn = 0;
+    d.draw.grid = d.psGrid;
+    DrawViewportScene(*m_renderer, d.camera, d.draw, size, true, [&] {
+        d.camera.target = d.psCentre;
+        d.camera.distance = d.psDist;
+    }, [&] {
+        if (d.psGrid) {
+            float cell = powf(10.f, floorf(log10f(std::max(10.f, d.psDist * 0.3f))));
+            m_renderer->DrawGrid(cell / 10, 20);
         }
-        ImVec2 ux(ax * hx, ay * hx), uy(-ay * hy, ax * hy);
-        GpuTexture* tex = s.emitter < (int)d.psTextures.size() ? d.psTextures[s.emitter].get() : nullptr;
-        bool additive = e.blendMode.find("Additive") != std::string::npos;
-        ImU32 col = Col(s.color, additive ? 0.7f : 1.f);
-        if (tex) {
-            int cells = e.subH * e.subV, cell = ((int)s.subImage % cells + cells) % cells;
-            float u0 = (float)(cell % e.subH) / e.subH, v0 = (float)(cell / e.subH) / e.subV, du = 1.f / e.subH, dv = 1.f / e.subV;
-            dl->AddImageQuad((ImTextureID)(intptr_t)tex->srvRaw.Get(), ImVec2(c.x - ux.x - uy.x, c.y - ux.y - uy.y), ImVec2(c.x + ux.x - uy.x, c.y + ux.y - uy.y),
-                             ImVec2(c.x + ux.x + uy.x, c.y + ux.y + uy.y), ImVec2(c.x - ux.x + uy.x, c.y - ux.y + uy.y), ImVec2(u0, v0), ImVec2(u0 + du, v0),
-                             ImVec2(u0 + du, v0 + dv), ImVec2(u0, v0 + dv), col);
-        } else {
-            dl->AddCircleFilled(c, std::max(1.f, (hx + hy) * 0.5f), Col(s.color, 0.5f));
-        }
-    }
-    dl->AddText(ImVec2(p.x + 6, p.y + 4), IM_COL32(200, 200, 200, 200), Fmt("%d particles | drag orbits, wheel zooms", (int)order.size()).c_str());
-    dl->PopClipRect();
+        drawn = DrawParticleSprites(*m_renderer, d.camera, sprites, looks, Mat4::Identity());
+    });
+    ImGui::GetWindowDrawList()->AddText(ImVec2(p.x + 6, p.y + 4), IM_COL32(200, 200, 200, 200),
+                                        Fmt("%d particles | drag orbits, wheel zooms, F frames", drawn).c_str());
     // emitters | modules | curve
     ImGui::BeginChild("##pslist", ImVec2(0, 0), ImGuiChildFlags_None);
     float colW = ImGui::GetContentRegionAvail().x / 3;

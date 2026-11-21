@@ -100,6 +100,13 @@ struct DrawOptions {
     float time = -1;                           // material time (s); < 0 = wall clock
 };
 
+// A particle sprite corner (DrawSprites takes triangle lists, 6 vertices per quad). Colour is linear rgb + alpha.
+struct SpriteVertex {
+    float pos[3];
+    float uv[2];
+    float color[4];
+};
+
 class Renderer {
 public:
     bool Init(ID3D11Device* device, ID3D11DeviceContext* ctx, std::string* error);
@@ -118,6 +125,8 @@ public:
     void DrawMesh(const GpuMesh& mesh, const Mat4* instances, u32 count);
     void DrawGrid(float cellSize, int cells);
     void DrawLines(const std::vector<Vec3>& segments, u32 colorAbgr);   // pairs of points, drawn on top
+    // Translucent particle quads: depth tested but not written; texture null = a soft round dot. Draw after the opaque scene.
+    void DrawSprites(const SpriteVertex* verts, u32 count, const GpuTexture* texture, bool additive);
     void EndFrame();
     ID3D11ShaderResourceView* Output() const { return m_outSrv.Get(); }
     bool ReadOutput(Image& out);   // CPU readback of the last frame (RGBA8, gamma encoded)
@@ -142,6 +151,11 @@ private:
     ComPtr<ID3D11DepthStencilState> m_depth, m_noDepth;
     ComPtr<ID3D11Buffer> m_lineVb;
     u32 m_lineCap = 0;
+    ComPtr<ID3D11VertexShader> m_spriteVs;
+    ComPtr<ID3D11PixelShader> m_spritePs;
+    ComPtr<ID3D11InputLayout> m_spriteLayout;
+    ComPtr<ID3D11Buffer> m_spriteVb;
+    u32 m_spriteCap = 0;
     ComPtr<ID3D11BlendState> m_opaqueBlend, m_lineBlend, m_addBlend, m_modBlend;
     ComPtr<ID3D11DepthStencilState> m_depthNoWrite;
     ComPtr<ID3D11Buffer> m_graphCb;

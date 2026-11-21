@@ -66,6 +66,17 @@ static void WriteWorldEffects(JsonWriter& w, const WorldData& wd, int limit) {
     for (auto& [m, c] : mats) { if (k++ >= limit) break; w.KV(m.empty() ? "(none)" : m, (i64)c); }
     w.EndObject();
     w.EndObject();
+    w.Key("particleEmitters");
+    w.BeginObject();
+    w.KV("count", (i64)wd.emitters.size());
+    std::map<std::string, int> systems;
+    for (auto& e : wd.emitters) systems[e.system]++;
+    w.Key("systems");
+    w.BeginObject();
+    k = 0;
+    for (auto& [s, c] : systems) { if (k++ >= limit) break; w.KV(s, (i64)c); }
+    w.EndObject();
+    w.EndObject();
     if (!wd.fogs.empty()) {
         w.Key("heightFog");
         w.BeginArray();

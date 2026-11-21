@@ -4,6 +4,7 @@
 #include "app/ClassIndex.h"
 #include "render/GpuAssets.h"
 #include "render/WorldScene.h"
+#include "render/ParticleDraw.h"
 #include "ue/Material.h"
 #include "ue/Mesh.h"
 #include "ue/MeshExtras.h"
@@ -44,6 +45,10 @@ private:
 };
 
 enum class DocView { Properties, Texture, Model, Material, Animation, World };
+
+// App.cpp: an interactive 3D viewport (orbit / fly / pan / zoom) rendering `scene`; onClick gets the uv of a click.
+void DrawViewportScene(Renderer& r, Camera& cam, const DrawOptions& draw, ImVec2 size, bool allowFly, const std::function<void()>& frame,
+                       const std::function<void()>& scene, const std::function<void(ImVec2)>& onClick = {});
 
 struct CollisionData;
 struct Document {
@@ -123,9 +128,13 @@ struct Document {
     char morphFilter[64] = {};
     // meshes attached to sockets (a weapon in a hand); they follow the animation's pose
     struct Attachment {
-        std::string mesh, socket;
+        std::string mesh, socket;   // mesh: the attached asset (a mesh or a particle system)
         std::shared_ptr<MeshData> data;
         std::shared_ptr<GpuMesh> gpu;
+        std::shared_ptr<ParticleSystemInfo> ps;   // particle system attachments: simulated in the viewport
+        std::shared_ptr<ParticleSim> sim;
+        std::vector<ParticleLook> looks;
+        float psTime = 0, psLength = 1;
         Mat4 world = Mat4::Identity();   // this frame's attachment -> mesh space
         bool placed = false;             // false: the socket is not on the current mesh
     };
@@ -150,6 +159,12 @@ struct Document {
     int worldOutliner = 0;   // 0 meshes, 1 levels
     bool worldSea = false;        // sot_world_layout_2: the whole open world
     bool worldBlueprint = false;  // a Blueprint actor class assembled from its components (shown through the world view)
+    bool worldParticles = true;   // simulate the ParticleSystemComponents near the camera
+    struct FxTemplate { int state = 0; std::shared_ptr<Attachment> fx; };   // state 0 loading, 1 ready, 2 failed; fx: system + looks
+    std::unordered_map<std::string, FxTemplate> fxTemplates;   // by system path
+    struct FxLive { std::shared_ptr<ParticleSim> sim; float time = 0; };
+    std::unordered_map<size_t, FxLive> fxLive;                 // by WorldData::emitters index
+    int fxDrawn = 0;
     bool worldProxies = true;     // whole sea: islands as their merged LOD proxies
     char worldIslands[256] = {};  // whole sea: island filter (comma terms, '-' excludes)
 
@@ -279,12 +294,15 @@ private:
     void DrawParticlePanel(Document& d);   // ParticlePanel.cpp
     void DrawGraphParams(GpuMaterial& mat);   // live scalar / vector parameter editing (graph shader)
     void DrawAttachControls(Document& d);   // attach a mesh to one of the shown mesh's sockets
-    void AttachMesh(std::shared_ptr<Document> d, std::string meshPath, std::string socket);   // loads in the background
-    static void PlaceAttachments(Document& d, const std::vector<Mat4>* boneWorld);   // null: reference pose
+    void AttachMesh(std::shared_ptr<Document> d, std::string meshPath, std::string socket);   // loads in the background (mesh or particle system)
+    bool LoadParticleEffect(const Package& pkg, Document::Attachment& at, std::string* error);
+    void PlaceAttachments(Document& d, const std::vector<Mat4>* boneWorld);   // null: reference pose; steps attached particles
     void RequestGraphShaders(Document& d);   // compiles the graph shaders of the shown mesh's materials in the background
     void DrawWorld(Document& d);
     void PopoutButton(Document& d, bool flow);
     void DrawWorldSelection(Document& d, ImVec2 vp0, ImVec2 vsize);
+    void UpdateWorldParticles(Document& d);   // picks the emitters near the camera, loads their systems, steps the simulations
+    void DrawWorldParticles(Document& d);     // inside the viewport scene
     static bool Has3dView(const Document& d);
     void LoadWorld(std::shared_ptr<Document> d);
     void LoadAnimationMesh(std::shared_ptr<Document> d, std::string meshPath);

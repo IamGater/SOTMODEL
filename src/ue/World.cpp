@@ -684,6 +684,16 @@ void WorldLoader::AddLevel(const Package& pkg, const Mat4& levelTransform, const
             d.level = levelIndex;
             return true;
         }
+        if (IEquals(c, "ParticleSystemComponent")) {
+            const CompView& v = View(i);
+            if (!v.Bool("bVisible", true) || v.Bool("bHiddenInGame", false) || !v.Bool("bAutoActivate", true)) return true;
+            const PropLayer* from = nullptr;
+            const PropValue* t = v.Get("Template", &from);
+            std::string sys = t ? ObjectPathOf(*from->pkg, *t) : std::string();
+            if (sys.empty()) return true;
+            out.emitters.push_back({sys, World(i) * levelTransform, levelIndex});
+            return true;
+        }
         if (IEquals(c, "ExponentialHeightFogComponent")) {
             const CompView& v = View(i);
             WorldFog& f = out.fogs.emplace_back();
@@ -868,6 +878,14 @@ bool WorldLoader::AddBlueprint(std::string_view classPackage, const Mat4& transf
                 const PropValue* cls = v.Get("ChildActorClass", &from);
                 std::string child = cls && cls->ObjIndex() < 0 ? from->pkg->ImportPackage(cls->ObjIndex()) : std::string();
                 if (IStartsWith(child, "/Game/") && depth < 8) Actor(child, World(var), depth + 1);
+                continue;
+            }
+            if (c == "ParticleSystemComponent") {
+                if (!opt.lights || !v.Bool("bVisible", true) || v.Bool("bHiddenInGame", false) || !v.Bool("bAutoActivate", true)) continue;
+                const PropLayer* from = nullptr;
+                const PropValue* tp = v.Get("Template", &from);
+                std::string sys = tp ? ObjectPathOf(*from->pkg, *tp) : std::string();
+                if (!sys.empty()) out.emitters.push_back({sys, World(var), levelIndex});
                 continue;
             }
             if (!IsMeshComponentClass(c)) continue;

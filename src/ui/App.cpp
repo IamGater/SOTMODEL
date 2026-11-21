@@ -483,6 +483,11 @@ void App::LoadDocument(std::shared_ptr<Document> d) {
                 d->psLength = std::min(d->psLength, 10.f);
                 d->psVisible.assign(ps->emitters.size(), 1);
                 ParticleFrame(*ps, d->psLength, d->psCentre, d->psDist);
+                d->camera.target = d->psCentre;
+                d->camera.distance = d->psDist;
+                d->camera.yaw = d->psYaw;
+                d->camera.pitch = d->psPitch;
+                d->camera.nearZ = std::max(0.5f, d->psDist * 0.002f);
                 auto sim = std::make_shared<ParticleSim>();
                 sim->Init(*ps);
                 d->particles = ps;
@@ -602,8 +607,6 @@ static ImVec2 MinViewportAvail() {
     return a;
 }
 
-// Camera input over an image-sized button (LMB orbit, RMB look + WASD/QE fly, MMB pan, wheel zoom, F calls `frame`),
-// then renders `scene` into the viewport.
 // World-space ray through a point of the viewport (uv 0..1, y down), matching Renderer::BeginFrame's camera.
 static void ViewRay(const Camera& cam, ImVec2 size, ImVec2 uv, Vec3& origin, Vec3& dir) {
     Vec3 eye = cam.Eye(), f = Normalize(cam.target - eye), s = Normalize(Cross({0, 0, 1}, f)), u = Cross(f, s);
@@ -612,9 +615,10 @@ static void ViewRay(const Camera& cam, ImVec2 size, ImVec2 uv, Vec3& origin, Vec
     dir = Normalize(f + s * ((uv.x * 2 - 1) * th * aspect) + u * ((1 - uv.y * 2) * th));
 }
 
-// `onClick` (optional) gets the viewport uv of a left click that did not drag.
-static void DrawViewportScene(Renderer& r, Camera& cam, const DrawOptions& draw, ImVec2 size, bool allowFly, const std::function<void()>& frame,
-                              const std::function<void()>& scene, const std::function<void(ImVec2)>& onClick = {}) {
+// Camera input over an image-sized button (LMB orbit, RMB look + WASD/QE fly, MMB pan, wheel zoom, F calls `frame`),
+// then renders `scene` into the viewport. `onClick` (optional) gets the viewport uv of a left click that did not drag.
+void DrawViewportScene(Renderer& r, Camera& cam, const DrawOptions& draw, ImVec2 size, bool allowFly, const std::function<void()>& frame,
+                       const std::function<void()>& scene, const std::function<void(ImVec2)>& onClick) {
     if (size.x < 8 || size.y < 8) return;
     ImGuiIO& io = ImGui::GetIO();
     ImVec2 p0 = ImGui::GetCursorScreenPos();
@@ -676,6 +680,12 @@ static void DrawViewport(Renderer& r, Document& d, ImVec2 size, bool allowFly) {
         for (auto& at : d.attachments)
             if (at.gpu && at.placed) r.DrawMesh(*at.gpu, &at.world, 1);
         if (d.showCollision && !d.collisionLines.empty()) r.DrawLines(d.collisionLines, 0xff60ff40u);
+        std::vector<ParticleSprite> sprites;
+        for (auto& at : d.attachments)
+            if (at.sim && at.placed) {
+                at.sim->Sprites(sprites);
+                DrawParticleSprites(r, d.camera, sprites, at.looks, at.world);
+            }
         if (d.showSockets) {
             static const u32 axis[3] = {0xff4040ffu, 0xff40ff40u, 0xffff6040u};
             for (int k = 0; k < 3; k++)
@@ -761,10 +771,25 @@ void App::FramePopout() {
     ImGui::PopStyleVar(2);
 }
 
+// Advances an attached particle system by the frame time (looping like the particle view).
+static void StepAttachedParticles(Document::Attachment& at, float dt) {
+    if (!at.sim) return;
+    at.psTime += dt;
+    if (at.psTime > at.psLength * 1.5f && at.sim->Count() == 0) {
+        at.sim->Reset();
+        at.psTime = 0;
+    }
+    at.sim->AdvanceTo(at.psTime);
+}
+
 // Socket -> mesh space of every attachment: the posed bone (boneWorld = mesh-space bone matrices of an animation pose) or the
 // reference pose the sockets were read in.
 void App::PlaceAttachments(Document& d, const std::vector<Mat4>* boneWorld) {
     for (auto& at : d.attachments) {
+        if (at.sim) {
+            StepAttachedParticles(at, ImGui::GetIO().DeltaTime);
+            m_busyFrames = 3;
+        }
         at.placed = false;
         for (auto& so : d.sockets) {
             if (!IEquals(so.name, at.socket)) continue;
@@ -781,6 +806,25 @@ void App::PlaceAttachments(Document& d, const std::vector<Mat4>* boneWorld) {
     }
 }
 
+// Worker thread: a particle system with its emitter textures and a simulation, ready to draw at a socket.
+bool App::LoadParticleEffect(const Package& pkg, Document::Attachment& at, std::string* error) {
+    auto ps = std::make_shared<ParticleSystemInfo>();
+    if (!ReadParticleSystem(*m_api->cache, pkg, pkg.MainExport() - 1, *ps, error)) return false;
+    std::vector<std::shared_ptr<GpuTexture>> tex;
+    at.psLength = 1;
+    for (auto& e : ps->emitters) {
+        Image img;
+        tex.push_back(LoadParticleTexture(*m_api->cache, e.material, 512, img) ? m_renderer->CreateTexture(img, true, false) : nullptr);
+        at.psLength = std::max(at.psLength, e.delay + e.duration);
+    }
+    at.psLength = std::min(at.psLength, 10.f);
+    at.looks = ParticleLooks(*ps, tex);
+    at.sim = std::make_shared<ParticleSim>();
+    at.sim->Init(*ps);
+    at.ps = ps;
+    return true;
+}
+
 void App::AttachMesh(std::shared_ptr<Document> sp, std::string path, std::string socket) {
     sp->attachLoading = true;
     sp->attachError.clear();
@@ -789,21 +833,22 @@ void App::AttachMesh(std::shared_ptr<Document> sp, std::string path, std::string
         i64 e = m_api->ResolveFile(path);
         auto pkg = e >= 0 ? m_api->cache->Load((u32)e, &err) : nullptr;
         auto mesh = std::make_shared<MeshData>();
-        std::shared_ptr<GpuMesh> gm;
+        auto at = std::make_shared<Document::Attachment>();
+        at->mesh = path;
+        at->socket = socket;
+        i32 main = pkg ? pkg->MainExport() : 0;
         if (!pkg) err = "not found: " + path;
-        else if (!pkg->MainExport() || !ReadMesh(*pkg, pkg->MainExport() - 1, *mesh, &err)) err = path + ": " + (err.empty() ? "not a mesh" : err);
-        else if (!(gm = m_assets->Mesh(*mesh, 0))) err = path + ": no geometry";
-        Post([sp, mesh, gm, err, path, socket] {
+        else if (main && pkg->ExportClass(main - 1) == "ParticleSystem") {
+            if (!LoadParticleEffect(*pkg, *at, &err)) err = path + ": " + err;
+        } else if (!main || !ReadMesh(*pkg, main - 1, *mesh, &err)) err = path + ": " + (err.empty() ? "not a mesh or particle system" : err);
+        else if (!(at->gpu = m_assets->Mesh(*mesh, 0))) err = path + ": no geometry";
+        else at->data = mesh;
+        Post([sp, at, err] {
             sp->attachLoading = false;
             sp->attachError = err;
             if (!err.empty()) LOGW("attach: %s", err.c_str());
-            if (!gm) return;
-            Document::Attachment at;
-            at.mesh = path;
-            at.socket = socket;
-            at.data = mesh;
-            at.gpu = gm;
-            sp->attachments.push_back(std::move(at));
+            if (!at->gpu && !at->sim) return;
+            sp->attachments.push_back(std::move(*at));
             sp->attachEdit[0] = 0;
         });
     });
@@ -1162,6 +1207,82 @@ void App::DrawAnimation(Document& d) {
     DrawViewport(*m_renderer, d, MinViewportAvail(), true);
 }
 
+// Map effects: the nearest emitters within kFxRange of the camera are simulated (their systems load in the background).
+static constexpr float kFxRange = 12000;   // cm
+static constexpr size_t kFxMax = 48;
+
+void App::UpdateWorldParticles(Document& d) {
+    if (!d.world || !d.worldParticles || d.world->emitters.empty()) {
+        d.fxLive.clear();
+        return;
+    }
+    const auto& em = d.world->emitters;
+    Vec3 eye = d.camera.Eye();
+    std::vector<std::pair<float, size_t>> closest;
+    for (size_t i = 0; i < em.size(); i++) {
+        float dist = Length(em[i].transform.Translation() - eye);
+        if (dist < kFxRange) closest.push_back({dist, i});
+    }
+    if (closest.size() > kFxMax) {
+        std::partial_sort(closest.begin(), closest.begin() + kFxMax, closest.end());
+        closest.resize(kFxMax);
+    }
+    std::unordered_set<size_t> keep;
+    float dt = ImGui::GetIO().DeltaTime;
+    std::shared_ptr<Document> sp;
+    for (auto& [dist, i] : closest) {
+        keep.insert(i);
+        auto [tit, added] = d.fxTemplates.try_emplace(em[i].system);
+        Document::FxTemplate& t = tit->second;
+        if (added) {   // load the system once per path
+            if (!sp)
+                for (auto& x : m_docs)
+                    if (x.get() == &d) sp = x;
+            std::string path = em[i].system;
+            m_jobs->Push([this, sp, path] {
+                auto fx = std::make_shared<Document::Attachment>();
+                std::string err;
+                i64 e = m_api->ResolveFile(path);
+                auto pkg = e >= 0 ? m_api->cache->Load((u32)e, &err) : nullptr;
+                bool ok = pkg && pkg->MainExport() && LoadParticleEffect(*pkg, *fx, &err);
+                Post([sp, path, fx, ok] {
+                    auto& tt = sp->fxTemplates[path];
+                    tt.state = ok ? 1 : 2;
+                    if (ok) tt.fx = fx;
+                });
+            });
+        }
+        if (t.state != 1) continue;
+        auto& live = d.fxLive[i];
+        if (!live.sim) {
+            live.sim = std::make_shared<ParticleSim>();
+            live.sim->Init(*t.fx->ps, (u32)i * 2654435761u + 1);
+        }
+        live.time += dt;
+        if (live.time > t.fx->psLength * 1.5f && live.sim->Count() == 0) {
+            live.sim->Reset();
+            live.time = 0;
+        }
+        live.sim->AdvanceTo(live.time);
+    }
+    for (auto it = d.fxLive.begin(); it != d.fxLive.end();)
+        it = keep.count(it->first) ? std::next(it) : d.fxLive.erase(it);
+    if (!closest.empty()) m_busyFrames = 3;
+}
+
+void App::DrawWorldParticles(Document& d) {
+    d.fxDrawn = 0;
+    if (!d.world || !d.worldParticles) return;
+    std::vector<ParticleSprite> sprites;
+    for (auto& [i, live] : d.fxLive) {
+        if (!live.sim || i >= d.world->emitters.size()) continue;
+        auto& t = d.fxTemplates[d.world->emitters[i].system];
+        if (!t.fx) continue;
+        live.sim->Sprites(sprites);
+        d.fxDrawn += DrawParticleSprites(*m_renderer, d.camera, sprites, t.fx->looks, d.world->emitters[i].transform);
+    }
+}
+
 void App::DrawWorld(Document& d) {
     auto reload = [&] {
         for (auto& sp : m_docs)
@@ -1169,6 +1290,7 @@ void App::DrawWorld(Document& d) {
                 d.worldScene.reset();
                 d.world.reset();
                 d.worldSel = {};
+                d.fxLive.clear();   // emitter indices change
                 d.cancel = false;
                 LoadWorld(sp);
                 break;
@@ -1213,6 +1335,11 @@ void App::DrawWorld(Document& d) {
         FlowToggle("Gizmos", &d.worldDraw.gizmos);
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Light ranges / spot cones (yellow) and decal boxes (blue) within 300 m");
     }
+    if (!w.emitters.empty()) {
+        FlowToggle("Particles", &d.worldParticles);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Simulates the %zu nearest of the %zu particle emitters within %.0f m of the camera", kFxMax, w.emitters.size(), kFxRange / 100);
+    }
     FlowToggle("Textures", &d.draw.textures);
     FlowToggle("Wireframe", &d.draw.wireframe);
     FlowNext(130);
@@ -1239,14 +1366,16 @@ void App::DrawWorld(Document& d) {
     seaOptions();
     const auto& st = sc.Stats();
     ImGui::PushTextWrapPos(0);
-    ImGui::TextDisabled("%zu levels | %zu instances of %zu meshes, %zu landscape patches, %zu lights, %zu decals | drawn: %u instances, %u meshes, %u patches, %.2fM tris | %s GPU",
-                        w.levels.size(), w.InstanceCount(), w.groups.size(), w.landscapes.size(), w.lights.size(), w.decals.size(), st.instancesDrawn, st.meshesDrawn,
-                        st.landscapesDrawn, m_renderer->DrawnTriangles() / 1e6, HumanSize(sc.GpuBytes()).c_str());
+    ImGui::TextDisabled("%zu levels | %zu instances of %zu meshes, %zu landscape patches, %zu lights, %zu decals, %zu emitters | drawn: %u instances, %u meshes, "
+                        "%u patches, %.2fM tris, %d particles | %s GPU",
+                        w.levels.size(), w.InstanceCount(), w.groups.size(), w.landscapes.size(), w.lights.size(), w.decals.size(), w.emitters.size(), st.instancesDrawn,
+                        st.meshesDrawn, st.landscapesDrawn, m_renderer->DrawnTriangles() / 1e6, d.fxDrawn, HumanSize(sc.GpuBytes()).c_str());
     ImGui::PopTextWrapPos();
 
     ImVec2 avail = MinViewportAvail();
     float side = avail.x > 640 ? std::min(360.f, avail.x * 0.3f) : 0.f;   // the outliner is dropped in narrow windows
     Camera& cam = d.camera;
+    UpdateWorldParticles(d);
     sc.Lighting(cam, d.worldDraw, d.worldLighting);
     d.draw.lighting = d.worldBlueprint ? nullptr : &d.worldLighting;   // a lone actor: the viewer's key light
     ImVec2 vp0 = ImGui::GetCursorScreenPos(), vsize(side > 0 ? avail.x - side - ImGui::GetStyle().ItemSpacing.x : avail.x, avail.y);
@@ -1254,6 +1383,7 @@ void App::DrawWorld(Document& d) {
         *m_renderer, cam, d.draw, vsize, true, frameWorld,
         [&] {
             sc.Draw(cam, avail.y, d.worldDraw);
+            DrawWorldParticles(d);
             sc.DrawOverlays(cam, d.worldDraw);
             if (d.worldSel.kind != WorldScene::Pick::None) {   // selection: its mesh bounds as a box
                 const Vec3 &a = d.worldSel.boundsMin, &b = d.worldSel.boundsMax;
