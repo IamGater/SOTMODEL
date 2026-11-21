@@ -281,6 +281,22 @@ void Api::RegisterAssetTools() {
                   i32 main = pkg->MainExport();
                   if (main) { w.KV("mainExport", pkg->Exports()[main - 1].objectName); w.KV("mainClass", pkg->ExportClass(main - 1)); }
                   w.KV("sizeBytes", (i64)pkg->Data().size());
+                  WorldTileInfo tile;
+                  if (pkg->ReadWorldTileInfo(tile)) {
+                      w.Key("worldTile");
+                      w.BeginObject();
+                      w.Key("position"); w.BeginArray(); w.Int(tile.x); w.Int(tile.y); w.EndArray();
+                      if (tile.boundsValid) {
+                          w.Key("boundsMin"); w.BeginArray(); for (float f : tile.boundsMin) w.Num(f); w.EndArray();
+                          w.Key("boundsMax"); w.BeginArray(); for (float f : tile.boundsMax) w.Num(f); w.EndArray();
+                      }
+                      w.KV("layer", tile.layer);
+                      w.KV("streamingDistance", (i64)tile.streamingDistance);
+                      if (!tile.parent.empty()) w.KV("parent", tile.parent);
+                      if (tile.zOrder) w.KV("zOrder", (i64)tile.zOrder);
+                      if (tile.hidden) w.KV("hidden", true);
+                      w.EndObject();
+                  }
                   w.Key("exports");
                   w.BeginArray();
                   for (size_t i = 0; i < pkg->Exports().size(); i++) {

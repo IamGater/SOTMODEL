@@ -56,6 +56,7 @@ bool Package::Load(Bytes data, std::string gamePath, std::string* error) {
         r.I32();                                                 // asset registry data offset
         if (s.licenseeVersion > 0) r.Skip(6);                    // Athena: 6 reserved licensee bytes
         s.bulkDataStartOffset = r.I64();
+        if (s.ue4Version >= 224) s.worldTileInfoOffset = r.I32();
 
         if (s.nameCount < 0 || s.exportCount < 0 || s.importCount < 0) throw ParseError("negative table counts");
         Reader nr(m_data, s.nameOffset);
@@ -252,4 +253,31 @@ void PackageCache::Clear() {
     std::lock_guard lk(m_mutex);
     m_items.clear();
     m_used = 0;
+}
+
+bool Package::ReadWorldTileInfo(WorldTileInfo& t) const {
+    t = WorldTileInfo{};
+    i32 off = m_summary.worldTileInfoOffset;
+    if (off <= 0 || (size_t)off >= m_data.size()) return false;
+    try {
+        Reader r(m_data, off);
+        t.x = r.I32();
+        t.y = r.I32();
+        for (float& f : t.boundsMin) f = r.F32();
+        for (float& f : t.boundsMax) f = r.F32();
+        t.boundsValid = r.U8() != 0;
+        t.layer = r.FString();
+        r.I32();            // Reserved0
+        r.Skip(8);          // Reserved1
+        t.streamingDistance = r.I32();
+        t.distanceStreaming = r.Bool32();
+        t.hidden = r.Bool32();
+        t.parent = r.FString();
+        i32 n = r.Count(20);
+        for (i32 i = 0; i < n; i++) { t.lodDistances.push_back((float)r.I32()); r.Skip(16); }
+        t.zOrder = r.I32();
+        return true;
+    } catch (const std::exception&) {
+        return false;
+    }
 }

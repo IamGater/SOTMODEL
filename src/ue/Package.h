@@ -18,6 +18,7 @@ struct PackageSummary {
     i32 importCount = 0, importOffset = 0;
     i32 dependsOffset = 0;
     i64 bulkDataStartOffset = 0;
+    i32 worldTileInfoOffset = 0;   // world composition tile info (levels of a NestedWorldComposition)
     FGuid guid;
 };
 
@@ -36,6 +37,19 @@ struct ObjectExport {
 };
 
 enum : u32 { RF_Public = 0x1, RF_Standalone = 0x2, RF_Transactional = 0x8, RF_ClassDefaultObject = 0x10, RF_ArchetypeObject = 0x20 };
+
+// FWorldTileInfo of a world-composition level, stored after the package header (WorldTileInfoDataOffset).
+struct WorldTileInfo {
+    i32 x = 0, y = 0;                 // tile position (cm, relative to the parent tile)
+    float boundsMin[3]{}, boundsMax[3]{};
+    bool boundsValid = false;
+    std::string layer;                // world layer name
+    i32 streamingDistance = 0;
+    bool distanceStreaming = true, hidden = false;
+    std::string parent;               // ParentTilePackageName
+    i32 zOrder = 0;
+    std::vector<float> lodDistances;  // RelativeStreamingDistance of the LOD levels
+};
 
 // A legacy (UE4.10 / Athena) package: one .uasset/.umap carrying header, exports and bulk data.
 class Package {
@@ -68,6 +82,7 @@ public:
     PropertyList ReadProperties(size_t exportIdx, size_t* end = nullptr, std::string* error = nullptr) const;
     PropertyList ReadProperties(Reader& r, size_t limit, std::string* error = nullptr) const;
     Reader ExportReader(size_t exportIdx) const;   // reader limited to the export's serial range (absolute positions)
+    bool ReadWorldTileInfo(WorldTileInfo& out) const;   // false when the package has none
 
 private:
     std::string m_gamePath, m_packageName;
