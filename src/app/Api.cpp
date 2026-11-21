@@ -115,6 +115,13 @@ const ApiTool* Api::FindTool(std::string_view name) const {
 ApiResult Api::Call(std::string_view name, const JsonValue& args) {
     const ApiTool* t = FindTool(name);
     if (!t) return ApiResult::Error("unknown tool: " + std::string(name));
+    JsonValue schema;
+    if (JsonValue::Parse(t->schema, schema))
+        if (const JsonValue* req = schema.Get("required"); req && req->type == JsonValue::Type::Array)
+            for (auto& k : req->arr) {
+                const JsonValue* v = args.Get(k.str);
+                if (!v || v->IsNull()) return ApiResult::Error("missing required argument '" + k.str + "' for " + std::string(name));
+            }
     std::string err;
     if (!EnsureMounted(&err)) return ApiResult::Error(err);
     try {
