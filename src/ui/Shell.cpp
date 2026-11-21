@@ -81,16 +81,17 @@ void TextCentered(ImDrawList* dl, float x0, float x1, float y, ImU32 c, const st
 
 // ------------------------------------------------------------------ icons (Phosphor glyphs, ui/Icons.h)
 
-// Draws one icon glyph centred on c (by the glyph's own bounds), s = font size in pixels.
-void Glyph(ImDrawList* dl, ImVec2 c, float s, ImU32 col, const char* utf8, bool fill = false) {
+// Draws one icon glyph centred on c (by the glyph's own bounds), s = font size in pixels. Returns the drawn bounds.
+ImRect Glyph(ImDrawList* dl, ImVec2 c, float s, ImU32 col, const char* utf8, bool fill = false) {
     ImFont* f = fill ? g_iconFillFont : g_iconFont;
-    if (!f) return;
+    if (!f) return ImRect(c, c);
     unsigned int cp = 0;
     ImTextCharFromUtf8(&cp, utf8, nullptr);
     const ImFontGlyph* g = f->GetFontBaked(s)->FindGlyph((ImWchar)cp);
-    if (!g) return;
+    if (!g) return ImRect(c, c);
     ImVec2 p(IM_ROUND(c.x - (g->X0 + g->X1) * 0.5f), IM_ROUND(c.y - (g->Y0 + g->Y1) * 0.5f));
     dl->AddText(f, s, p, col, utf8);
+    return ImRect(p.x + g->X0, p.y + g->Y0, p.x + g->X1, p.y + g->Y1);
 }
 
 void IconSearch(ImDrawList* dl, ImVec2 c, float s, ImU32 col) { Glyph(dl, c, s, col, PH_MAGNIFYING_GLASS); }
@@ -125,9 +126,62 @@ void IconArchive(ImDrawList* dl, ImVec2 c, float s, bool enabled) {   // pak: gr
     Glyph(dl, c, s * 1.1f, enabled ? IM_COL32(96, 186, 112, 255) : IM_COL32(120, 120, 130, 255), PH_FILE_ZIP, true);
 }
 
-// Folder (closed / open) in FModel's warm colour; mn = top-left of a size x size box
-void IconFolder(ImDrawList* dl, ImVec2 mn, float size, bool open) {
-    Glyph(dl, ImVec2(mn.x + size * 0.5f, mn.y + size * 0.5f), size * 1.15f, IM_COL32(229, 189, 119, 255), open ? PH_FOLDER_OPEN : PH_FOLDER, true);
+// Category glyph (Phosphor Regular codepoint) for a folder by its name: "=key" matches the whole name, "key" any part of it.
+// First match wins, so specific keys come before general ones; 0 = plain folder.
+unsigned int FolderCategory(std::string_view name) {
+    static const struct { const char* key; unsigned int cp; } kMap[] = {
+        {"forcefeedback", 0xe4d8},   {"haptic", 0xe4d8},        {"rumble", 0xe4d8},                                               // vibrate
+        {"material", 0xe6c8},        {"=mat", 0xe6c8},          {"shader", 0xe610},                                         // palette, cpu
+        {"texture", 0xe2ca},         {"=tex", 0xe2ca},          {"image", 0xe2ca},      {"icon", 0xe2ca},     {"decal", 0xe2ca},   // image
+        {"anim", 0xe730},            {"cinematic", 0xe792},     {"sequence", 0xe792},   {"movie", 0xe792},    {"video", 0xe792},   // run, film strip
+        {"blueprint", 0xe1bc},       {"script", 0xe1bc},        {"=code", 0xe1bc},      {"json", 0xe860},                         // code, braces
+        {"particle", 0xe6a2},        {"vfx", 0xe6a2},           {"=fx", 0xe6a2},        {"effect", 0xe6a2},                       // sparkle
+        {"music", 0xe340},           {"audio", 0xe44a},         {"sound", 0xe44a},      {"wwise", 0xe44a},    {"=sfx", 0xe44a},    // notes, speaker
+        {"datatable", 0xe476},       {"=tables", 0xe476},       {"dataasset", 0xe1de},  {"=data", 0xe1de},    {"database", 0xe1de},
+        {"curve", 0xe154},           {"config", 0xe270},        {"setting", 0xe270},                                              // chart, gear
+        {"locali", 0xe4a2},          {"language", 0xe4a2},      {"font", 0xe6ee},                                                 // translate, Aa
+        {"uiresource", 0xe32e},      {"=ui", 0xe32e},           {"hud", 0xe32e},        {"frontend", 0xe32e}, {"widget", 0xe32e},  // monitor
+        {"=menu", 0xe32e},           {"=menus", 0xe32e},        {"interface", 0xe32e},
+        {"editor", 0xe5d4},          {"=tools", 0xe5d4},        {"debug", 0xe5f4},                                                // wrench, bug
+        {"prototype", 0xe79e},       {"experiment", 0xe79e},    {"test", 0xe7a0},       {"webroot", 0xe288},  {"=web", 0xe288},    // flask, tube, globe
+        {"weapon", 0xe5ba},          {"cutlass", 0xe5ba},       {"=ships", 0xe786},     {"=ship", 0xe786},    {"boat", 0xe786},    // sword, boat
+        {"character", 0xe4c2},       {"pirate", 0xe4c2},        {"=npc", 0xe4c2},       {"=npcs", 0xe4c2},    {"creature", 0xe4c2}, {"skelet", 0xe4c2},
+        {"cosmetic", 0xe670},        {"clothing", 0xe670},      {"costume", 0xe670},    {"outfit", 0xe670},                       // t-shirt
+        {"treasure", 0xe78e},        {"loot", 0xe78e},          {"=gold", 0xe78e},      {"coin", 0xe78e},                         // coins
+        {"=maps", 0xe31a},           {"=map", 0xe31a},          {"level", 0xe31a},      {"world", 0xe31a},                        // map
+        {"light", 0xe2dc},           {"water", 0xe210},         {"ocean", 0xe210},                                                // bulb, drop
+        {"foliage", 0xe6da},         {"vegetation", 0xe6da},    {"=trees", 0xe6da},     {"plant", 0xe6da},                        // tree
+        {"=sky", 0xe1aa},            {"weather", 0xe1aa},       {"cloud", 0xe1aa},                                                // cloud
+        {"landscape", 0xe7ae},       {"terrain", 0xe7ae},       {"=rocks", 0xe7ae},                                               // mountains
+        {"physic", 0xec5e},          {"collision", 0xec5e},     {"camera", 0xe10e},     {"=input", 0xe26e},                       // shapes, camera, pad
+        {"plugin", 0xe596},          {"=engine", 0xea80},                                                                         // puzzle, engine
+        {"mesh", 0xe1da},            {"model", 0xe1da},         {"=props", 0xe1da},     {"geometry", 0xe1da},                     // cube
+    };
+    std::string n = ToLower(name);
+    for (auto& m : kMap) {
+        if (m.key[0] == '=' ? n == m.key + 1 : n.find(m.key) != std::string::npos) return m.cp;
+    }
+    return 0;
+}
+
+// Folder (closed / open) in FModel's warm colour, with its category glyph (FolderCategory) on the front panel;
+// mn = top-left of a size x size box
+// Small sizes (tree, list rows) show the category glyph alone in the folder colour: inside a 16 px folder it is unreadable.
+void IconFolder(ImDrawList* dl, ImVec2 mn, float size, bool open, std::string_view name = {}) {
+    const ImU32 folderCol = IM_COL32(229, 189, 119, 255);
+    ImVec2 centre(mn.x + size * 0.5f, mn.y + size * 0.5f);
+    unsigned int cp = name.empty() ? 0 : FolderCategory(name);
+    char utf8[5];
+    if (cp) ImTextCharToUtf8(utf8, cp);
+    if (cp && size < Dip(32)) {
+        Glyph(dl, centre, size * 1.05f, folderCol, utf8, true);
+        return;
+    }
+    ImRect r = Glyph(dl, centre, size * 1.15f, folderCol, open ? PH_FOLDER_OPEN : PH_FOLDER, true);
+    if (!cp) return;
+    float w = r.GetWidth(), h = r.GetHeight();
+    ImVec2 c(r.Min.x + w * (open ? 0.54f : 0.5f), r.Min.y + h * (open ? 0.64f : 0.6f));   // middle of the front panel
+    Glyph(dl, c, size * 0.48f, IM_COL32(120, 78, 28, 255), utf8);
 }
 
 ImU32 FileTint(std::string_view name) {
@@ -748,7 +802,7 @@ void App::DrawFoldersTab() {
             float cy = p.y + rowH * 0.5f;
             if (hasKids) IconChevron(dl, ImVec2(x + Dip(10), cy), Dip(16), open ? kPi * 0.25f : 0.f, kText);
             float ix = x + Dip(20);
-            IconFolder(dl, ImVec2(ix, cy - Dip(8)), Dip(16), open || sel);
+            IconFolder(dl, ImVec2(ix, cy - Dip(8)), Dip(16), open || sel, f.name);
             float tx = ix + Dip(16) + Dip(3.5f);
             if (!f.files.empty()) {   // package count badge over the folder's corner
                 ImGui::PushFont(nullptr, FontDip(7));
@@ -1109,7 +1163,7 @@ void App::DrawExplorer() {
                     if (rs.pressed) m_selFolder = id;
                     if (rs.doubleClicked) openFolder(id);
                     folderMenu(id);
-                    IconFolder(dl, ImVec2(x, cy - Dip(10)), Dip(20), false);
+                    IconFolder(dl, ImVec2(x, cy - Dip(10)), Dip(20), false, folders[id].name);
                     ImGui::PushFont(boldFont, FontDip(12));
                     TextEllipsis(dl, ImVec2(x + Dip(28), cy - ImGui::GetFontSize() * 0.5f), x + c1 - Dip(8), kText, folders[id].name.c_str());
                     ImGui::PopFont();
@@ -1181,7 +1235,7 @@ void App::DrawExplorer() {
                     float icon = Dip(84), nameH = FontDip(13), subH = FontDip(11);
                     float block = icon + Dip(10) + nameH + Dip(6) + subH * 2;
                     float y = mn.y + (th - block) * 0.5f;
-                    IconFolder(dl, ImVec2(mn.x + (tw - icon) * 0.5f, y), icon, false);
+                    IconFolder(dl, ImVec2(mn.x + (tw - icon) * 0.5f, y), icon, false, fo.name);
                     y += icon + Dip(10);
                     ImGui::PushFont(boldFont, FontDip(13));
                     TextCentered(dl, mn.x + pad, mxp.x - pad, y, kText, fo.name);
