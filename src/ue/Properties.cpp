@@ -173,7 +173,8 @@ PropValue ReadArray(const Package& pkg, Reader& r, const TagInfo& tag, size_t en
             size_t save = r.Pos();
             try {
                 TagInfo it;
-                if (ReadTag(pkg, r, it) && it.type == "StructProperty") structName = it.structName;
+                // the inner tag repeats the array's name; otherwise this is the first field of a 4.10 tagged element
+                if (ReadTag(pkg, r, it) && it.type == "StructProperty" && it.name == tag.name) structName = it.structName;
                 else r.Seek(save);
             } catch (...) { r.Seek(save); }
         }
