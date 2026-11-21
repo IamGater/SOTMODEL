@@ -75,6 +75,8 @@ or `/Game/Models/Props/Common/cmn_barrel_debris_02_a.cmn_barrel_debris_02_a`.
 | `preview_mesh` | renders a mesh with its textures to a PNG (`yaw`/`pitch` orbit, `wireframe`, `lod`). `collision=true` overlays the simple collision as green wireframe, `sockets=true` draws socket axes, `morphs={"Name":1}` applies morph target weights; `lod` picks the LOD |
 | `get_animation_info` | AnimSequence: frames, length, fps, compression, skeleton, animated bones (+ a mesh that can show it) |
 | `preview_animation` | contact sheet PNG of an animation posed on a skeletal mesh (found automatically or `mesh=`) |
+| `get_anim_asset_info` | AnimMontage (sections, slot segments, notifies with times), BlendSpace / 1D / AimOffset (axes, samples; `x=`/`y=` adds the sample weights there), animation blueprint (baked state machines, transitions with crossfade, sequence / blend space players, notify events); plain sequences list their notifies |
+| `preview_blend_space` | PNG of the blended pose of a blend space at `x`/`y` (`time` 0..1 of each sample, played in sync) |
 | `get_world_info` | a map (.umap) as a scene: sublevels, placed meshes with Blueprint templates resolved, landscape components, instance counts, unresolved components (`filter=rock,-small` narrows the meshes). `path=Athena/Content/Maps/World_Layout/sot_world_layout_2.umap` is the whole sea: every island placed by the world layout; `islands=wsp_,-fort` / `region=[minX,minY,maxX,maxY]` select islands, `proxies=true` loads each island's merged LOD proxy instead (whole sea in seconds). Also lists lights by type, decal materials, height fog and the water level |
 | `preview_world` | renders a whole map (meshes, Blueprint components, landscape terrain coloured by paint layers) to a PNG; orbit with `yaw`/`pitch`/`zoom` or place the camera with `eye`/`target`. Lit by the map's sun / sky light / nearest 32 point and spot lights with its exponential height fog and the sea plane at the water level (`lights`, `fog`, `water`); `gizmos=true` outlines light ranges, spot cones and decal boxes |
 | `decompile_blueprint` | a Blueprint (`BlueprintGeneratedClass` package) as C++-like code: variables, functions with parameters and locals, Kismet bytecode as statements with labelled jumps |
@@ -119,6 +121,12 @@ Typical flow: `search` → `get_package` → `get_properties` / `preview_*` → 
 - Collision: cooked 4.10 static meshes keep their BodySetup as an export under the mesh (not a tagged property).
   Box X/Y/Z are full sizes; capsules (Sphyl) are along Z with Length = the cylinder part. Convex elements only store
   their points (VertexData); SOTModel rebuilds the hull. Skeletal meshes: PhysicsAsset bodies at their bones' reference pose.
+- Montages / blend spaces / anim blueprints: notify and section times are `LinkValue` (absolute seconds). Blend space
+  `GridSamples` index = X*(GridNumY+1)+Y, each `{Indices[3], Weights[3]}` is a static array (one tagged property per
+  element, read with FindValue(..., arrayIndex)); weights at a point are bilinear over the 4 surrounding grid points.
+  AnimBlueprintGeneratedClass.BakedStateMachines has states / transitions; the class defaults hold the
+  `AnimGraphNode_*` player structs (node indices can't be mapped to states in cooked data). The GUI shows montages as a
+  timeline over the posed mesh, blend spaces as a draggable grid with the blended pose, anim blueprints as a state graph.
 - Morph targets (UMorphTarget): after the tagged properties a 4-byte object-guid flag, the strip flags (2 bytes), then per
   LOD `{PositionDelta, TangentZDelta, SourceIdx}` (28 bytes, SourceIdx = render vertex). SoT's `MeshPatchAsset` exports
   in the same packages are a different (custom) thing.

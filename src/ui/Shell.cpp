@@ -1551,9 +1551,10 @@ void App::DrawDocContent(Document& d) {
     bool hasTable = !d.loading && d.table != nullptr;
     bool hasShaders = d.shaders != nullptr;
     bool hasGraph = d.matGraph != nullptr;
-    bool side = has3d || hasImage || hasAudio || hasTable || hasShaders || hasGraph;
+    bool hasSm = !d.loading && d.animBp != nullptr;
+    bool side = hasSm || has3d || hasImage || hasAudio || hasTable || hasShaders || hasGraph;
     float splitW = Dip(4);
-    if (side && d.sideW <= 0) d.sideW = hasGraph ? avail.x * 0.55f : hasShaders ? std::min(avail.x * 0.4f, Dip(520)) : has3d || hasTable ? avail.x * 0.6f : std::min(avail.x * 0.45f, Dip(400) + avail.x * 0.1f);
+    if (side && d.sideW <= 0) d.sideW = hasGraph || hasSm ? avail.x * 0.55f : hasShaders ? std::min(avail.x * 0.4f, Dip(520)) : has3d || hasTable ? avail.x * 0.6f : std::min(avail.x * 0.45f, Dip(400) + avail.x * 0.1f);
     float sideW = side ? std::clamp(d.sideW, Dip(160), std::max(Dip(160), avail.x - Dip(200))) : 0;
     float editW = side ? avail.x - sideW - splitW : avail.x;
     ImVec2 p = ImGui::GetCursorScreenPos();
@@ -1569,6 +1570,14 @@ void App::DrawDocContent(Document& d) {
         ImGui::BeginChild("##matgraph", ImVec2(sideW, avail.y), ImGuiChildFlags_None, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
         DrawMaterialGraphPanel(d);
         ImGui::EndChild();
+        return;
+    }
+    if (hasSm) {
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(Dip(6), Dip(6)));
+        ImGui::BeginChild("##statemachine", ImVec2(sideW, avail.y), ImGuiChildFlags_AlwaysUseWindowPadding, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+        DrawStateMachinePanel(d);
+        ImGui::EndChild();
+        ImGui::PopStyleVar();
         return;
     }
     if (hasShaders) {

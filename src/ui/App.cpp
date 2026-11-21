@@ -401,6 +401,51 @@ void App::LoadDocument(std::shared_ptr<Document> d) {
             } else {
                 d->error = "animation: " + err;
             }
+        } else if (main && (d->className == "AnimMontage" || IsBlendSpaceClass(d->className))) {
+            auto anim = std::make_shared<AnimSequenceData>();
+            std::vector<std::string> paths;
+            if (d->className == "AnimMontage") {
+                auto m = std::make_shared<MontageInfo>();
+                ReadMontage(*pkg, main - 1, *m, &err);
+                anim->skeletonPath = m->skeleton;
+                anim->length = m->length;
+                anim->encoding = "montage";
+                if (!m->slots.empty())
+                    for (auto& g : m->slots[0].segments) paths.push_back(g.anim);
+                d->montage = m;
+            } else {
+                auto b = std::make_shared<BlendSpaceInfo>();
+                if (ReadBlendSpace(*pkg, main - 1, *b, &err)) {
+                    anim->skeletonPath = b->skeleton;
+                    anim->encoding = b->dims == 1 ? "blend space 1D" : "blend space";
+                    for (auto& s : b->samples) paths.push_back(s.anim);
+                    d->bsX = (b->axes[0].min + b->axes[0].max) / 2;
+                    d->bsY = (b->axes[1].min + b->axes[1].max) / 2;
+                    d->blendSpace = b;
+                } else d->error = "blend space: " + err;
+            }
+            std::unordered_map<std::string, std::shared_ptr<AnimSequenceData>> loaded;
+            for (auto& path : paths) {
+                auto& sa = loaded[path];
+                if (!sa) {
+                    auto ap = m_api->cache->LoadPath(path);
+                    i32 ae = ap ? ap->MainExport() : 0;
+                    auto a = std::make_shared<AnimSequenceData>();
+                    if (ae && IsAnimSequenceClass(ap->ExportClass(ae - 1)) && ReadAnimSequence(*ap, ae - 1, *a)) sa = a;
+                }
+                d->subAnims.push_back(sa);
+                if (sa && d->blendSpace) anim->length = std::max(anim->length, sa->length);
+                if (sa && anim->skeletonPath.empty()) anim->skeletonPath = sa->skeletonPath;
+            }
+            anim->name = d->name;
+            anim->numFrames = std::max(2, (int)lroundf(anim->length * 30) + 1);
+            if (!anim->skeletonPath.empty() && (d->montage || d->blendSpace)) {
+                d->anim = anim;
+                d->preferred = DocView::Animation;
+                std::string mesh = FindMeshForSkeleton(*m_api->cache, anim->skeletonPath);
+                if (!mesh.empty()) LoadAnimationMeshNow(*d, mesh);
+                else d->error = "no skeletal mesh found for " + anim->skeletonPath + " (enter one below)";
+            }
         } else if (main && IsMaterialClass(d->className) && d->className != "MaterialFunction") {
             std::string objPath = pkg->FullPath(main);
             if (ReadMaterial(*m_api->cache, objPath, d->material, &err)) {
@@ -433,6 +478,13 @@ void App::LoadDocument(std::shared_ptr<Document> d) {
             d->isBank = ParseBank(pkg->Data().data(), pkg->Data().size(), d->bank, nullptr, &err);
             if (!d->isBank) d->audioError = "bank: " + err;
         }
+        if (!d->anim && !d->isWorld)
+            for (size_t i = 0; i < pkg->Exports().size(); i++)
+                if (pkg->ExportClass(i) == "AnimBlueprintGeneratedClass") {
+                    auto bp = std::make_shared<AnimBlueprintInfo>();
+                    if (ReadAnimBlueprint(*pkg, *bp, &err)) d->animBp = bp;
+                    break;
+                }
         d->loading = false;
         if (d->isWorld) LoadWorld(d);
         Post([] {});
@@ -732,8 +784,10 @@ void App::DrawAnimation(Document& d) {
     ImGui::Checkbox("Textures", &d.draw.textures);
     ImGui::SameLine();
     ImGui::Checkbox("Grid", &d.draw.grid);
-    ImGui::TextDisabled("%d frames, %.2f s, %.1f fps | %s | %zu tracks%s | skeleton %s", a.numFrames, a.length, fps, a.encoding.c_str(), a.tracks.size(),
-                        a.additiveType != "AAT_None" ? (" | additive " + a.additiveType).c_str() : "", a.skeletonPath.c_str());
+    if (d.montage || d.blendSpace) DrawAnimAssetHeader(d);
+    else
+        ImGui::TextDisabled("%d frames, %.2f s, %.1f fps | %s | %zu tracks%s | skeleton %s", a.numFrames, a.length, fps, a.encoding.c_str(), a.tracks.size(),
+                            a.additiveType != "AAT_None" ? (" | additive " + a.additiveType).c_str() : "", a.skeletonPath.c_str());
     ImGui::SetNextItemWidth(-140);
     bool apply = ImGui::InputTextWithHint("##animmesh", "skeletal mesh to preview on (/Game/... path)", d.animMeshEdit, sizeof(d.animMeshEdit), ImGuiInputTextFlags_EnterReturnsTrue);
     ImGui::SameLine();
@@ -755,7 +809,7 @@ void App::DrawAnimation(Document& d) {
         m_busyFrames = 3;
     }
     std::vector<Bone> pose;
-    d.poser->MeshPose(a, d.animTime * fps, pose);
+    if (!AnimAssetPose(d, pose)) d.poser->MeshPose(a, d.animTime * fps, pose);
     std::vector<Vec3> pos, nrm;
     const MeshLod& lod = d.mesh->lods[std::clamp(d.lod, 0, (int)d.mesh->lods.size() - 1)];
     d.poser->Skin(lod, pose, pos, nrm);

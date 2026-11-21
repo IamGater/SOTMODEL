@@ -6,6 +6,7 @@
 #include "ue/Mesh.h"
 #include "ue/MeshExtras.h"
 #include "ue/AnimPose.h"
+#include "ue/AnimAssets.h"
 #include "export/Exporter.h"
 #include "audio/Player.h"
 #include "ue/DataTable.h"
@@ -88,6 +89,15 @@ struct Document {
     float animTime = 0, animSpeed = 1;
     bool animPlaying = true, animLoop = true, showBones = false;
     std::vector<Vec3> boneLines;   // bone segments for the viewport (world space)
+    // montage / blend space: shown through the animation view (d.anim is a stand-in with the skeleton and length)
+    std::shared_ptr<MontageInfo> montage;
+    std::shared_ptr<BlendSpaceInfo> blendSpace;
+    std::vector<std::shared_ptr<AnimSequenceData>> subAnims;   // per slot-0 segment / per blend sample
+    float bsX = 0, bsY = 0;
+    std::vector<float> bsWeights;
+    // animation blueprint: baked state machines (graph in the side panel)
+    std::shared_ptr<AnimBlueprintInfo> animBp;
+    int smSel = 0, smState = -1;
     std::shared_ptr<CollisionData> collision;   // loaded when "Collision" is first switched on
     std::string collisionNote;
     bool showCollision = false;
@@ -221,6 +231,10 @@ private:
     // viewers (App.cpp)
     void DrawModel(Document& d);
     void DrawAnimation(Document& d);
+    // AnimPanels.cpp
+    bool AnimAssetPose(Document& d, std::vector<Bone>& pose);
+    void DrawAnimAssetHeader(Document& d);
+    void DrawStateMachinePanel(Document& d);
     void DrawWorld(Document& d);
     void LoadWorld(std::shared_ptr<Document> d);
     void LoadAnimationMesh(std::shared_ptr<Document> d, std::string meshPath);

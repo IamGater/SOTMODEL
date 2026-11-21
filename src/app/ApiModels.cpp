@@ -6,6 +6,7 @@
 #include "ue/Material.h"
 #include "render/Offscreen.h"
 #include "ue/AnimPose.h"
+#include "ue/AnimAssets.h"
 #include "export/Png.h"
 
 static void WriteMaterialJson(JsonWriter& w, const MaterialInfo& m) {
@@ -444,6 +445,254 @@ void RegisterMeshTools(Api& api) {
                       WriteMaterialJson(w, m);
                       ApiResult r;
                       r.json = w.Take();
+                      return r;
+                  }});
+
+    api.Register({"get_anim_asset_info",
+                  "Decode an AnimMontage (sections, slot tracks with segments, notifies with times), a BlendSpace / BlendSpace1D / AimOffset "
+                  "(axes, samples with positions, grid size; pass x/y to get the sample weights at that point) or an animation blueprint "
+                  "(baked state machines with states and transitions, sequence / blend space players, notify events).",
+                  R"({"type":"object","properties":{"path":{"type":"string"},"x":{"type":"number"},"y":{"type":"number"}},"required":["path"]})", "path",
+                  [](Api& a, const JsonValue& args) {
+                      std::shared_ptr<Package> pkg;
+                      i32 ex;
+                      std::string err;
+                      if (!LoadObject(a, args.GetStr("path"), pkg, ex, err)) return ApiResult::Error(err);
+                      std::string cls = pkg->ExportClass(ex - 1);
+                      JsonWriter w;
+                      w.BeginObject();
+                      w.KV("class", cls);
+                      auto notifies = [&](const std::vector<AnimNotifyInfo>& ns) {
+                          w.Key("notifies");
+                          w.BeginArray();
+                          for (auto& n : ns) {
+                              w.BeginObject();
+                              w.KV("name", n.name);
+                              if (!n.cls.empty()) w.KV("class", n.cls);
+                              w.KV("time", (double)n.time);
+                              if (n.duration > 0) w.KV("duration", (double)n.duration);
+                              w.KV("track", n.track);
+                              if (!n.detail.empty()) w.KV("detail", n.detail);
+                              w.EndObject();
+                          }
+                          w.EndArray();
+                      };
+                      bool isBp = false;
+                      for (size_t i = 0; i < pkg->Exports().size(); i++) isBp |= pkg->ExportClass(i) == "AnimBlueprintGeneratedClass";
+                      if (cls == "AnimMontage") {
+                          MontageInfo m;
+                          ReadMontage(*pkg, ex - 1, m, &err);
+                          w.KV("skeleton", m.skeleton);
+                          w.KV("lengthSeconds", (double)m.length);
+                          w.KV("rateScale", (double)m.rateScale);
+                          w.KV("blendIn", (double)m.blendIn);
+                          w.KV("blendOut", (double)m.blendOut);
+                          w.Key("sections");
+                          w.BeginArray();
+                          for (auto& s : m.sections) {
+                              w.BeginObject();
+                              w.KV("name", s.name);
+                              w.KV("start", (double)s.start);
+                              if (!s.next.empty() && s.next != "None") w.KV("next", s.next);
+                              w.EndObject();
+                          }
+                          w.EndArray();
+                          w.Key("slots");
+                          w.BeginArray();
+                          for (auto& sl : m.slots) {
+                              w.BeginObject();
+                              w.KV("slot", sl.name);
+                              w.Key("segments");
+                              w.BeginArray();
+                              for (auto& g : sl.segments) {
+                                  w.BeginObject();
+                                  w.KV("anim", g.anim);
+                                  w.KV("start", (double)g.startPos);
+                                  w.KV("length", (double)g.Length());
+                                  w.KV("animStart", (double)g.animStart);
+                                  w.KV("animEnd", (double)g.animEnd);
+                                  w.KV("rate", (double)g.rate);
+                                  if (g.loops != 1) w.KV("loops", g.loops);
+                                  w.EndObject();
+                              }
+                              w.EndArray();
+                              w.EndObject();
+                          }
+                          w.EndArray();
+                          notifies(m.notifies);
+                      } else if (IsBlendSpaceClass(cls)) {
+                          BlendSpaceInfo b;
+                          if (!ReadBlendSpace(*pkg, ex - 1, b, &err)) return ApiResult::Error(err);
+                          w.KV("skeleton", b.skeleton);
+                          w.KV("dimensions", b.dims);
+                          w.Key("axes");
+                          w.BeginArray();
+                          for (int k = 0; k < b.dims; k++) {
+                              w.BeginObject();
+                              w.KV("name", b.axes[k].name);
+                              w.KV("min", (double)b.axes[k].min);
+                              w.KV("max", (double)b.axes[k].max);
+                              w.KV("grid", b.axes[k].grid);
+                              w.EndObject();
+                          }
+                          w.EndArray();
+                          std::vector<float> wt;
+                          bool at = args.Get("x") != nullptr;
+                          if (at) b.Weights((float)args.GetNum("x", 0), (float)args.GetNum("y", 0), wt);
+                          w.Key("samples");
+                          w.BeginArray();
+                          for (size_t i = 0; i < b.samples.size(); i++) {
+                              w.BeginObject();
+                              w.KV("anim", b.samples[i].anim);
+                              w.KV("x", (double)b.samples[i].x);
+                              if (b.dims == 2) w.KV("y", (double)b.samples[i].y);
+                              if (at) w.KV("weight", (double)wt[i]);
+                              w.EndObject();
+                          }
+                          w.EndArray();
+                          w.KV("gridPoints", (i64)b.grid.size());
+                      } else if (isBp) {
+                          AnimBlueprintInfo bp;
+                          if (!ReadAnimBlueprint(*pkg, bp, &err)) return ApiResult::Error(err);
+                          w.KV("skeleton", bp.skeleton);
+                          w.Key("stateMachines");
+                          w.BeginArray();
+                          for (auto& sm : bp.machines) {
+                              w.BeginObject();
+                              w.KV("name", sm.name);
+                              w.KV("initialState", sm.initial >= 0 && sm.initial < (int)sm.states.size() ? sm.states[sm.initial].name : std::string());
+                              w.Key("states");
+                              w.BeginArray();
+                              for (auto& st : sm.states) {
+                                  w.BeginObject();
+                                  w.KV("name", st.name);
+                                  if (st.conduit) w.KV("conduit", true);
+                                  w.KV("players", (i64)st.players.size());
+                                  w.EndObject();
+                              }
+                              w.EndArray();
+                              w.Key("transitions");
+                              w.BeginArray();
+                              auto nm = [&](int i) { return i >= 0 && i < (int)sm.states.size() ? sm.states[i].name : Fmt("#%d", i); };
+                              for (auto& t : sm.transitions) {
+                                  w.BeginObject();
+                                  w.KV("from", nm(t.from));
+                                  w.KV("to", nm(t.to));
+                                  w.KV("crossfade", (double)t.crossfade);
+                                  if (!t.blendMode.empty()) w.KV("blendMode", t.blendMode);
+                                  if (!t.logic.empty()) w.KV("logic", t.logic);
+                                  if (t.priority) w.KV("priority", t.priority);
+                                  if (t.bidirectional) w.KV("bidirectional", true);
+                                  w.EndObject();
+                              }
+                              w.EndArray();
+                              w.EndObject();
+                          }
+                          w.EndArray();
+                          w.Key("players");
+                          w.BeginArray();
+                          for (auto& pl : bp.players) {
+                              w.BeginObject();
+                              w.KV("node", pl.node);
+                              w.KV("asset", pl.asset);
+                              w.EndObject();
+                          }
+                          w.EndArray();
+                          w.Key("notifyEvents");
+                          w.BeginArray();
+                          for (auto& n : bp.notifies) w.Str(n);
+                          w.EndArray();
+                      } else {
+                          // anim sequences have notifies too
+                          std::vector<AnimNotifyInfo> ns;
+                          if (!ReadAnimNotifies(*pkg, pkg->ReadProperties(ex - 1), ns))
+                              return ApiResult::Error("not a montage, blend space or animation blueprint: " + cls);
+                          notifies(ns);
+                      }
+                      w.EndObject();
+                      ApiResult r;
+                      r.json = w.Take();
+                      return r;
+                  }});
+
+    api.Register({"preview_blend_space",
+                  "Render the blended pose of a blend space at input (x, y) on a skeletal mesh (found from the skeleton or passed as 'mesh'), "
+                  "sampling every animation at 'time' fraction 0..1 of its length.",
+                  R"({"type":"object","properties":{"path":{"type":"string"},"x":{"type":"number"},"y":{"type":"number"},"time":{"type":"number","default":0},)"
+                  R"("mesh":{"type":"string"},"size":{"type":"integer","default":512},"yaw":{"type":"number","default":-135},"pitch":{"type":"number","default":-15},)"
+                  R"("save_to":{"type":"string"}},"required":["path"]})",
+                  "path",
+                  [](Api& a, const JsonValue& args) {
+                      std::shared_ptr<Package> pkg;
+                      i32 ex;
+                      std::string err;
+                      if (!LoadObject(a, args.GetStr("path"), pkg, ex, err)) return ApiResult::Error(err);
+                      BlendSpaceInfo b;
+                      if (!IsBlendSpaceClass(pkg->ExportClass(ex - 1))) return ApiResult::Error("not a blend space: " + pkg->ExportClass(ex - 1));
+                      if (!ReadBlendSpace(*pkg, ex - 1, b, &err)) return ApiResult::Error(err);
+                      float x = (float)args.GetNum("x", (b.axes[0].min + b.axes[0].max) / 2), y = (float)args.GetNum("y", (b.axes[1].min + b.axes[1].max) / 2);
+                      std::vector<float> wt;
+                      b.Weights(x, y, wt);
+                      std::string meshPath = args.GetStr("mesh");
+                      if (meshPath.empty()) meshPath = FindMeshForSkeleton(*a.cache, b.skeleton);
+                      if (meshPath.empty()) return ApiResult::Error("no skeletal mesh found for " + b.skeleton + " (pass 'mesh')");
+                      std::shared_ptr<Package> mp, sp;
+                      i32 me, se;
+                      MeshData mesh;
+                      std::vector<Bone> skel;
+                      if (!LoadObject(a, meshPath, mp, me, err) || !ReadMesh(*mp, me - 1, mesh, &err)) return ApiResult::Error("mesh: " + err);
+                      if (!LoadObject(a, b.skeleton, sp, se, err) || !ReadSkeleton(*sp, se - 1, skel, &err)) return ApiResult::Error("skeleton: " + err);
+                      AnimPoser poser;
+                      if (!poser.Init(mesh, skel, &err)) return ApiResult::Error(err);
+                      float tf = std::clamp((float)args.GetNum("time", 0), 0.f, 1.f);
+                      std::vector<std::vector<Bone>> poses(b.samples.size());
+                      for (size_t i = 0; i < b.samples.size(); i++) {
+                          if (wt[i] <= 0) continue;
+                          std::shared_ptr<Package> ap;
+                          i32 ae;
+                          AnimSequenceData anim;
+                          std::string e2;
+                          if (!LoadObject(a, b.samples[i].anim, ap, ae, e2) || !ReadAnimSequence(*ap, ae - 1, anim, &e2)) { wt[i] = 0; continue; }
+                          poser.MeshPose(anim, tf * std::max(0, anim.numFrames - 1), poses[i]);
+                      }
+                      std::vector<Bone> pose;
+                      BlendPoses(poses, wt, pose);
+                      if (pose.empty()) pose = poser.MeshBones();
+                      MeshData m;
+                      m.name = mesh.name;
+                      m.skeletal = true;
+                      m.materials = mesh.materials;
+                      m.lods.push_back(mesh.lods[0]);
+                      poser.Skin(mesh.lods[0], pose, m.lods[0].positions, m.lods[0].normals);
+                      m.ComputeBounds();
+                      PreviewRequest req;
+                      req.width = req.height = std::clamp((int)args.GetNum("size", 512), 64, 2048);
+                      req.yaw = (float)args.GetNum("yaw", -135);
+                      req.pitch = (float)args.GetNum("pitch", -15);
+                      std::vector<Image> imgs;
+                      std::vector<MeshData> one;
+                      one.push_back(std::move(m));
+                      if (!RenderMeshPreviews(*a.cache, one, req, imgs, &err) || imgs.empty()) return ApiResult::Error(err);
+                      ApiResult r;
+                      ApiImage im;
+                      im.mime = "image/png";
+                      im.data = EncodePng(imgs[0].rgba.data(), imgs[0].width, imgs[0].height);
+                      std::string save = args.GetStr("save_to");
+                      if (!save.empty()) WriteWholeFile(Widen(save), im.data.data(), im.data.size());
+                      JsonWriter w;
+                      w.BeginObject();
+                      w.KV("mesh", meshPath);
+                      w.KV("x", (double)x);
+                      w.KV("y", (double)y);
+                      w.Key("weights");
+                      w.BeginObject();
+                      for (size_t i = 0; i < b.samples.size(); i++)
+                          if (wt[i] > 0) w.KV(b.samples[i].anim.substr(b.samples[i].anim.rfind('/') + 1), (double)wt[i]);
+                      w.EndObject();
+                      if (!save.empty()) w.KV("savedTo", save);
+                      w.EndObject();
+                      r.json = w.Take();
+                      r.images.push_back(std::move(im));
                       return r;
                   }});
 }
