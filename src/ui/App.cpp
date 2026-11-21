@@ -884,8 +884,66 @@ void App::DrawAttachControls(Document& d) {
     ImGui::PopID();
 }
 
+// Live editing of a material's scalar / vector parameters (its compiled graph shader reads them from a constant buffer).
+// The shader is shared by every view of the material, so all of them change.
+void App::DrawGraphParams(GpuMaterial& mat) {
+    auto g = mat.graph;
+    if (mat.path.empty()) return;
+    if (!g) {   // RequestGraphShaders posts it when compiled
+        ImGui::TextDisabled("compiling graph shader...");
+        m_busyFrames = 3;
+        return;
+    }
+    if (!g->ps) {
+        ImGui::TextDisabled("graph shader failed");
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", g->error.c_str());
+        return;
+    }
+    if (graphOnStart) ImGui::SetNextItemOpen(true, ImGuiCond_Once);
+    if (g->params.empty() || !ImGui::TreeNode("##params", "Parameters (%zu)", g->params.size())) return;
+    bool changed = false;
+    if (ImGui::SmallButton("Reset")) {
+        for (size_t i = 0; i < g->params.size(); i++) memcpy(&g->values[i * 4], g->params[i].value, sizeof(float) * 4);
+        changed = true;
+    }
+    for (size_t i = 0; i < g->params.size(); i++) {
+        auto& p = g->params[i];
+        float* v = &g->values[i * 4];
+        ImGui::PushID((int)i);
+        bool edited = memcmp(v, p.value, sizeof(float) * p.components) != 0;
+        if (edited) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 0.8f, 0.35f, 1));
+        ImGui::TextUnformatted(p.name.c_str());
+        if (edited) ImGui::PopStyleColor();
+        if (edited && ImGui::IsItemHovered()) ImGui::SetTooltip("changed; material value %g %g %g %g (right-click to restore)", p.value[0], p.value[1], p.value[2], p.value[3]);
+        if (ImGui::IsItemClicked(1)) {
+            memcpy(v, p.value, sizeof(float) * 4);
+            changed = true;
+        }
+        ImGui::SetNextItemWidth(-1);
+        std::string ln = ToLower(p.name);
+        bool color = p.components >= 3 && (ln.find("col") != std::string::npos || ln.find("tint") != std::string::npos || ln.find("albedo") != std::string::npos);
+        if (color)
+            changed |= p.components == 4 ? ImGui::ColorEdit4("##v", v, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR)
+                                         : ImGui::ColorEdit3("##v", v, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
+        else {
+            float speed = std::max(0.001f, fabsf(p.value[0]) * 0.01f);
+            changed |= ImGui::DragScalarN("##v", ImGuiDataType_Float, v, p.components, speed, nullptr, nullptr, "%.3f");
+        }
+        ImGui::PopID();
+    }
+    ImGui::TreePop();
+    if (changed) {
+        g->version++;
+        m_busyFrames = 3;
+    }
+}
+
 void App::DrawModel(Document& d) {
     auto& m = *d.mesh;
+    if (graphOnStart && !d.draw.graphMaterials) {   // --graph
+        d.draw.graphMaterials = true;
+        RequestGraphShaders(d);
+    }
     if (!d.meshExtrasLoaded) {
         d.meshExtrasLoaded = true;
         if (auto pkg = m_api->cache->LoadPath(d.gamePath); pkg && pkg->MainExport()) {
@@ -984,7 +1042,15 @@ void App::DrawModel(Document& d) {
             }
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("Click to open the material");
         }
+        if (d.draw.graphMaterials && d.gpuMesh && i < d.gpuMesh->materials.size() && d.gpuMesh->materials[i]) DrawGraphParams(*d.gpuMesh->materials[i]);
         ImGui::PopID();
+    }
+    if (!d.draw.graphMaterials && !m.materials.empty()) {
+        if (ImGui::SmallButton("Edit parameters")) {
+            d.draw.graphMaterials = true;
+            RequestGraphShaders(d);
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Turns on Graph shader: scalar / vector parameters can then be changed live");
     }
     if (m.skeletal) ImGui::TextDisabled("%zu bones", m.skeleton.size());
     if (!d.sockets.empty()) {

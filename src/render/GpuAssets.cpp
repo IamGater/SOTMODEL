@@ -156,6 +156,9 @@ std::shared_ptr<GpuGraphShader> GpuAssets::GraphShader(const std::string& path) 
     }
     else {
         g->blend = src.blend;
+        g->params = src.params;
+        g->values.resize(src.params.size() * 4);
+        for (size_t i = 0; i < src.params.size(); i++) memcpy(&g->values[i * 4], src.params[i].value, sizeof(float) * 4);
         for (auto& t : src.textures) {
             g->textureNames.push_back(t.ident);
             g->textures.push_back(t.cube || t.path.empty() ? nullptr : Texture(t.path));

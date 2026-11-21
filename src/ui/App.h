@@ -215,6 +215,7 @@ public:
     float pickU = -1, pickV = -1;           // --pick u,v: click the 3D view there once a map has loaded (automation)
     bool popoutOnStart = false;             // --popout: show the opened tab's 3D view in the separate window
     std::vector<std::string> attachOnStart; // --attach mesh@socket: attached to the opened tab's mesh once loaded (automation)
+    bool graphOnStart = false;              // --graph: model tabs open with Graph shader on and the parameters expanded
 
 private:
     void StartMount();
@@ -276,6 +277,7 @@ private:
     void DrawAnimAssetHeader(Document& d);
     void DrawStateMachinePanel(Document& d);
     void DrawParticlePanel(Document& d);   // ParticlePanel.cpp
+    void DrawGraphParams(GpuMaterial& mat);   // live scalar / vector parameter editing (graph shader)
     void DrawAttachControls(Document& d);   // attach a mesh to one of the shown mesh's sockets
     void AttachMesh(std::shared_ptr<Document> d, std::string meshPath, std::string socket);   // loads in the background
     static void PlaceAttachments(Document& d, const std::vector<Mat4>* boneWorld);   // null: reference pose

@@ -1,6 +1,7 @@
 #pragma once
 #include "render/Math.h"
 #include "ue/Texture.h"
+#include "render/GraphShader.h"
 #include <d3d11.h>
 #include <wrl/client.h>
 #include <mutex>
@@ -22,6 +23,12 @@ struct GpuGraphShader {
     int blend = 0;   // 0 opaque, 1 masked, 2 translucent, 3 additive, 4 modulate
     std::string error;
     double compileMs = 0;
+    // editable scalar / vector parameters (b3, float4 each): change `values` on the main thread and bump `version`
+    std::vector<GraphShaderParam> params;   // value = the material's own value
+    std::vector<float> values;
+    u32 version = 1;
+    mutable ComPtr<ID3D11Buffer> paramCb;
+    mutable u32 uploaded = 0;
 };
 
 struct GpuMaterial {

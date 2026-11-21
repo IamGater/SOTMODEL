@@ -354,6 +354,8 @@ bool BuildGraphShaderSource(const std::string& translated, const std::string& bl
     static const std::regex texDecl(R"(^(Texture2D|TextureCube)\s+(\w+)\s*;(.*)$)");
     static const std::regex varDecl(R"(^((?:float|half|int|uint|bool)[234]?(?:x[234])?|FMaterialAttributes)\s+(\w+)\s*(=\s*([^;]*))?;(.*)$)");
     static const std::regex pathRe(R"(((?:/Game|/Engine)/[^\s()]+))");
+    static const std::regex paramRe(R"((ScalarParameter|VectorParameter)\s+\"([^\"]*)\")");
+    static const std::regex numRe(R"([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)");
     std::istringstream in(code);
     std::string line, body;
     int depth = 0;
@@ -373,6 +375,28 @@ bool BuildGraphShaderSource(const std::string& translated, const std::string& bl
             out.textures.push_back(t);
         } else if (depth == 0 && std::regex_match(line, m, varDecl)) {
             std::string type = m[1], id = m[2], init = m[4], comment = m[5];
+            std::smatch pm;
+            int comps = type == "float" ? 1 : type == "float2" ? 2 : type == "float3" ? 3 : type == "float4" ? 4 : 0;
+            if (comps && out.params.size() < 512 && std::regex_search(comment, pm, paramRe)) {
+                GraphShaderParam p;
+                p.ident = id;
+                p.name = pm[2];
+                p.components = comps;
+                int n = 0;
+                std::string vals = init.substr(init.find('(') == std::string::npos ? 0 : init.find('(') + 1);   // past "float4("
+                bool literal = vals.find_first_not_of("0123456789.eE+-, )\t") == std::string::npos;
+                for (std::sregex_iterator it(vals.begin(), vals.end(), numRe), e; literal && it != e && n < 5; ++it) {
+                    if (n < 4) p.value[n] = strtof(it->str().c_str(), nullptr);
+                    n++;
+                }
+                if (n == comps) {   // a literal value: read from the constant buffer instead (a static, so same-named locals still shadow it)
+                    static const char* sw[] = {"", ".x", ".xy", ".xyz", ""};
+                    line = Fmt("static %s %s = GraphParam[%zu]%s;%s", type.c_str(), id.c_str(), out.params.size(), sw[comps], comment.c_str());
+                    out.params.push_back(p);
+                    body += line + "\n";
+                    continue;
+                }
+            }
             if (init.empty()) init = type == "FMaterialAttributes" ? "(FMaterialAttributes)0" : id.rfind("LayerWeight_", 0) == 0 ? "1" : "0";
             line = "static " + type + " " + id + " = " + init + ";" + comment;
         }
@@ -382,6 +406,8 @@ bool BuildGraphShaderSource(const std::string& translated, const std::string& bl
         }
         body += line + "\n";
     }
-    out.hlsl = Fmt("#define GRAPH_BLEND %d\n#define GRAPH_UNLIT %d\n", out.blend, out.unlit ? 1 : 0) + kPrelude + TransformFunctions() + "\n// ---- translated material graph\n" + body + kMain;
+    std::string params = out.params.empty() ? "" : Fmt("cbuffer GraphParams : register(b3) { float4 GraphParam[%zu]; };\n", out.params.size());
+    out.hlsl = Fmt("#define GRAPH_BLEND %d\n#define GRAPH_UNLIT %d\n", out.blend, out.unlit ? 1 : 0) + kPrelude + TransformFunctions() +
+               "\n// ---- translated material graph\n" + params + body + kMain;
     return true;
 }

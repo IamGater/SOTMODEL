@@ -543,6 +543,24 @@ void Renderer::DrawMesh(const GpuMesh& mesh, const Mat4* instances, u32 count) {
             srvs[31] = m_white->srv.Get();
             m_ctx->PSSetShaderResources(0, 32, srvs);
             m_ctx->PSSetShader(g->ps.Get(), nullptr, 0);
+            if (!g->params.empty() && g->values.size() >= g->params.size() * 4) {
+                if (!g->paramCb) {
+                    D3D11_BUFFER_DESC pd = {};
+                    pd.ByteWidth = (UINT)(g->params.size() * 16);
+                    pd.Usage = D3D11_USAGE_DYNAMIC;
+                    pd.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+                    pd.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+                    m_dev->CreateBuffer(&pd, nullptr, &g->paramCb);
+                    g->uploaded = 0;
+                }
+                if (g->paramCb && g->uploaded != g->version && SUCCEEDED(m_ctx->Map(g->paramCb.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &ms))) {
+                    memcpy(ms.pData, g->values.data(), g->params.size() * 16);
+                    m_ctx->Unmap(g->paramCb.Get(), 0);
+                    g->uploaded = g->version;
+                }
+                ID3D11Buffer* pcb = g->paramCb.Get();
+                m_ctx->PSSetConstantBuffers(3, 1, &pcb);
+            }
             ID3D11BlendState* bs = g->blend == 2 ? m_lineBlend.Get() : g->blend == 3 ? m_addBlend.Get() : g->blend == 4 ? m_modBlend.Get() : m_opaqueBlend.Get();
             m_ctx->OMSetBlendState(bs, nullptr, 0xffffffff);
             m_ctx->OMSetDepthStencilState(g->blend >= 2 ? m_depthNoWrite.Get() : m_depth.Get(), 0);

@@ -13,9 +13,18 @@ struct GraphShaderTexture {
     bool cube = false;
     int slot = 0;        // t register
 };
+// A scalar / vector parameter read from the GraphParams constant buffer (b3, one float4 per parameter) so it can be edited
+// without recompiling.
+struct GraphShaderParam {
+    std::string ident;   // HLSL identifier
+    std::string name;    // parameter name in the material
+    int components = 1;  // 1 scalar, 2..4 vector
+    float value[4] = {0, 0, 0, 0};   // the material's value
+};
 struct GraphShaderSource {
     std::string hlsl;                         // complete shader, entry GraphPSMain (ps_5_0)
     std::vector<GraphShaderTexture> textures;
+    std::vector<GraphShaderParam> params;     // GraphParam[i] in the shader
     int blend = 0;                            // 0 opaque, 1 masked, 2 translucent, 3 additive, 4 modulate
     bool unlit = false;
 };
