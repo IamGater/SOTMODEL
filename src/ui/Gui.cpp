@@ -236,6 +236,13 @@ int RunGui(const std::vector<std::string>& args) {
     ImFontConfig cfg;
     cfg.OversampleH = 2;
     if (!io.Fonts->AddFontFromFileTTF((fonts + "segoeui.ttf").c_str(), 16.f * scale, &cfg)) io.Fonts->AddFontDefault();
+    // Chinese / Korean game text (localisation): merged fallbacks, glyphs are baked on demand
+    for (const char* f : {"msyh.ttc", "malgun.ttf"}) {
+        if (GetFileAttributesA((fonts + f).c_str()) == INVALID_FILE_ATTRIBUTES) continue;
+        ImFontConfig merge;
+        merge.MergeMode = true;
+        io.Fonts->AddFontFromFileTTF((fonts + f).c_str(), 16.f * scale, &merge);
+    }
     ImFont* mono = io.Fonts->AddFontFromFileTTF((fonts + "consola.ttf").c_str(), 13.f * scale, &cfg);
     ImFont* bold = io.Fonts->AddFontFromFileTTF((fonts + "seguisb.ttf").c_str(), 16.f * scale, &cfg);   // Segoe UI Semibold: card titles
 

@@ -87,6 +87,8 @@ or `/Game/Models/Props/Common/cmn_barrel_debris_02_a.cmn_barrel_debris_02_a`.
 | `decompile_shader` | one shader (`index`) as readable HLSL, `hlsl_exact` (raw uint4 lanes), `asm` (D3D disassembly), `reflection`, or raw `dxbc` with `save_to` |
 | `get_material_hlsl` | a material's node graph as readable HLSL (UE 4.10 translator style): parameters with values, Custom nodes, material functions inlined, static switches resolved, connected attributes; instances use the master graph with their values; material functions translate on their own |
 | `get_material_graph` | the expression nodes of a material / function: type, caption, position (auto-laid out: cooked packages strip editor positions) and input links |
+| `search_localization` | the game's translated strings (.locres) by text / key in any shipped language (en, de-DE, ru-RU, zh-CN, ...) |
+| `get_localized_text` | one FText (namespace + key) in every language |
 | `get_material` | material instance chain with every texture / scalar / vector parameter resolved |
 | `export` | write files: textures (PNG/DDS), meshes (glTF/OBJ), animations (glTF with skeleton + skinned mesh), JSON; `raw=true` writes any file as stored |
 | `get_audio_info` | Wwise audio: a `.wem` (codec, channels, rate, length) or a sound bank (`WwiseBank` package / `.bnk`) with its embedded media |
@@ -95,6 +97,8 @@ or `/Game/Models/Props/Common/cmn_barrel_debris_02_a.cmn_barrel_debris_02_a`.
 Typical flow: `search` → `get_package` → `get_properties` / `preview_*` → `export`.
 
 ## Notes on the data
+
+- FText values in package JSON carry `LocalizedString` in the configured language (`Language=` in Settings.ini, default en).
 
 - Packages are legacy single-file `.uasset`/`.umap` (no `.uexp`/`.ubulk`); UE4 object version 483.
 - 4.10 property tags do not name the element struct of arrays or the key/value types of maps. SOTModel guesses
