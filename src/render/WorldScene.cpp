@@ -63,6 +63,7 @@ void DeformSplineMesh(MeshLod& lod, const Vec3& bmin, const Vec3& bmax, const Sp
 
 void WorldScene::Build(const WorldData& wd, const std::function<bool()>& cancel, const std::function<void(int, int)>& progress) {
     m_items.clear();
+    m_pickMeshes.clear();
     m_lights = wd.lights;
     m_decals = wd.decals;
     m_fogs = wd.fogs;
@@ -93,7 +94,8 @@ void WorldScene::Build(const WorldData& wd, const std::function<bool()>& cancel,
         m_bmin = {std::min(m_bmin.x, s.x - s.w), std::min(m_bmin.y, s.y - s.w), std::min(m_bmin.z, s.z - s.w)};
         m_bmax = {std::max(m_bmax.x, s.x + s.w), std::max(m_bmax.y, s.y + s.w), std::max(m_bmax.z, s.z + s.w)};
     };
-    for (auto& g : wd.groups) {
+    for (size_t gi = 0; gi < wd.groups.size(); gi++) {
+        const WorldMeshGroup& g = wd.groups[gi];
         if (cancel && cancel()) return;
         if (progress && (done++ & 7) == 0) progress(done, total);
         auto mesh = WithMaterials(m_assets, m_assets.MeshByPath(g.mesh, 0), g.materials);
@@ -101,6 +103,9 @@ void WorldScene::Build(const WorldData& wd, const std::function<bool()>& cancel,
         Item it;
         it.mesh = mesh;
         it.drawDistance = g.drawDistance;
+        it.kind = Pick::Instance;
+        it.source = gi;
+        it.meshPath = g.mesh;
         it.transforms.reserve(g.instances.size());
         for (auto& in : g.instances) {
             it.transforms.push_back(in.transform);
@@ -109,7 +114,8 @@ void WorldScene::Build(const WorldData& wd, const std::function<bool()>& cancel,
         }
         m_items.push_back(std::move(it));
     }
-    for (auto& l : wd.landscapes) {
+    for (size_t li = 0; li < wd.landscapes.size(); li++) {
+        const WorldLandscape& l = wd.landscapes[li];
         if (cancel && cancel()) return;
         if (progress && (done++ & 7) == 0) progress(done, total);
         auto mesh = m_r.CreateMesh(l.mesh, l.boundsMin, l.boundsMax);
@@ -122,12 +128,21 @@ void WorldScene::Build(const WorldData& wd, const std::function<bool()>& cancel,
         Item it;
         it.mesh = mesh;
         it.landscape = true;
+        it.kind = Pick::Landscape;
+        it.source = li;
+        {   // positions + indices only, for picking
+            auto geo = std::make_shared<MeshLod>();
+            geo->positions = l.mesh.positions;
+            geo->indices = l.mesh.indices;
+            it.lod = geo;
+        }
         it.transforms.push_back(Mat4::Identity());
         it.spheres.push_back(SphereOf(*mesh, Mat4::Identity()));
         grow(it.spheres.back());
         m_items.push_back(std::move(it));
     }
-    for (auto& s : wd.splines) {
+    for (size_t si = 0; si < wd.splines.size(); si++) {
+        const WorldSpline& s = wd.splines[si];
         if (cancel && cancel()) return;
         if (progress && (done++ & 7) == 0) progress(done, total);
         std::string err;
@@ -151,6 +166,14 @@ void WorldScene::Build(const WorldData& wd, const std::function<bool()>& cancel,
         m_gpuBytes += mesh->gpuBytes;
         Item it;
         it.mesh = mesh;
+        it.kind = Pick::Spline;
+        it.source = si;
+        {
+            auto geo = std::make_shared<MeshLod>();
+            geo->positions = std::move(lod.positions);
+            geo->indices = std::move(lod.indices);
+            it.lod = geo;
+        }
         it.transforms.push_back(s.transform);
         it.spheres.push_back(SphereOf(*mesh, s.transform));
         grow(it.spheres.back());
@@ -316,4 +339,125 @@ void WorldScene::DrawOverlays(const Camera& cam, const WorldDrawOptions& opt) {
     if (!pts.empty()) m_r.DrawLines(pts, 0xff40e0ffu);
     if (!spots.empty()) m_r.DrawLines(spots, 0xff40a0ffu);
     if (!decals.empty()) m_r.DrawLines(decals, 0xffffc040u);
+}
+
+// ---------------------------------------------------------------- picking
+
+static bool RaySphere(const Vec3& o, const Vec3& d, const Vec3& c, float r, float& t) {   // d normalised
+    Vec3 oc = o - c;
+    float b = Dot(oc, d), cc = Dot(oc, oc) - r * r, disc = b * b - cc;
+    if (disc < 0) return false;
+    float s = sqrtf(disc);
+    if (-b + s < 0) return false;   // behind the eye
+    t = std::max(0.f, -b - s);
+    return true;
+}
+
+static bool RayAabb(const Vec3& o, const Vec3& d, const Vec3& mn, const Vec3& mx, float& t) {
+    float t0 = 0, t1 = 1e30f;
+    const float* po = &o.x; const float* pd = &d.x; const float* a = &mn.x; const float* b = &mx.x;
+    for (int k = 0; k < 3; k++) {
+        if (fabsf(pd[k]) < 1e-12f) {
+            if (po[k] < a[k] || po[k] > b[k]) return false;
+            continue;
+        }
+        float inv = 1.f / pd[k], ta = (a[k] - po[k]) * inv, tb = (b[k] - po[k]) * inv;
+        if (ta > tb) std::swap(ta, tb);
+        t0 = std::max(t0, ta);
+        t1 = std::min(t1, tb);
+        if (t0 > t1) return false;
+    }
+    t = t0;
+    return true;
+}
+
+static bool RayTriangle(const Vec3& o, const Vec3& d, const Vec3& a, const Vec3& b, const Vec3& c, float& t) {   // both sides
+    Vec3 e1 = b - a, e2 = c - a, p = Cross(d, e2);
+    float det = Dot(e1, p);
+    if (fabsf(det) < 1e-12f) return false;
+    float inv = 1.f / det;
+    Vec3 s = o - a;
+    float u = Dot(s, p) * inv;
+    if (u < 0 || u > 1) return false;
+    Vec3 q = Cross(s, e1);
+    float v = Dot(d, q) * inv;
+    if (v < 0 || u + v > 1) return false;
+    t = Dot(e2, q) * inv;
+    return t >= 0;
+}
+
+const MeshLod* WorldScene::PickGeometry(const Item& it) const {
+    if (it.lod) return it.lod.get();
+    if (it.meshPath.empty()) return nullptr;
+    auto found = m_pickMeshes.find(it.meshPath);
+    if (found != m_pickMeshes.end()) return found->second.get();
+    std::shared_ptr<MeshLod> geo;
+    std::string err;
+    if (auto pkg = m_cache.LoadPath(it.meshPath, &err)) {
+        size_t dot = it.meshPath.rfind('.');
+        i32 ex = pkg->FindExport(dot == std::string::npos ? std::string_view{} : std::string_view(it.meshPath).substr(dot + 1));
+        if (!ex) ex = pkg->MainExport();
+        MeshData md;
+        if (ex && ReadMesh(*pkg, ex - 1, md, &err) && !md.lods.empty()) {
+            geo = std::make_shared<MeshLod>();
+            geo->positions = std::move(md.lods[0].positions);
+            geo->indices = std::move(md.lods[0].indices);
+        }
+    }
+    m_pickMeshes[it.meshPath] = geo;   // failures too: tested by bounds from then on
+    return geo.get();
+}
+
+WorldScene::Pick WorldScene::Raycast(const Vec3& origin, const Vec3& direction, const WorldDrawOptions& opt) const {
+    Pick best;
+    float len = Length(direction);
+    if (len < 1e-12f) return best;
+    Vec3 d = direction * (1.f / len);
+    struct Cand { float t; const Item* it; u32 i; };
+    std::vector<Cand> cands;
+    for (auto& it : m_items) {
+        if (it.landscape ? !opt.landscape : !opt.meshes) continue;
+        for (size_t i = 0; i < it.spheres.size(); i++) {
+            const Vec4& s = it.spheres[i];
+            float t;
+            if (RaySphere(origin, d, {s.x, s.y, s.z}, s.w, t)) cands.push_back({t, &it, (u32)i});
+        }
+    }
+    std::sort(cands.begin(), cands.end(), [](const Cand& a, const Cand& b) { return a.t < b.t; });
+    float bestT = 1e30f;
+    int tested = 0;
+    for (auto& c : cands) {
+        if (c.t > bestT || tested >= 256) break;   // every remaining candidate starts behind the hit
+        const Mat4& w = c.it->transforms[c.i];
+        Mat4 inv = w.Inverse();
+        Vec3 lo = inv.TransformPoint(origin), ld = inv.TransformDir(d);   // affine: t is the same in mesh space
+        float tb;
+        if (!RayAabb(lo, ld, c.it->mesh->boundsMin, c.it->mesh->boundsMax, tb) || tb > bestT) continue;
+        tested++;
+        float hitT = -1;
+        const MeshLod* g = PickGeometry(*c.it);
+        if (!g || g->indices.empty()) hitT = tb;
+        else {
+            float tmin = 1e30f;
+            const auto& P = g->positions;
+            for (size_t k = 0; k + 2 < g->indices.size(); k += 3) {
+                u32 a = g->indices[k], b = g->indices[k + 1], e = g->indices[k + 2];
+                if (a >= P.size() || b >= P.size() || e >= P.size()) continue;
+                float t;
+                if (RayTriangle(lo, ld, P[a], P[b], P[e], t) && t < tmin) tmin = t;
+            }
+            if (tmin < 1e30f) hitT = tmin;
+        }
+        if (hitT < 0 || hitT >= bestT) continue;
+        bestT = hitT;
+        best.kind = c.it->kind;
+        best.index = c.it->source;
+        best.instance = c.i;
+        best.point = origin + d * hitT;
+        best.distance = hitT;
+        best.transform = w;
+        best.boundsMin = c.it->mesh->boundsMin;
+        best.boundsMax = c.it->mesh->boundsMax;
+    }
+    return best;
 }

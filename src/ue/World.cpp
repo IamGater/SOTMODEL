@@ -421,8 +421,27 @@ void WorldLoader::AddLevel(const Package& pkg, const Mat4& levelTransform, const
         out.boundsMin = {std::min(out.boundsMin.x, t.x), std::min(out.boundsMin.y, t.y), std::min(out.boundsMin.z, t.z)};
         out.boundsMax = {std::max(out.boundsMax.x, t.x), std::max(out.boundsMax.y, t.y), std::max(out.boundsMax.z, t.z)};
     };
-    auto AddInstance = [&](WorldMeshGroup& g, const Mat4& w, float dist) {
-        g.instances.push_back({w, levelIndex});
+    // the actor owning component i (its outer), added once per level
+    std::unordered_map<i32, u32> actorIds;
+    auto ActorOf = [&](size_t i) -> u32 {
+        i32 a = exps[i].outerIndex;
+        if (a <= 0) return UINT32_MAX;
+        if (auto it = actorIds.find(a); it != actorIds.end()) return it->second;
+        WorldActor act;
+        act.name = exps[a - 1].objectName;
+        act.cls = pkg.ClassName(a);
+        if (i32 ci = exps[a - 1].classIndex; ci < 0) {
+            std::string bp = pkg.ImportPackage(ci);
+            if (IStartsWith(bp, "/Game/")) act.blueprint = bp;
+        }
+        act.level = levelIndex;
+        u32 id = (u32)out.actors.size();
+        out.actors.push_back(std::move(act));
+        actorIds[a] = id;
+        return id;
+    };
+    auto AddInstance = [&](WorldMeshGroup& g, const Mat4& w, float dist, u32 actor) {
+        g.instances.push_back({w, levelIndex, actor});
         g.drawDistance = (g.instances.size() == 1 || (g.drawDistance > 0 && dist > 0)) ? std::max(g.drawDistance, dist) : 0.f;
         lvl.instances++;
         Note(w);
@@ -706,6 +725,7 @@ void WorldLoader::AddLevel(const Package& pkg, const Mat4& levelTransform, const
             s.materials = mats;
             s.transform = w;
             s.level = levelIndex;
+            s.actor = ActorOf(i);
             if (auto sp = v.Get("SplineParams")) {
                 s.params.startPos = VecOf(sp->Field("StartPos"));
                 s.params.startTangent = VecOf(sp->Field("StartTangent"));
@@ -740,10 +760,11 @@ void WorldLoader::AddLevel(const Package& pkg, const Mat4& levelTransform, const
             }
             if (inst.empty()) continue;
             auto& g = m->Group(out, mesh, mats, false);
-            for (auto& im : inst) AddInstance(g, im * w, dist);
+            u32 actor = ActorOf(i);
+            for (auto& im : inst) AddInstance(g, im * w, dist, actor);
             continue;
         }
-        AddInstance(m->Group(out, mesh, mats, skeletal), w, dist);
+        AddInstance(m->Group(out, mesh, mats, skeletal), w, dist, ActorOf(i));
     }
 }
 

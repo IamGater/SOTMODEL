@@ -42,6 +42,19 @@ public:
     Vec3 FocusMin() const { return m_fmin; }
     Vec3 FocusMax() const { return m_fmax; }
 
+    // Ray picking (main thread): nearest mesh instance / landscape patch / spline mesh hit by origin + t * dir.
+    // Triangles of the candidates are tested (meshes are read from their packages on first use).
+    struct Pick {
+        enum Kind { None, Instance, Landscape, Spline } kind = None;
+        size_t index = 0;    // WorldData::groups / landscapes / splines
+        u32 instance = 0;    // within the group
+        Vec3 point;
+        float distance = 0;
+        Mat4 transform;      // mesh -> world
+        Vec3 boundsMin, boundsMax;   // mesh bounds (mesh space)
+    };
+    Pick Raycast(const Vec3& origin, const Vec3& dir, const WorldDrawOptions& opt) const;
+
 private:
     struct Item {
         std::shared_ptr<GpuMesh> mesh;
@@ -49,7 +62,13 @@ private:
         std::vector<Vec4> spheres;   // world-space bounding sphere per instance (xyz centre, w radius)
         float drawDistance = 0;
         bool landscape = false;
+        Pick::Kind kind = Pick::None;
+        size_t source = 0;                     // index into the WorldData list of that kind
+        std::string meshPath;                  // instances: mesh to read for triangle tests
+        std::shared_ptr<const MeshLod> lod;    // landscape / spline: the CPU geometry (world / component space)
     };
+    const MeshLod* PickGeometry(const Item& it) const;
+    mutable std::unordered_map<std::string, std::shared_ptr<const MeshLod>> m_pickMeshes;
     Renderer& m_r;
     GpuAssets& m_assets;
     PackageCache& m_cache;

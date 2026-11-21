@@ -130,6 +130,7 @@ struct Document {
     WorldDrawOptions worldDraw;
     bool worldLoading = false;
     SceneLighting worldLighting;   // rebuilt every frame from the camera
+    WorldScene::Pick worldSel;     // what a click in the viewport picked
     int worldDone = 0, worldTotal = 0;
     std::string worldStage;
     char worldFilter[128] = {};
@@ -197,6 +198,7 @@ public:
     int startTab = -1;   // --tab: initial left tab
     std::string startFolder;   // --folder: initial explorer folder (game path)
     std::vector<std::string> openOnStart;   // asset paths from the command line
+    float pickU = -1, pickV = -1;           // --pick u,v: click the 3D view there once a map has loaded (automation)
     bool popoutOnStart = false;             // --popout: show the opened tab's 3D view in the separate window
 
 private:
@@ -262,6 +264,7 @@ private:
     void RequestGraphShaders(Document& d);   // compiles the graph shaders of the shown mesh's materials in the background
     void DrawWorld(Document& d);
     void PopoutButton(Document& d, bool flow);
+    void DrawWorldSelection(Document& d, ImVec2 vp0, ImVec2 vsize);
     static bool Has3dView(const Document& d);
     void LoadWorld(std::shared_ptr<Document> d);
     void LoadAnimationMesh(std::shared_ptr<Document> d, std::string meshPath);

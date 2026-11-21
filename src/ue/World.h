@@ -19,6 +19,14 @@ struct SplineMeshParams {
 struct WorldInstance {
     Mat4 transform;   // mesh -> world (UE space, row vectors)
     u32 level = 0;    // index into WorldData::levels
+    u32 actor = UINT32_MAX;   // index into WorldData::actors (the component's owner)
+};
+
+// The actor owning placed components (picking shows its name, class and Blueprint package).
+struct WorldActor {
+    std::string name, cls;   // object name, class ("BP_Barrel_C")
+    std::string blueprint;   // /Game/... package of a Blueprint class, empty for native classes
+    u32 level = 0;
 };
 
 // All instances of one mesh with one set of materials.
@@ -36,6 +44,7 @@ struct WorldSpline {
     Mat4 transform;   // component -> world
     SplineMeshParams params;
     u32 level = 0;
+    u32 actor = UINT32_MAX;
 };
 
 // One LandscapeComponent as a world-space mesh (vertex colours blended from its paint layers).
@@ -86,6 +95,7 @@ struct WorldData {
     std::string root;   // the map that was opened
     std::vector<WorldLevel> levels;
     std::vector<WorldMeshGroup> groups;
+    std::vector<WorldActor> actors;
     std::vector<WorldSpline> splines;
     std::vector<WorldLandscape> landscapes;
     std::vector<WorldLight> lights;

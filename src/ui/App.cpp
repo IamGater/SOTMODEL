@@ -585,14 +585,25 @@ static ImVec2 MinViewportAvail() {
 
 // Camera input over an image-sized button (LMB orbit, RMB look + WASD/QE fly, MMB pan, wheel zoom, F calls `frame`),
 // then renders `scene` into the viewport.
+// World-space ray through a point of the viewport (uv 0..1, y down), matching Renderer::BeginFrame's camera.
+static void ViewRay(const Camera& cam, ImVec2 size, ImVec2 uv, Vec3& origin, Vec3& dir) {
+    Vec3 eye = cam.Eye(), f = Normalize(cam.target - eye), s = Normalize(Cross({0, 0, 1}, f)), u = Cross(f, s);
+    float th = tanf(cam.fovY * kPi / 360), aspect = size.x / std::max(1.f, size.y);
+    origin = eye;
+    dir = Normalize(f + s * ((uv.x * 2 - 1) * th * aspect) + u * ((1 - uv.y * 2) * th));
+}
+
+// `onClick` (optional) gets the viewport uv of a left click that did not drag.
 static void DrawViewportScene(Renderer& r, Camera& cam, const DrawOptions& draw, ImVec2 size, bool allowFly, const std::function<void()>& frame,
-                              const std::function<void()>& scene) {
+                              const std::function<void()>& scene, const std::function<void(ImVec2)>& onClick = {}) {
     if (size.x < 8 || size.y < 8) return;
     ImGuiIO& io = ImGui::GetIO();
     ImVec2 p0 = ImGui::GetCursorScreenPos();
     ImGui::InvisibleButton("##viewport", size, ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight | ImGuiButtonFlags_MouseButtonMiddle);
     ImGui::SetItemKeyOwner(ImGuiKey_MouseWheelY);   // the wheel zooms; it must not also scroll the tab when that has a scrollbar
     bool hovered = ImGui::IsItemHovered(), active = ImGui::IsItemActive();
+    if (onClick && ImGui::IsItemDeactivated() && ImGui::IsMouseReleased(0) && io.MouseDragMaxDistanceSqr[0] < 16)
+        onClick(ImVec2((io.MousePos.x - p0.x) / size.x, (io.MousePos.y - p0.y) / size.y));
     if (hovered && io.MouseWheel != 0) cam.distance = std::max(cam.nearZ * 2, cam.distance * powf(0.85f, io.MouseWheel));
     Vec3 fwd = cam.Forward();
     Vec3 right = Normalize(Cross({0, 0, 1}, fwd));
@@ -941,6 +952,7 @@ void App::DrawWorld(Document& d) {
             if (sp.get() == &d) {
                 d.worldScene.reset();
                 d.world.reset();
+                d.worldSel = {};
                 d.cancel = false;
                 LoadWorld(sp);
                 break;
@@ -1019,11 +1031,38 @@ void App::DrawWorld(Document& d) {
     Camera& cam = d.camera;
     sc.Lighting(cam, d.worldDraw, d.worldLighting);
     d.draw.lighting = &d.worldLighting;
-    DrawViewportScene(*m_renderer, cam, d.draw, ImVec2(side > 0 ? avail.x - side - ImGui::GetStyle().ItemSpacing.x : avail.x, avail.y), true, frameWorld, [&] {
-        sc.Draw(cam, avail.y, d.worldDraw);
-        sc.DrawOverlays(cam, d.worldDraw);
-    });
-    if (side <= 0) return;
+    ImVec2 vp0 = ImGui::GetCursorScreenPos(), vsize(side > 0 ? avail.x - side - ImGui::GetStyle().ItemSpacing.x : avail.x, avail.y);
+    DrawViewportScene(
+        *m_renderer, cam, d.draw, vsize, true, frameWorld,
+        [&] {
+            sc.Draw(cam, avail.y, d.worldDraw);
+            sc.DrawOverlays(cam, d.worldDraw);
+            if (d.worldSel.kind != WorldScene::Pick::None) {   // selection: its mesh bounds as a box
+                const Vec3 &a = d.worldSel.boundsMin, &b = d.worldSel.boundsMax;
+                Vec3 c[8];
+                for (int k = 0; k < 8; k++) c[k] = d.worldSel.transform.TransformPoint({k & 1 ? b.x : a.x, k & 2 ? b.y : a.y, k & 4 ? b.z : a.z});
+                static const int e[12][2] = {{0, 1}, {2, 3}, {4, 5}, {6, 7}, {0, 2}, {1, 3}, {4, 6}, {5, 7}, {0, 4}, {1, 5}, {2, 6}, {3, 7}};
+                std::vector<Vec3> lines;
+                for (auto& ed : e) { lines.push_back(c[ed[0]]); lines.push_back(c[ed[1]]); }
+                m_renderer->DrawLines(lines, 0xff30d0ffu);
+            }
+        },
+        [&](ImVec2 uv) {
+            Vec3 o, dir;
+            ViewRay(cam, vsize, uv, o, dir);
+            d.worldSel = sc.Raycast(o, dir, d.worldDraw);
+        });
+    if (pickU >= 0 && vsize.x >= 8) {   // --pick: one automated click
+        Vec3 o, dir;
+        ViewRay(cam, vsize, ImVec2(pickU, pickV), o, dir);
+        d.worldSel = sc.Raycast(o, dir, d.worldDraw);
+        LOGI("pick %.3f,%.3f: kind %d index %zu instance %u at %.1f m", pickU, pickV, (int)d.worldSel.kind, d.worldSel.index, d.worldSel.instance, d.worldSel.distance / 100);
+        pickU = pickV = -1;
+    }
+    if (side <= 0) {
+        DrawWorldSelection(d, vp0, vsize);
+        return;
+    }
     ImGui::SameLine();
     ImGui::BeginChild("##outliner", ImVec2(side, avail.y));
     if (ImGui::BeginTabBar("##outl")) {
@@ -1132,6 +1171,81 @@ void App::DrawWorld(Document& d) {
         ImGui::EndTabBar();
     }
     ImGui::EndChild();
+    DrawWorldSelection(d, vp0, vsize);
+}
+
+// What a click in the map picked (WorldScene::Raycast), as a panel over the viewport's top-left corner.
+void App::DrawWorldSelection(Document& d, ImVec2 vp0, ImVec2 vsize) {
+    const WorldScene::Pick& p = d.worldSel;
+    if (p.kind == WorldScene::Pick::None || !d.world) return;
+    const WorldData& w = *d.world;
+    std::string title, mesh, levelPath, blueprint, actorLine;
+    u32 level = 0, actor = UINT32_MAX;
+    if (p.kind == WorldScene::Pick::Instance && p.index < w.groups.size() && p.instance < w.groups[p.index].instances.size()) {
+        const auto& in = w.groups[p.index].instances[p.instance];
+        mesh = w.groups[p.index].mesh;
+        level = in.level;
+        actor = in.actor;
+    } else if (p.kind == WorldScene::Pick::Spline && p.index < w.splines.size()) {
+        mesh = w.splines[p.index].mesh;
+        level = w.splines[p.index].level;
+        actor = w.splines[p.index].actor;
+    } else if (p.kind == WorldScene::Pick::Landscape && p.index < w.landscapes.size()) {
+        title = "Landscape " + w.landscapes[p.index].name;
+        level = w.landscapes[p.index].level;
+    } else {
+        d.worldSel = {};
+        return;
+    }
+    if (!mesh.empty()) title = mesh.substr(mesh.find_last_of('.') + 1);
+    if (level < w.levels.size()) levelPath = w.levels[level].path;
+    if (actor < w.actors.size()) {
+        const WorldActor& a = w.actors[actor];
+        actorLine = a.name + "  (" + a.cls + ")";
+        blueprint = a.blueprint;
+    }
+    float u = ImGui::GetFontSize() / 16.f;
+    ImGui::SetCursorScreenPos(ImVec2(vp0.x + 8 * u, vp0.y + 8 * u));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, IM_COL32(20, 21, 28, 225));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8 * u, 6 * u));
+    ImGui::BeginChild("##worldsel", ImVec2(std::min(vsize.x - 16 * u, 420 * u), 0),
+                      ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_AlwaysUseWindowPadding | ImGuiChildFlags_Borders, ImGuiWindowFlags_NoScrollbar);
+    ImGui::PushTextWrapPos(0);
+    ImGui::TextUnformatted(title.c_str());
+    if (!mesh.empty()) ImGui::TextDisabled("%s", mesh.c_str());
+    if (!actorLine.empty()) ImGui::TextDisabled("actor %s", actorLine.c_str());
+    if (!levelPath.empty()) ImGui::TextDisabled("level %s", levelPath.substr(levelPath.find_last_of('/') + 1).c_str());
+    Vec3 t = p.transform.Translation();
+    ImGui::TextDisabled("at %.0f %.0f %.0f, hit %.1f m away", t.x, t.y, t.z, p.distance / 100);
+    ImGui::PopTextWrapPos();
+    auto open = [&](const std::string& path) {
+        i64 e = m_api->ResolveFile(path);
+        if (e >= 0) OpenFile((u32)e, true);
+        else LOGW("not found: %s", path.c_str());
+    };
+    if (!mesh.empty() && ImGui::SmallButton("Open mesh")) open(mesh);
+    if (!blueprint.empty()) {
+        if (!mesh.empty()) ImGui::SameLine();
+        if (ImGui::SmallButton("Open Blueprint")) open(blueprint);
+    }
+    if (!levelPath.empty()) {
+        if (!mesh.empty() || !blueprint.empty()) ImGui::SameLine();
+        if (ImGui::SmallButton("Open level")) open(levelPath);
+    }
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Focus")) {
+        Vec3 c = p.transform.TransformPoint((p.boundsMin + p.boundsMax) * 0.5f);
+        float r = Length(p.boundsMax - p.boundsMin) * 0.5f * p.transform.MaxScale();
+        d.camera.target = c;
+        d.camera.distance = std::max(r * 2.5f, d.camera.nearZ * 4);
+    }
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Copy path")) CopyToClipboard(!mesh.empty() ? mesh : title);
+    ImGui::SameLine();
+    if (ImGui::SmallButton("X")) d.worldSel = {};
+    ImGui::EndChild();
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor();
 }
 
 // ---------------------------------------------------------------- export
