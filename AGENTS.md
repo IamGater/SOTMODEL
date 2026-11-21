@@ -91,7 +91,8 @@ or `/Game/Models/Props/Common/cmn_barrel_debris_02_a.cmn_barrel_debris_02_a`.
 | `search_localization` | the game's translated strings (.locres) by text or key in any shipped language (`culture=de-DE`); FText values in JSON also carry `LocalizedString` |
 | `get_localized_text` | one FText (namespace + key) in every language |
 | `list_shaders` | compiled D3D11 (SM5) shaders of a material's shader maps or of `Engine/Content/GlobalShaderCache-PCD3D_SM5.bin`: index, stage, shader type, vertex factory, instructions, uniform buffers (`stage` / `type` / `vertex_factory` filters) |
-| `decompile_shader` | one shader (`index`) as readable HLSL, `hlsl_exact` (raw uint4 lanes), `asm` (D3D disassembly), `reflection`, or raw `dxbc` with `save_to` |
+| `decompile_shader` | one shader (`index`) as readable HLSL, `hlsl_exact` (raw uint4 lanes), `asm` (D3D disassembly), `reflection`, or raw `dxbc` with `save_to`; material shaders get their Material uniform buffer reads named (`cb1[19].x = ScalarParameter "Damage_Tiling"`) plus a register legend (`annotate=false` to skip) |
+| `get_material_uniforms` | a material's uniform expression sets (one per shader map): each Material uniform buffer register as the parameter / folded expression it holds (vectors first, then scalars 4 per register), 2D / cube texture slots, which cb slot the shaders bind it to |
 | `get_material_hlsl` | a material's node graph as readable HLSL (UE 4.10 translator style): parameters with values, Custom nodes, material functions inlined, static switches resolved, connected attributes; instances use the master graph with their values; material functions translate on their own |
 | `get_material_graph` | the expression nodes of a material / function: type, caption, position (auto-laid out: cooked packages strip editor positions) and input links |
 | `search_localization` | the game's translated strings (.locres) by text / key in any shipped language (en, de-DE, ru-RU, zh-CN, ...) |
@@ -143,6 +144,11 @@ Typical flow: `search` → `get_package` → `get_properties` / `preview_*` → 
   SubImageIndex runs past the grid (wraps), VFX textures are often masks without alpha (brightness used as alpha).
   The preview simulation covers spawn / bursts / lifetime / size / color / velocity / cone / acceleration / drag /
   sphere + cylinder location / rotation / subUV; other modules are listed as not previewed.
+- Material uniform buffer (ue/Shaders.cpp): each shader map's FUniformExpressionSet (UE 4.10 order: vector, scalar,
+  2D texture, cube texture expressions, parameter collection guids, 4 per-frame arrays; each expression = type FName +
+  fields) is found by scanning for count + known expression FName. Layout: one float4 per vector expression, then the
+  scalars packed 4 per float4. The cb slot comes from FMaterialShader's MaterialUniformBuffer (u16 BaseIndex + u32
+  bIsBound) 12 bytes after the shader resource on SoT (a u32, a zero u32, a u32 come first).
 - Morph targets (UMorphTarget): after the tagged properties a 4-byte object-guid flag, the strip flags (2 bytes), then per
   LOD `{PositionDelta, TangentZDelta, SourceIdx}` (28 bytes, SourceIdx = render vertex). SoT's `MeshPatchAsset` exports
   in the same packages are a different (custom) thing.

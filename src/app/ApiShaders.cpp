@@ -1,6 +1,7 @@
 // Shader tools: the compiled D3D11 shaders of a material's shader maps (or the global shader cache) as a list, and one
 // shader as HLSL, assembly, reflection or raw DXBC.
 #include "app/Api.h"
+#include <set>
 #include "core/Json.h"
 #include "ue/Shaders.h"
 #include "render/ShaderTools.h"
@@ -13,8 +14,10 @@
 
 namespace {
 
-bool LoadShaders(Api& a, const std::string& path, std::vector<ShaderEntry>& out, std::string& name, std::string& err) {
+bool LoadShaders(Api& a, const std::string& path, std::vector<ShaderEntry>& out, std::string& name, std::string& err,
+                 std::vector<MaterialUniformSet>* sets = nullptr) {
     out.clear();
+    if (sets) sets->clear();
     if (IsShaderCacheFile(path) || IEndsWith(path, ".bin")) {
         i64 e = a.ResolveFile(path);
         if (e < 0) { err = "file not found: " + path; return false; }
@@ -28,7 +31,11 @@ bool LoadShaders(Api& a, const std::string& path, std::vector<ShaderEntry>& out,
     auto pkg = a.LoadPackage(path, &err);
     if (!pkg) return false;
     name = pkg->PackageName();
-    return ReadPackageShaders(*pkg, out, &err);
+    if (!ReadPackageShaders(*pkg, out, &err)) return false;
+    std::vector<MaterialUniformSet> local;
+    ReadMaterialUniformSets(*pkg, sets ? *sets : local);
+    AssignUniformSets(out, sets ? *sets : local);
+    return true;
 }
 
 void WriteEntry(JsonWriter& w, const ShaderEntry& s, size_t index) {
@@ -43,9 +50,12 @@ void WriteEntry(JsonWriter& w, const ShaderEntry& s, size_t index) {
     if (!s.uniformBuffers.empty()) {
         w.Key("uniformBuffers");
         w.BeginArray();
-        for (auto& u : s.uniformBuffers) w.Str(u);
+        for (size_t i = 0; i < s.uniformBuffers.size(); i++)
+            w.Str(i < s.uniformBufferSlots.size() ? Fmt("%s (b%d)", s.uniformBuffers[i].c_str(), s.uniformBufferSlots[i]) : s.uniformBuffers[i]);
         w.EndArray();
     }
+    if (s.materialBufferSlot >= 0) w.KV("materialBuffer", Fmt("b%d", s.materialBufferSlot));
+    if (s.uniformSet >= 0) w.KV("uniformSet", s.uniformSet);
     if (!s.usage.empty()) w.KV("usage", s.usage);
     w.EndObject();
 }
@@ -92,20 +102,31 @@ void RegisterShaderTools(Api& api) {
                   "Decompile one compiled shader (index from list_shaders) of a material package or the global shader cache. "
                   "format: 'hlsl' (default; readable HLSL with constant buffer members, textures and samplers named from the "
                   "reflection data), 'hlsl_exact' (temps as raw uint4 lanes, recompiles bit-exactly), 'asm' (D3D disassembly), "
-                  "'reflection' (constant buffers, bindings, signatures) or 'dxbc' (raw bytecode; needs save_to). 'save_to' writes "
+                  "'reflection' (constant buffers, bindings, signatures) or 'dxbc' (raw bytecode; needs save_to). For material shaders the "
+                  "HLSL starts with a legend of the Material uniform buffer (cbN[i] -> vector / scalar parameters and folded uniform "
+                  "expressions, texture order) and reads of it are commented with the parameter (annotate=false turns this off). 'save_to' writes "
                   "the result to a file instead of returning it.",
-                  R"({"type":"object","properties":{"path":{"type":"string"},"index":{"type":"integer","default":0},"format":{"type":"string","enum":["hlsl","hlsl_exact","asm","reflection","dxbc"],"default":"hlsl"},"save_to":{"type":"string"},"max_chars":{"type":"integer","default":200000}},"required":["path"]})",
+                  R"({"type":"object","properties":{"path":{"type":"string"},"index":{"type":"integer","default":0},"format":{"type":"string","enum":["hlsl","hlsl_exact","asm","reflection","dxbc"],"default":"hlsl"},"annotate":{"type":"boolean","default":true},"save_to":{"type":"string"},"max_chars":{"type":"integer","default":200000}},"required":["path"]})",
                   "path",
                   [](Api& a, const JsonValue& args) {
                       std::vector<ShaderEntry> list;
+                      std::vector<MaterialUniformSet> sets;
                       std::string name, err;
-                      if (!LoadShaders(a, args.GetStr("path"), list, name, err)) return ApiResult::Error(err);
+                      if (!LoadShaders(a, args.GetStr("path"), list, name, err, &sets)) return ApiResult::Error(err);
                       i64 index = (i64)args.GetNum("index", 0);
                       if (index < 0 || index >= (i64)list.size()) return ApiResult::Error(Fmt("index out of range (0..%zu)", list.size() - 1));
                       auto& s = list[(size_t)index];
                       std::string fmt = args.GetStr("format", "hlsl"), text, save = args.GetStr("save_to");
                       bool ok = true;
-                      if (fmt == "hlsl" || fmt == "hlsl_exact") ok = DecompileShader(s.dxbc, text, fmt == "hlsl_exact", &err);
+                      if (fmt == "hlsl" || fmt == "hlsl_exact") {
+                          ok = DecompileShader(s.dxbc, text, fmt == "hlsl_exact", &err);
+                          // name the Material uniform buffer reads (cbN[i] -> parameter / uniform expression)
+                          if (ok && args.GetBool("annotate", true) && s.materialBufferSlot >= 0 && s.uniformSet >= 0 && s.uniformSet < (int)sets.size())
+                          {
+                              std::string legend = AnnotateMaterialBuffer(text, s.materialBufferSlot, sets[s.uniformSet]);
+                              text = legend + "\n" + text;
+                          }
+                      }
                       else if (fmt == "asm") ok = DisassembleShader(s.dxbc, text, &err);
                       else if (fmt == "reflection") {
                           ShaderReflectionInfo info;
@@ -294,6 +315,62 @@ void RegisterShaderTools(Api& api) {
                       w.EndObject();
                       r.json = w.Take();
                       r.images.push_back(std::move(im));
+                      return r;
+                  }});
+
+    api.Register({"get_material_uniforms",
+                  "The uniform expression sets of a material's shader maps (one per quality level / feature level): what the "
+                  "Material uniform buffer holds. Vector expressions take one float4 each (cbN[0..]), scalar expressions follow packed "
+                  "four per float4; 2D / cube texture expressions are in binding order. Each shader in list_shaders names its set "
+                  "('uniformSet') and the buffer register ('materialBuffer').",
+                  R"({"type":"object","properties":{"path":{"type":"string"}},"required":["path"]})", "path",
+                  [](Api& a, const JsonValue& args) {
+                      std::vector<ShaderEntry> list;
+                      std::vector<MaterialUniformSet> sets;
+                      std::string name, err;
+                      if (!LoadShaders(a, args.GetStr("path"), list, name, err, &sets)) return ApiResult::Error(err);
+                      JsonWriter w;
+                      w.BeginObject();
+                      w.KV("source", name);
+                      w.Key("sets");
+                      w.BeginArray();
+                      for (size_t i = 0; i < sets.size(); i++) {
+                          auto& st = sets[i];
+                          int shaders = 0;
+                          std::set<int> slots;
+                          for (auto& s : list)
+                              if (s.uniformSet == (int)i) {
+                                  shaders++;
+                                  if (s.materialBufferSlot >= 0) slots.insert(s.materialBufferSlot);
+                              }
+                          w.BeginObject();
+                          w.KV("index", (i64)i);
+                          w.KV("shaders", shaders);
+                          std::string sl;
+                          for (int x : slots) sl += (sl.empty() ? "b" : ", b") + std::to_string(x);
+                          if (!sl.empty()) w.KV("materialBuffer", sl);
+                          w.Key("registers");
+                          w.BeginArray();
+                          int nv = (int)st.vectors.size(), ns = ((int)st.scalars.size() + 3) / 4;
+                          for (int k = 0; k < nv + ns; k++) w.Str(Fmt("[%d] %s", k, st.Describe(k, -1).c_str()));
+                          w.EndArray();
+                          auto arr = [&](const char* key, const std::vector<std::string>& v) {
+                              if (v.empty()) return;
+                              w.Key(key);
+                              w.BeginArray();
+                              for (auto& x : v) w.Str(x);
+                              w.EndArray();
+                          };
+                          arr("textures2D", st.textures2D);
+                          arr("texturesCube", st.texturesCube);
+                          arr("perFrameScalars", st.perFrameScalars);
+                          arr("perFrameVectors", st.perFrameVectors);
+                          w.EndObject();
+                      }
+                      w.EndArray();
+                      w.EndObject();
+                      ApiResult r;
+                      r.json = w.Take();
                       return r;
                   }});
 }
