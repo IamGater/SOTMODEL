@@ -484,6 +484,10 @@ void App::LoadDocument(std::shared_ptr<Document> d) {
                 d->particles = ps;
                 d->psim = sim;
             } else d->error = "particles: " + err;
+        } else if (main && d->className == "BlueprintGeneratedClass") {   // an actor class: assembled from its components
+            d->isWorld = true;
+            d->worldBlueprint = true;
+            d->preferred = DocView::World;
         } else if (main && IsWorldClass(d->className)) {
             d->isWorld = true;
             d->worldSea = IsWorldLayoutMap(d->gamePath);
@@ -529,7 +533,9 @@ void App::LoadWorld(std::shared_ptr<Document> d) {
             Post([d, done, total, stage] { d->worldDone = done; d->worldTotal = total; d->worldStage = "level " + stage; });
         };
         std::string err;
-        bool ok = loader.Load(d->gamePath, opt, *world, &err);
+        bool ok = d->worldBlueprint ? loader.AddBlueprint(GamePathToPackage(d->gamePath), Mat4::Identity(), opt, *world, &err)
+                                    : loader.Load(d->gamePath, opt, *world, &err);
+        if (ok && d->worldBlueprint && world->InstanceCount() == 0) ok = false;   // logic-only class: no 3D view
         std::shared_ptr<WorldScene> scene;
         if (ok && !d->cancel) {
             scene = std::make_shared<WorldScene>(*m_renderer, *m_assets, *m_api->cache);
@@ -542,10 +548,19 @@ void App::LoadWorld(std::shared_ptr<Document> d) {
         }
         Post([this, d, world, scene, ok, err] {
             d->worldLoading = false;
+            if (!ok && d->worldBlueprint) {   // nothing to show: an ordinary tab
+                d->isWorld = false;
+                LOGI("%s: %s", d->name.c_str(), err.empty() ? "no mesh components" : err.c_str());
+                return;
+            }
             if (!ok) { d->error = "world: " + err; return; }
             d->world = world;
             d->worldScene = scene;
-            if (scene) {
+            if (scene && d->worldBlueprint) {   // one actor: frame all of it, viewer lighting, no sea
+                d->camera.Frame(scene->BoundsMin(), scene->BoundsMax());
+                d->camera.flySpeed = std::max(100.f, Length(scene->BoundsMax() - scene->BoundsMin()));
+                d->worldDraw.water = d->worldDraw.fog = d->worldDraw.lights = false;
+            } else if (scene) {
                 d->camera.Frame(scene->FocusMin(), scene->FocusMax());
                 d->camera.yaw = -135;
                 d->camera.pitch = -35;
@@ -664,7 +679,7 @@ static void DrawViewport(Renderer& r, Document& d, ImVec2 size, bool allowFly) {
 }
 
 bool App::Has3dView(const Document& d) {
-    return !d.loading && ((d.hasMesh && (!d.hasMaterial || d.materialSphere)) || d.anim || d.isWorld);
+    return !d.loading && ((d.hasMesh && (!d.hasMaterial || d.materialSphere)) || d.anim || (d.isWorld && !(d.worldBlueprint && d.worldLoading)));
 }
 
 // The 3D viewer (toolbar, viewport, side list) lives in its own OS window (Gui.cpp hosts it) while Settings::viewerWindow
@@ -988,13 +1003,15 @@ void App::DrawWorld(Document& d) {
     // toolbar
     BeginToolbar();
     FlowToggle("Meshes", &d.worldDraw.meshes, true);
-    FlowToggle("Landscape", &d.worldDraw.landscape);
-    FlowToggle("Water", &d.worldDraw.water);
-    FlowToggle("Lights", &d.worldDraw.lights);
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("The map's sun, sky light and the %d point / spot lights nearest the camera", kMaxSceneLights);
-    FlowToggle("Fog", &d.worldDraw.fog);
-    FlowToggle("Gizmos", &d.worldDraw.gizmos);
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Light ranges / spot cones (yellow) and decal boxes (blue) within 300 m");
+    if (!d.worldBlueprint) {   // map-only switches
+        FlowToggle("Landscape", &d.worldDraw.landscape);
+        FlowToggle("Water", &d.worldDraw.water);
+        FlowToggle("Lights", &d.worldDraw.lights);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("The map's sun, sky light and the %d point / spot lights nearest the camera", kMaxSceneLights);
+        FlowToggle("Fog", &d.worldDraw.fog);
+        FlowToggle("Gizmos", &d.worldDraw.gizmos);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Light ranges / spot cones (yellow) and decal boxes (blue) within 300 m");
+    }
     FlowToggle("Textures", &d.draw.textures);
     FlowToggle("Wireframe", &d.draw.wireframe);
     FlowNext(130);
@@ -1030,7 +1047,7 @@ void App::DrawWorld(Document& d) {
     float side = avail.x > 640 ? std::min(360.f, avail.x * 0.3f) : 0.f;   // the outliner is dropped in narrow windows
     Camera& cam = d.camera;
     sc.Lighting(cam, d.worldDraw, d.worldLighting);
-    d.draw.lighting = &d.worldLighting;
+    d.draw.lighting = d.worldBlueprint ? nullptr : &d.worldLighting;   // a lone actor: the viewer's key light
     ImVec2 vp0 = ImGui::GetCursorScreenPos(), vsize(side > 0 ? avail.x - side - ImGui::GetStyle().ItemSpacing.x : avail.x, avail.y);
     DrawViewportScene(
         *m_renderer, cam, d.draw, vsize, true, frameWorld,

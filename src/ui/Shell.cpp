@@ -590,7 +590,7 @@ void App::DrawMenu() {
     }
     if (ImGui::BeginMenu("Views")) {
         Document* d = ActiveDoc();
-        bool has3d = d && !d->loading && (d->hasMesh || d->anim || d->isWorld);
+        bool has3d = d && Has3dView(*d);
         if (MenuItemIcon("3D Viewer", nullptr, IconCube, has3d)) m_explorerVisible = false;
         MenuItemIcon("Export Session", nullptr, IconExportBox, false);
         if (MenuItemIcon("Audio Player", nullptr, IconNote, d && (d->audio || d->isBank))) m_explorerVisible = false;
@@ -1578,7 +1578,7 @@ void App::DrawDocTabs(float height) {
 
 void App::DrawDocContent(Document& d) {
     ImVec2 avail = ImGui::GetContentRegionAvail();
-    bool has3d = !d.loading && ((d.hasMesh && (!d.hasMaterial || d.materialSphere)) || d.anim || d.isWorld);
+    bool has3d = Has3dView(d);
     bool hasImage = !d.loading && (d.texture || (d.hasMaterial && !d.materialTextures.empty()));
     bool hasAudio = !d.loading && (d.audio || d.isBank || !d.audioError.empty());
     bool hasTable = !d.loading && d.table != nullptr;

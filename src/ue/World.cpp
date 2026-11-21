@@ -77,9 +77,13 @@ std::string ObjectPathOf(const Package& pkg, const PropValue& v) {
     return pkg.FullPath(idx);
 }
 
+// SkeletalMeshMemoryConstraintComponent: SoT's skeletal mesh component of wieldable items
+bool IsSkeletalClass(std::string_view cls) {
+    return IEquals(cls, "SkeletalMeshComponent") || IEquals(cls, "PoseableMeshComponent") || IEquals(cls, "DestructibleComponent") ||
+           IEquals(cls, "SkeletalMeshMemoryConstraintComponent");
+}
 bool IsMeshComponentClass(std::string_view cls) {
-    return IEndsWith(cls, "StaticMeshComponent") || IEquals(cls, "SkeletalMeshComponent") || IEquals(cls, "SplineMeshComponent") ||
-           IEquals(cls, "GlintComponent") || IEquals(cls, "DestructibleComponent") || IEquals(cls, "PoseableMeshComponent");
+    return IEndsWith(cls, "StaticMeshComponent") || IEquals(cls, "SplineMeshComponent") || IEquals(cls, "GlintComponent") || IsSkeletalClass(cls);
 }
 bool IsInstancedClass(std::string_view cls) { return IEndsWith(cls, "InstancedStaticMeshComponent"); }
 
@@ -175,6 +179,38 @@ bool PassesFilter(const std::string& meshPath, const std::string& filter) {
         }
     }
     return !anyInclude || included;
+}
+
+SplineMeshParams SplineParamsOf(const CompView& v) {
+    SplineMeshParams s;
+    if (auto sp = v.Get("SplineParams")) {
+        s.startPos = VecOf(sp->Field("StartPos"));
+        s.startTangent = VecOf(sp->Field("StartTangent"));
+        s.startScale = Vec2Of(sp->Field("StartScale"), {1, 1});
+        s.startOffset = Vec2Of(sp->Field("StartOffset"));
+        s.startRoll = sp->Field("StartRoll") ? (float)sp->Field("StartRoll")->AsFloat() : 0.f;
+        s.endPos = VecOf(sp->Field("EndPos"));
+        s.endTangent = VecOf(sp->Field("EndTangent"));
+        s.endScale = Vec2Of(sp->Field("EndScale"), {1, 1});
+        s.endOffset = Vec2Of(sp->Field("EndOffset"));
+        s.endRoll = sp->Field("EndRoll") ? (float)sp->Field("EndRoll")->AsFloat() : 0.f;
+    }
+    s.upDir = VecOf(v.Get("SplineUpDir"), {0, 0, 1});
+    if (auto fa = v.Get("ForwardAxis")) {
+        std::string a = fa->str;
+        s.forwardAxis = a.empty() ? (int)fa->AsInt() : (a.back() == 'Y' ? 1 : a.back() == 'Z' ? 2 : 0);
+    }
+    return s;
+}
+
+std::vector<std::string> OverrideMaterialsOf(const CompView& v) {
+    std::vector<std::string> mats;
+    const PropLayer* from = nullptr;
+    if (auto om = v.Get("OverrideMaterials", &from); om && om->type == PropType::Array) {
+        for (auto& it : om->items) mats.push_back(ObjectPathOf(*from->pkg, it));
+        while (!mats.empty() && mats.back().empty()) mats.pop_back();
+    }
+    return mats;
 }
 
 }   // namespace
@@ -403,15 +439,7 @@ void WorldLoader::AddLevel(const Package& pkg, const Mat4& levelTransform, const
         return mtx;
     };
 
-    auto MaterialsOf = [&](const CompView& v) {
-        std::vector<std::string> mats;
-        const PropLayer* from = nullptr;
-        if (auto om = v.Get("OverrideMaterials", &from); om && om->type == PropType::Array) {
-            for (auto& it : om->items) mats.push_back(ObjectPathOf(*from->pkg, it));
-            while (!mats.empty() && mats.back().empty()) mats.pop_back();
-        }
-        return mats;
-    };
+    auto MaterialsOf = [&](const CompView& v) { return OverrideMaterialsOf(v); };
     auto DrawDistance = [&](const CompView& v) {
         float d = v.Float("CachedMaxDrawDistance");
         if (d <= 0) d = v.Float("LDMaxDrawDistance");
@@ -693,7 +721,7 @@ void WorldLoader::AddLevel(const Package& pkg, const Mat4& levelTransform, const
         if (opt.lights && !(exps[i].objectFlags & (RF_ClassDefaultObject | RF_ArchetypeObject)) && AddEffect(i)) continue;
         if (!IsMeshComponentClass(c)) continue;
         if (exps[i].objectFlags & (RF_ClassDefaultObject | RF_ArchetypeObject)) continue;
-        bool skeletal = IEquals(c, "SkeletalMeshComponent") || IEquals(c, "PoseableMeshComponent") || IEquals(c, "DestructibleComponent");
+        bool skeletal = IsSkeletalClass(c);
         if (skeletal && !opt.skeletal) continue;
         const CompView& v = View(i);
         if (!v.Bool("bVisible", true) || v.Bool("bHiddenInGame", false)) continue;
@@ -729,23 +757,7 @@ void WorldLoader::AddLevel(const Package& pkg, const Mat4& levelTransform, const
             s.transform = w;
             s.level = levelIndex;
             s.actor = ActorOf(i);
-            if (auto sp = v.Get("SplineParams")) {
-                s.params.startPos = VecOf(sp->Field("StartPos"));
-                s.params.startTangent = VecOf(sp->Field("StartTangent"));
-                s.params.startScale = Vec2Of(sp->Field("StartScale"), {1, 1});
-                s.params.startOffset = Vec2Of(sp->Field("StartOffset"));
-                s.params.startRoll = sp->Field("StartRoll") ? (float)sp->Field("StartRoll")->AsFloat() : 0.f;
-                s.params.endPos = VecOf(sp->Field("EndPos"));
-                s.params.endTangent = VecOf(sp->Field("EndTangent"));
-                s.params.endScale = Vec2Of(sp->Field("EndScale"), {1, 1});
-                s.params.endOffset = Vec2Of(sp->Field("EndOffset"));
-                s.params.endRoll = sp->Field("EndRoll") ? (float)sp->Field("EndRoll")->AsFloat() : 0.f;
-            }
-            s.params.upDir = VecOf(v.Get("SplineUpDir"), {0, 0, 1});
-            if (auto fa = v.Get("ForwardAxis")) {
-                std::string a = fa->str;
-                s.params.forwardAxis = a.empty() ? (int)fa->AsInt() : (a.back() == 'Y' ? 1 : a.back() == 'Z' ? 2 : 0);
-            }
+            s.params = SplineParamsOf(v);
             lvl.splines++;
             Note(w);
             continue;
@@ -769,6 +781,136 @@ void WorldLoader::AddLevel(const Package& pkg, const Mat4& levelTransform, const
         }
         AddInstance(m->Group(out, mesh, mats, skeletal), w, dist, ActorOf(i));
     }
+}
+
+bool WorldLoader::AddBlueprint(std::string_view classPackage, const Mat4& transform, const WorldOptions& opt, WorldData& out, std::string* error) {
+    std::string cp(classPackage);
+    if (size_t dot = cp.find('.'); dot != std::string::npos) cp.resize(dot);   // "/Game/X/BP_Y.BP_Y_C" -> package
+    auto root = m->Templates(cp);
+    if (!root || root->pkgs.empty()) {
+        if (error) *error = "could not load " + cp;
+        return false;
+    }
+    u32 levelIndex = (u32)out.levels.size();
+    WorldLevel& lvl0 = out.levels.emplace_back();
+    lvl0.path = root->pkgs[0]->GamePath();
+    lvl0.transform = transform;
+
+    std::function<void(const std::string&, const Mat4&, int)> Actor = [&](const std::string& pkgPath, const Mat4& actorWorld, int depth) {
+        auto t = m->Templates(pkgPath);
+        if (!t || t->pkgs.empty()) return;
+        WorldLevel& lvl = out.levels[levelIndex];
+        lvl.actors++;
+        u32 actorId = (u32)out.actors.size();
+        WorldActor& act = out.actors.emplace_back();
+        act.name = StemOf(pkgPath);
+        act.cls = act.name + "_C";
+        act.blueprint = pkgPath;
+        act.level = levelIndex;
+
+        // attachment: SCS ChildNodes / ParentComponentOrVariableName, native components' AttachParent (this class first)
+        std::unordered_map<std::string, std::string> parentOf;   // lower-case variable -> parent variable
+        for (const BpTemplates* tt = t.get(); tt; tt = tt->parent.get()) {
+            if (tt->pkgs.empty()) continue;
+            const Package& pkg = *tt->pkgs[0];
+            const auto& exps = pkg.Exports();
+            for (size_t i = 0; i < exps.size(); i++) {
+                std::string c = pkg.ExportClass(i);
+                if (c == "SCS_Node") {
+                    PropertyList p = pkg.ReadProperties(i);
+                    std::string var = ToLower(PropStr(p, "VariableName"));
+                    if (var.empty()) continue;
+                    if (const PropValue* ch = FindValue(p, "ChildNodes"); ch && ch->type == PropType::Array)
+                        for (auto& it : ch->items) {
+                            i32 ci = it.ObjIndex();
+                            if (ci <= 0) continue;
+                            std::string child = ToLower(PropStr(pkg.ReadProperties(ci - 1), "VariableName"));
+                            if (!child.empty()) parentOf.emplace(child, var);
+                        }
+                    std::string pv = ToLower(PropStr(p, "ParentComponentOrVariableName"));
+                    if (!pv.empty()) parentOf.emplace(var, pv);
+                } else if (IEndsWith(c, "Component") && exps[i].outerIndex > 0 && (exps[exps[i].outerIndex - 1].objectFlags & RF_ClassDefaultObject)) {
+                    PropertyList p = pkg.ReadProperties(i);
+                    if (const PropValue* ap = FindValue(p, "AttachParent"); ap && ap->ObjIndex() > 0)
+                        parentOf.emplace(ToLower(exps[i].objectName), ToLower(pkg.ObjectName(ap->ObjIndex())));
+                }
+            }
+        }
+        std::unordered_map<std::string, Mat4> worldOf;
+        std::unordered_set<std::string> busy;
+        std::function<Mat4(const std::string&)> World = [&](const std::string& var) -> Mat4 {
+            if (auto it = worldOf.find(var); it != worldOf.end()) return it->second;
+            if (!busy.insert(var).second) return actorWorld;   // cycle guard
+            Mat4 local = Mat4::Identity();
+            auto vt = t->vars.find(var);
+            if (vt != t->vars.end()) local = LocalTransform(CompView{vt->second});
+            auto pt = parentOf.find(var);
+            Mat4 parent = pt != parentOf.end() && t->vars.count(pt->second) ? World(pt->second) : actorWorld;
+            Mat4 r = local * parent;
+            worldOf[var] = r;
+            return r;
+        };
+        auto add = [&](WorldMeshGroup& g, const Mat4& w) {
+            g.instances.push_back({w, levelIndex, actorId});
+            g.drawDistance = 0;
+            lvl.instances++;
+            Vec3 p = w.Translation();
+            out.boundsMin = {std::min(out.boundsMin.x, p.x), std::min(out.boundsMin.y, p.y), std::min(out.boundsMin.z, p.z)};
+            out.boundsMax = {std::max(out.boundsMax.x, p.x), std::max(out.boundsMax.y, p.y), std::max(out.boundsMax.z, p.z)};
+        };
+        for (auto& [var, layers] : t->vars) {
+            if (layers.empty()) continue;
+            CompView v{layers};
+            const PropLayer& top = layers[0];
+            std::string c = top.pkg->ExportClass(top.exportIdx);
+            if (c == "ChildActorComponent") {
+                const PropLayer* from = nullptr;
+                const PropValue* cls = v.Get("ChildActorClass", &from);
+                std::string child = cls && cls->ObjIndex() < 0 ? from->pkg->ImportPackage(cls->ObjIndex()) : std::string();
+                if (IStartsWith(child, "/Game/") && depth < 8) Actor(child, World(var), depth + 1);
+                continue;
+            }
+            if (!IsMeshComponentClass(c)) continue;
+            bool skeletal = IsSkeletalClass(c);
+            if (skeletal && !opt.skeletal) continue;
+            if (!v.Bool("bVisible", true) || v.Bool("bHiddenInGame", false) || v.Bool("bOnlyOwnerSee", false)) continue;
+            if (IStartsWith(var, "firstperson")) continue;   // wieldables: the owner's view model duplicates ThirdPersonMesh
+            const PropLayer* from = nullptr;
+            const PropValue* sm = v.Get(skeletal ? "SkeletalMesh" : "StaticMesh", &from);
+            if (!sm && skeletal) sm = v.Get("DestructibleMesh", &from);
+            std::string mesh = sm ? ObjectPathOf(*from->pkg, *sm) : std::string();
+            if (mesh.empty() || (opt.skipNonVisual && IsHelperMesh(mesh)) || !PassesFilter(mesh, opt.meshFilter)) continue;
+            lvl.meshComponents++;
+            Mat4 w = World(var);
+            std::vector<std::string> mats = OverrideMaterialsOf(v);
+            if (IEquals(c, "SplineMeshComponent")) {
+                auto& s = out.splines.emplace_back();
+                s.mesh = mesh;
+                s.materials = mats;
+                s.transform = w;
+                s.level = levelIndex;
+                s.actor = actorId;
+                s.params = SplineParamsOf(v);
+                lvl.splines++;
+                continue;
+            }
+            if (IsInstancedClass(c)) {
+                std::vector<Mat4> inst;
+                for (auto& l : layers) {
+                    size_t ns = 0;
+                    l.pkg->ReadProperties(l.exportIdx, &ns);
+                    if (ReadInstances(*l.pkg, l.exportIdx, ns, inst) && !inst.empty()) break;
+                }
+                auto& g = m->Group(out, mesh, mats, false);
+                for (auto& im : inst) add(g, im * w);
+                continue;
+            }
+            add(m->Group(out, mesh, mats, skeletal), w);
+        }
+    };
+    Actor(cp, transform, 0);
+    if (out.InstanceCount() == 0 && error) *error = "the Blueprint has no visible mesh components";
+    return true;
 }
 
 std::vector<std::string> WorldLoader::MapLevels(std::string_view mapPath, bool skipNonVisual) const {

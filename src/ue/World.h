@@ -134,6 +134,9 @@ public:
     bool Load(std::string_view mapPath, const WorldOptions& opt, WorldData& out, std::string* error = nullptr);
     // Adds the placements of one level package with the given level -> world transform.
     void AddLevel(const Package& level, const Mat4& transform, const WorldOptions& opt, WorldData& out);
+    // A Blueprint class assembled as one actor at `transform`: its component templates (inherited ones included) attached by the
+    // construction script tree, child actors (ChildActorComponent) recursively. Adds one level entry named after the class.
+    bool AddBlueprint(std::string_view classPackage, const Mat4& transform, const WorldOptions& opt, WorldData& out, std::string* error = nullptr);
     // The .umap files that make up a map (itself first), following the Athena world-composition layout.
     std::vector<std::string> MapLevels(std::string_view mapPath, bool skipNonVisual) const;
 

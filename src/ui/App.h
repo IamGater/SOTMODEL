@@ -136,6 +136,7 @@ struct Document {
     char worldFilter[128] = {};
     int worldOutliner = 0;   // 0 meshes, 1 levels
     bool worldSea = false;        // sot_world_layout_2: the whole open world
+    bool worldBlueprint = false;  // a Blueprint actor class assembled from its components (shown through the world view)
     bool worldProxies = true;     // whole sea: islands as their merged LOD proxies
     char worldIslands[256] = {};  // whole sea: island filter (comma terms, '-' excludes)
 
