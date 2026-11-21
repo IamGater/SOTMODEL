@@ -1,6 +1,7 @@
 #include "ui/App.h"
 #include "ui/UiCommon.h"
 #include "ue/AssetJson.h"
+#include "ue/Blueprint.h"
 #include "imgui.h"
 #include "imgui_internal.h"
 #include <windows.h>
@@ -845,6 +846,22 @@ void App::ExportFiles(std::vector<u32> entries, int mode, int kind) {
             bool ok = true;
             if (mode == 0 && (kind == 0 || kind == 5) && (IEndsWith(path, ".wem") || kind == 5)) {
                 ok = ExportAudioEntry(e, opt, written, &err);
+            } else if (kind == 6) {   // decompiled Blueprint -> .cpp
+                if (IsPackageFile(path)) {
+                    auto pkg = m_api->cache->Load(e, &err);
+                    std::string code;
+                    if (pkg && IsBlueprintPackage(*pkg)) {
+                        ok = DecompileBlueprint(*pkg, code, &err);
+                        if (ok) {
+                            std::string rel = opt.keepDirectories ? path : path.substr(path.rfind('/') + 1);
+                            std::wstring out = opt.outputDir + L"\\" + Widen(rel.substr(0, rel.rfind('.')) + ".cpp");
+                            for (auto& c : out) if (c == L'/') c = L'\\';
+                            CreateDirectories(out.substr(0, out.find_last_of(L'\\')));
+                            ok = WriteWholeFile(out, code.data(), code.size());
+                            if (ok) written.push_back(Narrow(out));
+                        }
+                    } else if (!pkg) ok = false;
+                }
             } else if (kind == 5) {
                 ok = false;
             } else if (mode == 1) {

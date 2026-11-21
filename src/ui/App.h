@@ -46,6 +46,7 @@ struct Document {
     std::shared_ptr<Package> pkg;
 
     bool newTab = false;   // FModel "New Tab" placeholder (no asset yet)
+    int syntax = 0;        // editor colouring: 0 JSON, 1 C++ (decompiled Blueprints)
 
     // properties (JSON editor)
     std::string json;
@@ -162,7 +163,8 @@ private:
     std::string& FolderFilter();
     // FModel features (Features.cpp)
     void PlaceDocument(std::shared_ptr<Document> d, bool newTab);   // into the selected tab unless newTab (FModel)
-    void OpenTextTab(const std::string& title, std::string text, u32 entry, bool newTab);
+    void OpenTextTab(const std::string& title, std::string text, u32 entry, bool newTab, int syntax = 0);
+    void DecompileBlueprintTab(u32 entry);
     void ShowMetadata(u32 entry, bool newTab = false);
     void ShowArchivesInfo();
     void FindReferences(u32 entry);

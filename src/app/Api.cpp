@@ -1,4 +1,5 @@
 #include "app/Api.h"
+#include "ue/Blueprint.h"
 #include "core/Json.h"
 #include "ue/AssetJson.h"
 #include "ue/NativeInfo.h"
@@ -314,6 +315,27 @@ void Api::RegisterAssetTools() {
                   if (json.size() > maxChars) json = json.substr(0, maxChars) + "\n... [truncated, " + std::to_string(json.size()) + " chars total; request a single export]";
                   ApiResult r;
                   r.json = std::move(json);
+                  return r;
+              }});
+
+    Register({"decompile_blueprint",
+              "Decompile a Blueprint (BlueprintGeneratedClass package) to C++-like code: the class with its variables and functions "
+              "(parameters, locals) and every function's Kismet bytecode as statements; jumps keep their script offsets as labels.",
+              R"({"type":"object","properties":{"path":{"type":"string"},"max_chars":{"type":"integer","default":200000}},"required":["path"]})", "path",
+              [](Api& a, const JsonValue& args) {
+                  std::string err, code;
+                  auto pkg = a.LoadPackage(args.GetStr("path"), &err);
+                  if (!pkg) return ApiResult::Error(err);
+                  if (!DecompileBlueprint(*pkg, code, &err)) return ApiResult::Error(err);
+                  size_t maxChars = (size_t)std::max(1000.0, args.GetNum("max_chars", 200000));
+                  if (code.size() > maxChars) code = code.substr(0, maxChars) + "\n// ... [truncated]";
+                  JsonWriter w;
+                  w.BeginObject();
+                  w.KV("path", pkg->GamePath());
+                  w.KV("code", code);
+                  w.EndObject();
+                  ApiResult r;
+                  r.json = w.Take();
                   return r;
               }});
 

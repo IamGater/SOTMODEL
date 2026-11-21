@@ -5,6 +5,7 @@
 #include "ui/UiCommon.h"
 #include "core/Json.h"
 #include "ue/Texture.h"
+#include "ue/Blueprint.h"
 #include "imgui.h"
 #include <windows.h>
 #include <shellapi.h>
@@ -31,12 +32,13 @@ void App::PlaceDocument(std::shared_ptr<Document> d, bool newTab) {
     m_explorerVisible = false;
 }
 
-void App::OpenTextTab(const std::string& title, std::string text, u32 entry, bool newTab) {
+void App::OpenTextTab(const std::string& title, std::string text, u32 entry, bool newTab, int syntax) {
     auto d = std::make_shared<Document>();
     d->entry = entry;
     d->name = title;
     d->gamePath = entry != UINT32_MAX && entry < m_api->vfs.FileCount() ? std::string(m_api->vfs.Path(entry)) : title;
     d->json = std::move(text);
+    d->syntax = syntax;
     d->lines.push_back(0);
     for (u32 i = 0; i < (u32)d->json.size(); i++) if (d->json[i] == '\n') d->lines.push_back(i + 1);
     d->loading = false;
@@ -686,4 +688,24 @@ void App::PlayAudio(Document& d, std::shared_ptr<AudioPcm> pcm, double from) {
     if (!pcm) return;
     if (m_player.Play(pcm, from)) m_playDoc = d.id;
     else LOGW("audio playback failed (no output device?)");
+}
+
+// ------------------------------------------------------------------ Decompile Blueprint
+
+void App::DecompileBlueprintTab(u32 entry) {
+    if (m_mountState != MountState::Ready) return;
+    std::string title = std::string(m_api->vfs.FileName(entry));
+    title = title.substr(0, title.rfind('.')) + " (Decompiled)";
+    m_jobs->Push([this, entry, title] {
+        std::string err, code;
+        auto pkg = m_api->cache->Load(entry, &err);
+        bool ok = pkg && DecompileBlueprint(*pkg, code, &err);
+        Post([this, entry, title, code, ok, err] {
+            if (!ok) {
+                LOGW("decompile: %s", err.c_str());
+                return;
+            }
+            OpenTextTab(title, code, entry, true, 1);
+        });
+    });
 }

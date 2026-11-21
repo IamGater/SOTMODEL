@@ -9,6 +9,7 @@
 #include <shellapi.h>
 #include <array>
 #include <cmath>
+#include <set>
 
 namespace {
 
@@ -754,7 +755,7 @@ void App::DrawFolderMenu(u32 f) {
         ImGui::MenuItem("Embedded Files", nullptr, false, false);
         if (ImGui::MenuItem("Properties (.json)")) ExportFiles(FolderFilesRecursive(f), 2);
         if (ImGui::MenuItem("Textures")) ExportFiles(FolderFilesRecursive(f), 0, 1);
-        ImGui::MenuItem("Decompiled Blueprints", nullptr, false, false);
+        if (ImGui::MenuItem("Decompiled Blueprints")) ExportFiles(FolderFilesRecursive(f), 0, 6);
         if (ImGui::MenuItem("Models")) ExportFiles(FolderFilesRecursive(f), 0, 2);
         if (ImGui::MenuItem("Worlds")) ExportFiles(FolderFilesRecursive(f), 0, 3);
         if (ImGui::MenuItem("Animations")) ExportFiles(FolderFilesRecursive(f), 0, 4);
@@ -1451,7 +1452,7 @@ void App::DrawDocTabs(float height) {
             ImGui::Separator();
             if (MenuItemIcon("Show Metadata", nullptr, IconInfo, pkg)) { u32 e = d.entry; Post([this, e] { ShowMetadata(e, true); }); }
             if (MenuItemIcon("Find References", nullptr, IconSearch, pkg)) FindReferences(d.entry);
-            MenuItemIcon("Decompile Blueprint", nullptr, IconCube, false);
+            if (MenuItemIcon("Decompile Blueprint", nullptr, IconCube, pkg)) DecompileBlueprintTab(d.entry);
             ImGui::Separator();
             if (ImGui::BeginMenu("      Export", !d.newTab)) {
                 if (ImGui::MenuItem("Raw Data (.uasset)")) ExportFiles({d.entry}, 1);
@@ -1964,6 +1965,53 @@ void App::DrawJsonEditor(Document& d, ImVec2 size) {
         // tokens
         std::string_view line(text.data() + s, e - s);
         size_t k = 0;
+        if (d.syntax == 1) {
+            static const std::set<std::string_view> keywords = {"class", "public", "private", "protected", "virtual", "static", "const", "void", "bool",
+                                                                 "int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64", "float",
+                                                                 "double", "if", "else", "switch", "case", "default", "struct", "enum", "nullptr"};
+            static const std::set<std::string_view> jumps = {"goto", "return", "break", "continue"};
+            while (k < line.size()) {
+                char ch = line[k];
+                size_t j = k + 1;
+                ImU32 col = kJsonDefault;
+                if (ch == '/' && k + 1 < line.size() && (line[k + 1] == '/' || line[k + 1] == '*')) {
+                    if (line[k + 1] == '/') j = line.size();
+                    else { size_t c = line.find("*/", k + 2); j = c == std::string_view::npos ? line.size() : c + 2; }
+                    col = IM_COL32(0x84, 0xc3, 0x6b, 255);
+                } else if (ch == '"') {
+                    while (j < line.size() && line[j] != '"') j += line[j] == '\\' ? 2 : 1;
+                    j = std::min(j + 1, line.size());
+                    col = IM_COL32(0xEC, 0xC4, 0x8D, 255);
+                } else if (isdigit((u8)ch)) {
+                    while (j < line.size() && (isalnum((u8)line[j]) || line[j] == '.')) j++;
+                    col = kJsonNumber;
+                } else if (isalpha((u8)ch) || ch == '_') {
+                    while (j < line.size() && (isalnum((u8)line[j]) || line[j] == '_')) j++;
+                    std::string_view w = line.substr(k, j - k);
+                    size_t q = j;
+                    while (q < line.size() && line[q] == ' ') q++;
+                    if (keywords.count(w)) col = IM_COL32(0x82, 0xAA, 0xFF, 255);
+                    else if (jumps.count(w)) col = IM_COL32(0xdd, 0xa0, 0xdd, 255);
+                    else if (w == "this" || w == "true" || w == "false") col = IM_COL32(0x56, 0x9c, 0xd6, 255);
+                    else if (IStartsWith(w, "Label_") && q < line.size() && line[q] == ':') col = IM_COL32(0x80, 0x80, 0x80, 255);
+                    else if (IStartsWith(w, "Label_")) col = IM_COL32(0x80, 0x80, 0x80, 255);
+                    else if (q < line.size() && line[q] == '(') col = IM_COL32(0xC3, 0xE8, 0x8D, 255);   // call
+                    else if (w.size() > 1 && (w[0] == 'F' || w[0] == 'U' || w[0] == 'T' || w[0] == 'A') && isupper((u8)w[1])) col = IM_COL32(0x4c, 0xc9, 0xb0, 255);
+                } else if (strchr("{}[]()", ch)) {
+                    col = kJsonPunct;
+                } else if (ch == '*' || ch == '&' || (ch == '-' && k + 1 < line.size() && line[k + 1] == '>')) {
+                    if (ch == '-') j = k + 2;
+                    col = IM_COL32(0xff, 0x88, 0x88, 255);
+                } else if (ch == ' ') {
+                    while (j < line.size() && line[j] == ' ') j++;
+                    k = j;
+                    continue;
+                }
+                dl->AddText(ImVec2(x0 + k * cw, y), col, line.data() + k, line.data() + j);
+                k = j;
+            }
+            continue;
+        }
         while (k < line.size()) {
             char ch = line[k];
             size_t j = k + 1;
@@ -2310,7 +2358,7 @@ void App::DrawFileMenu(u32 e) {
     if (MenuItemIcon("Extract in New Tab", nullptr, IconExportBox)) OpenFile(e, true);
     if (MenuItemIcon("Show Metadata", nullptr, IconInfo, pkg)) ShowMetadata(e, true);
     if (MenuItemIcon("Find References", nullptr, IconSearch, pkg)) FindReferences(e);
-    MenuItemIcon("Decompile Blueprint", nullptr, IconCube, false);
+    if (MenuItemIcon("Decompile Blueprint", nullptr, IconCube, pkg)) DecompileBlueprintTab(e);
     ImGui::Separator();
     if (ImGui::BeginMenu("      Export")) {
         if (ImGui::MenuItem("Raw Data (.uasset)")) ExportFiles({e}, 1);
