@@ -137,7 +137,8 @@ int RunCli(int argc, wchar_t** argv) {
         else { key = t->primaryArg; value = a; }
         if (key == "out") { imageOut = Widen(value); continue; }
         JsonValue v;
-        if (value == "true" || value == "false") { v.type = JsonValue::Type::Bool; v.b = value == "true"; }
+        if ((value.size() > 1 && (value[0] == '[' || value[0] == '{')) && JsonValue::Parse(value, v, nullptr)) {}   // key=[1,2,3]
+        else if (value == "true" || value == "false") { v.type = JsonValue::Type::Bool; v.b = value == "true"; }
         else if (!value.empty() && value.find_first_not_of("0123456789.-") == std::string::npos && value != "-") { v.type = JsonValue::Type::Number; v.num = atof(value.c_str()); }
         else { v.type = JsonValue::Type::String; v.str = value; }
         args.obj.emplace_back(key, std::move(v));
