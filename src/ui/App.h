@@ -185,8 +185,9 @@ public:
     bool Loading() const;   // archives mounting, jobs queued or documents loading   // something animating / loading: keep rendering frames
     // separate 3D viewer window (Gui.cpp creates / destroys it to match PopoutDoc)
     u64 PopoutDoc() const { return m_popoutDoc; }
-    void ClosePopout() { m_popoutDoc = 0; }
+    void ClosePopout();   // the window was closed: its tab shows the view again until another 3D tab is selected
     bool TakePopoutFocus() { bool f = m_popoutFocus; m_popoutFocus = false; return f; }
+    bool TakePopoutRaise() { bool f = m_popoutRaise; m_popoutRaise = false; return f; }
     std::string PopoutTitle() const;
     void FramePopout();   // builds the separate window's UI (its ImGui context is current)
 
@@ -260,6 +261,7 @@ private:
     void RequestGraphShaders(Document& d);   // compiles the graph shaders of the shown mesh's materials in the background
     void DrawWorld(Document& d);
     void PopoutButton(Document& d, bool flow);
+    static bool Has3dView(const Document& d);
     void LoadWorld(std::shared_ptr<Document> d);
     void LoadAnimationMesh(std::shared_ptr<Document> d, std::string meshPath);
     bool LoadAnimationMeshNow(Document& d, const std::string& meshPath);
@@ -349,7 +351,10 @@ private:
     std::vector<std::shared_ptr<Document>> m_docs;
     u64 m_nextDocId = 1, m_activeDoc = 0;
     u64 m_popoutDoc = 0;   // tab whose 3D viewer is shown in the separate window (0 = none)
-    bool m_popoutFocus = false, m_inPopout = false;
+    bool m_popoutFocus = false, m_popoutRaise = false, m_inPopout = false;
+    const Document* m_popoutDismissed = nullptr;   // closed with the window's X: stays in its tab (compared only)
+    void SyncPopoutDoc();   // with the setting on, the window follows the active tab's 3D view
+    void SetViewerWindow(bool on, Document* d);
 
     int m_busyFrames = 3;
     bool m_showSettings = false, m_quit = false;

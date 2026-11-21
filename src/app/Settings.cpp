@@ -49,6 +49,7 @@ void Settings::Load() {
             else if (k == "LoggerExpanded") loggerExpanded = v == "1";
             else if (k == "LeftPanelWidth") leftPanelWidth = (float)atof(v.c_str());
             else if (k == "PreviewTextures") previewTextures = v == "1";
+            else if (k == "ViewerWindow") viewerWindow = v == "1";
             else if (k == "Language") { if (!v.empty()) language = v; }
             else if (k == "FavoriteDir") { if (!v.empty()) favoriteDirs.push_back(v); }
         }
@@ -76,6 +77,7 @@ bool Settings::Save() const {
     s += std::string("LoggerExpanded=") + (loggerExpanded ? "1" : "0") + "\n";
     s += Fmt("LeftPanelWidth=%.0f\n", leftPanelWidth);
     s += std::string("PreviewTextures=") + (previewTextures ? "1" : "0") + "\n";
+    s += std::string("ViewerWindow=") + (viewerWindow ? "1" : "0") + "\n";
     s += "Language=" + language + "\n";
     for (auto& f : favoriteDirs) s += "FavoriteDir=" + f + "\n";
     std::wstring p = Path();

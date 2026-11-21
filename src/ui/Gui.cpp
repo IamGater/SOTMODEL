@@ -198,6 +198,10 @@ void SyncPopout(App& app, HINSTANCE inst, HICON icon, float scale) {
         g_pop.title = title;
         SetWindowTextW(g_pop.hwnd, Widen(title).c_str());
     }
+    if (app.TakePopoutRaise()) {   // another tab's view: bring the window up without stealing the keyboard focus
+        if (IsIconic(g_pop.hwnd)) ShowWindow(g_pop.hwnd, SW_SHOWNOACTIVATE);
+        SetWindowPos(g_pop.hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    }
     if (app.TakePopoutFocus()) {
         if (IsIconic(g_pop.hwnd)) ShowWindow(g_pop.hwnd, SW_RESTORE);
         SetForegroundWindow(g_pop.hwnd);

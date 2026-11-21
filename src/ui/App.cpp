@@ -223,7 +223,7 @@ void App::StartMount() {
                 else LOGW("not found: %s", p.c_str());
             }
             openOnStart.clear();
-            if (popoutOnStart && m_activeDoc) m_popoutDoc = m_activeDoc;   // --popout: the last opened tab's 3D view in its own window
+            if (popoutOnStart) m_settings.viewerWindow = true;   // --popout: 3D views in the separate window for this run
         });
     });
 }
@@ -646,19 +646,41 @@ static void DrawViewport(Renderer& r, Document& d, ImVec2 size, bool allowFly) {
     });
 }
 
-// "Separate window" moves the tab's 3D viewer (toolbar, viewport, side list) into its own OS window (Gui.cpp hosts it);
-// drawn there the same button brings it back into the tab.
+bool App::Has3dView(const Document& d) {
+    return !d.loading && ((d.hasMesh && (!d.hasMaterial || d.materialSphere)) || d.anim || d.isWorld);
+}
+
+// The 3D viewer (toolbar, viewport, side list) lives in its own OS window (Gui.cpp hosts it) while Settings::viewerWindow
+// is on: "Back to tab" switches that off, "Separate window" on again.
+void App::SetViewerWindow(bool on, Document* d) {
+    m_settings.viewerWindow = on;
+    m_settings.Save();
+    m_popoutDismissed = nullptr;
+    m_popoutDoc = on && d ? d->id : 0;
+    m_popoutFocus = on;
+}
+
+void App::ClosePopout() {
+    for (auto& d : m_docs)
+        if (d->id == m_popoutDoc) m_popoutDismissed = d.get();
+    m_popoutDoc = 0;
+}
+
+void App::SyncPopoutDoc() {
+    if (m_popoutDoc && std::none_of(m_docs.begin(), m_docs.end(), [&](auto& dp) { return dp->id == m_popoutDoc; })) m_popoutDoc = 0;   // tab closed
+    if (!m_settings.viewerWindow) return;
+    Document* a = ActiveDoc();
+    if (a && Has3dView(*a) && a != m_popoutDismissed && a->id != m_popoutDoc) {
+        m_popoutDoc = a->id;
+        m_popoutRaise = true;   // above the main window, without taking the focus
+    }
+}
+
 void App::PopoutButton(Document& d, bool flow) {
     const char* label = m_inPopout ? "Back to tab" : "Separate window";
-    if (flow ? FlowButton(label) : ImGui::Button(label)) {
-        if (m_inPopout) m_popoutDoc = 0;
-        else {
-            m_popoutDoc = d.id;
-            m_popoutFocus = true;
-        }
-    }
+    if (flow ? FlowButton(label) : ImGui::Button(label)) SetViewerWindow(!m_inPopout, &d);
     if (ImGui::IsItemHovered())
-        ImGui::SetTooltip(m_inPopout ? "Show the 3D view in its tab again" : "Open the 3D view in its own window (e.g. on a second monitor)");
+        ImGui::SetTooltip(m_inPopout ? "Show 3D views inside their tabs again" : "Show 3D views in their own window (e.g. on a second monitor)");
 }
 
 std::string App::PopoutTitle() const {
@@ -683,8 +705,7 @@ void App::FramePopout() {
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6 * u, 6 * u));
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(5 * u, 5 * u));
     ImGui::Begin("##popout", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus);
-    bool has3d = d && !d->loading && ((d->hasMesh && (!d->hasMaterial || d->materialSphere)) || d->anim || d->isWorld);
-    if (has3d) {
+    if (d && Has3dView(*d)) {
         m_inPopout = true;
         if (d->isWorld) DrawWorld(*d);
         else if (d->anim) DrawAnimation(*d);
