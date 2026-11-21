@@ -154,6 +154,7 @@ App::~App() {
 }
 
 bool App::Busy() const {
+    if (m_player.Active() && !m_player.Paused()) return true;   // playhead
     if (m_busyFrames > 0 || m_mountState == MountState::Mounting || m_exporting || m_refBuilding) return true;
     if (m_jobs && m_jobs->Pending() > 0) return true;
     for (auto& d : m_docs) if (d->loading) return true;
@@ -428,6 +429,9 @@ void App::LoadDocument(std::shared_ptr<Document> d) {
         } else if (main && IsWorldClass(d->className)) {
             d->isWorld = true;
             d->preferred = DocView::World;
+        } else if (main && d->className == "WwiseBank") {   // the bank bytes follow the properties: list its embedded media
+            d->isBank = ParseBank(pkg->Data().data(), pkg->Data().size(), d->bank, nullptr, &err);
+            if (!d->isBank) d->audioError = "bank: " + err;
         }
         d->loading = false;
         if (d->isWorld) LoadWorld(d);
@@ -839,7 +843,11 @@ void App::ExportFiles(std::vector<u32> entries, int mode, int kind) {
             std::string err;
             std::vector<std::string> written;
             bool ok = true;
-            if (mode == 1) {
+            if (mode == 0 && (kind == 0 || kind == 5) && (IEndsWith(path, ".wem") || kind == 5)) {
+                ok = ExportAudioEntry(e, opt, written, &err);
+            } else if (kind == 5) {
+                ok = false;
+            } else if (mode == 1) {
                 Bytes data;
                 ok = m_api->vfs.Read(e, data, &err);
                 if (ok) {

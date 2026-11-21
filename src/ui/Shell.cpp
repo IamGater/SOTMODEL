@@ -471,6 +471,22 @@ void App::Frame() {
     else if (m_busyFrames > 0)
         m_busyFrames--;
     if (m_docs.empty()) AddTab();   // FModel always keeps at least the "New Tab"
+    if (m_player.Finished()) {   // end of the clip: loop or stop
+        if (m_playLoop && m_player.Clip()) {
+            for (auto& dp : m_docs)
+                if (dp->id == m_playDoc) {
+                    auto pcm = dp->audio;
+                    if (dp->isBank && dp->bankSel >= 0 && dp->bankSel < (int)dp->bank.wems.size()) pcm = dp->bankPcm[dp->bank.wems[dp->bankSel].id];
+                    PlayAudio(*dp, pcm, 0);
+                }
+        } else {
+            m_player.Stop();
+        }
+    }
+    if (m_playDoc && std::none_of(m_docs.begin(), m_docs.end(), [&](auto& dp) { return dp->id == m_playDoc; })) {   // its tab was closed
+        m_player.Stop();
+        m_playDoc = 0;
+    }
     g_animating = false;
 
     const ImGuiViewport* vp = ImGui::GetMainViewport();
@@ -589,7 +605,7 @@ void App::DrawMenu() {
         bool has3d = d && !d->loading && (d->hasMesh || d->anim || d->isWorld);
         if (MenuItemIcon("3D Viewer", nullptr, IconCube, has3d)) m_explorerVisible = false;
         MenuItemIcon("Export Session", nullptr, IconExportBox, false);
-        MenuItemIcon("Audio Player", nullptr, IconNote, false);
+        if (MenuItemIcon("Audio Player", nullptr, IconNote, d && (d->audio || d->isBank))) m_explorerVisible = false;
         MenuItemIcon("Image Merger", nullptr, IconImages, false);
         ImGui::EndMenu();
     }
@@ -742,7 +758,7 @@ void App::DrawFolderMenu(u32 f) {
         if (ImGui::MenuItem("Models")) ExportFiles(FolderFilesRecursive(f), 0, 2);
         if (ImGui::MenuItem("Worlds")) ExportFiles(FolderFilesRecursive(f), 0, 3);
         if (ImGui::MenuItem("Animations")) ExportFiles(FolderFilesRecursive(f), 0, 4);
-        ImGui::MenuItem("Audio", nullptr, false, false);
+        if (ImGui::MenuItem("Audio")) ExportFiles(FolderFilesRecursive(f), 0, 5);
         ImGui::EndMenu();
     }
     ImGui::Separator();
@@ -1355,6 +1371,10 @@ void App::OpenFile(u32 entry, bool newTab) {
     d->name = std::string(m_api->vfs.FileName(entry));
     // FModel: extracts into the selected tab; a new tab only when asked (or there is none / it is full)
     PlaceDocument(d, newTab);
+    if (IEndsWith(d->gamePath, ".wem")) {   // Wwise audio: info + player
+        LoadAudioDocument(d);
+        return;
+    }
     if (!IsPackageFile(d->gamePath)) {   // loose files: show their text
         d->loading = true;
         m_jobs->Push([this, d] {
@@ -1440,7 +1460,7 @@ void App::DrawDocTabs(float height) {
                 if (ImGui::MenuItem("Model", nullptr, false, d.hasMesh)) ExportFiles({d.entry}, 0, 2);
                 if (ImGui::MenuItem("World", nullptr, false, d.isWorld)) ExportFiles({d.entry}, 0, 3);
                 if (ImGui::MenuItem("Animation", nullptr, false, d.anim != nullptr)) ExportFiles({d.entry}, 0, 4);
-                ImGui::MenuItem("Audio", nullptr, false, false);
+                if (ImGui::MenuItem("Audio", nullptr, false, d.audio || d.isBank)) ExportFiles({d.entry}, 0, 5);
                 ImGui::EndMenu();
             }
             ImGui::Separator();
@@ -1523,7 +1543,8 @@ void App::DrawDocContent(Document& d) {
     ImVec2 avail = ImGui::GetContentRegionAvail();
     bool has3d = !d.loading && (d.hasMesh || d.anim || d.isWorld);
     bool hasImage = !d.loading && (d.texture || (d.hasMaterial && !d.materialTextures.empty()));
-    bool side = has3d || hasImage;
+    bool hasAudio = !d.loading && (d.audio || d.isBank || !d.audioError.empty());
+    bool side = has3d || hasImage || hasAudio;
     float splitW = Dip(4);
     if (side && d.sideW <= 0) d.sideW = has3d ? avail.x * 0.55f : std::min(avail.x * 0.45f, Dip(400) + avail.x * 0.1f);
     float sideW = side ? std::clamp(d.sideW, Dip(160), std::max(Dip(160), avail.x - Dip(200))) : 0;
@@ -1537,6 +1558,12 @@ void App::DrawDocContent(Document& d) {
     if (ImGui::IsItemActive()) d.sideW = sideW - ImGui::GetIO().MouseDelta.x;
     ImGui::GetWindowDrawList()->AddRectFilled(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), kLayer0);
     ImGui::SetCursorScreenPos(ImVec2(p.x + editW + splitW, p.y));
+    if (hasAudio) {
+        ImGui::BeginChild("##audio", ImVec2(sideW, avail.y), ImGuiChildFlags_None, ImGuiWindowFlags_NoScrollbar);
+        DrawAudioPanel(d);
+        ImGui::EndChild();
+        return;
+    }
     if (hasImage && !has3d) {
         ImGui::BeginChild("##image", ImVec2(sideW, avail.y), ImGuiChildFlags_None, ImGuiWindowFlags_NoScrollbar);
         DrawImagePanel(d);
@@ -1655,6 +1682,197 @@ void App::DrawImagePanel(Document& d) {
     } else if (!tex) {
         Text(dl, ImVec2(p.x + m, p.y + headH + m), kTextDim, "(texture not loaded)");
     }
+}
+
+// ================================================================== audio player (own design)
+
+void App::DrawAudioPanel(Document& d) {
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    ImVec2 p = ImGui::GetCursorScreenPos();
+    float w = ImGui::GetContentRegionAvail().x, h = ImGui::GetContentRegionAvail().y;
+    float padL = Dip(10), padT = Dip(6), padR = Dip(8);
+    // current clip: the .wem itself or the selected bank media (decoded on first use)
+    std::shared_ptr<AudioPcm> pcm = d.audio;
+    std::string clipName = d.name.substr(0, d.name.rfind('.')), clipError = d.audioError;
+    WemInfo info = d.wem;
+    if (d.isBank) {
+        if (d.bankSel >= (int)d.bank.wems.size()) d.bankSel = -1;
+        if (d.bankSel >= 0 && d.pkg) {
+            const BankWem& m = d.bank.wems[d.bankSel];
+            const u8* src = d.pkg->Data().data() + m.offset;
+            ReadWemInfo(src, m.size, info);
+            auto& slot = d.bankPcm[m.id];
+            if (!slot) {
+                auto np = std::make_shared<AudioPcm>();
+                std::string err;
+                if (DecodeWem(src, m.size, *np, &err)) slot = np;
+                else clipError = err;
+            }
+            pcm = slot;
+            clipName = std::to_string(m.id);
+        } else {
+            pcm = nullptr;
+            clipName = Fmt("%s - %zu embedded sounds", d.name.substr(0, d.name.rfind('.')).c_str(), d.bank.wems.size());
+        }
+    }
+    if (m_playRequest == d.id && pcm) {
+        PlayAudio(d, pcm, 0);
+        m_playRequest = 0;
+    }
+    bool mine = m_playDoc == d.id && m_player.Active() && m_player.Clip() == pcm.get();
+    // header: name, codec / rate / channels / length
+    ImGui::PushFont(boldFont, FontDip(12));
+    float nameH = ImGui::GetFontSize();
+    TextEllipsis(dl, ImVec2(p.x + padL, p.y + padT), p.x + w - padR, kText, clipName.c_str());
+    ImGui::PopFont();
+    ImGui::PushFont(nullptr, FontDip(11));
+    float y2 = p.y + padT + nameH + Dip(2);
+    if (pcm || !info.codecName.empty()) {
+        float x = p.x + padL;
+        Text(dl, ImVec2(x, y2), kAlert, info.codecName.c_str());
+        x += ImGui::CalcTextSize(info.codecName.c_str()).x;
+        std::string rest = pcm ? Fmt(" / %d Hz / %s / %d:%05.2f", pcm->sampleRate, pcm->channels == 1 ? "mono" : pcm->channels == 2 ? "stereo" : Fmt("%d ch", pcm->channels).c_str(),
+                                     (int)(pcm->Seconds() / 60), fmod(pcm->Seconds(), 60.0))
+                               : std::string();
+        Text(dl, ImVec2(x, y2), kTextDim, rest.c_str());
+    } else if (d.isBank) {
+        Text(dl, ImVec2(p.x + padL, y2), kTextDim, Fmt("Bank %u / %u objects", d.bank.bankId, d.bank.hircObjects).c_str());
+    }
+    float headH = padT + nameH + Dip(2) + ImGui::GetFontSize() + Dip(8);
+    ImGui::PopFont();
+    dl->AddLine(ImVec2(p.x, p.y + headH), ImVec2(p.x + w, p.y + headH), kSeparator);
+    float y = p.y + headH + Dip(8), m = Dip(8);
+
+    // bank media list
+    if (d.isBank) {
+        float listH = std::max(Dip(120), (h - headH) * 0.45f);
+        ImGui::SetCursorScreenPos(ImVec2(p.x + m, y));
+        ImGui::BeginChild("##bankmedia", ImVec2(w - m * 2, listH), ImGuiChildFlags_None);
+        ImDrawList* ldl = ImGui::GetWindowDrawList();
+        float rowH = Dip(22), rw = ImGui::GetContentRegionAvail().x;
+        if (d.bank.wems.empty()) ImGui::TextDisabled("This bank has no embedded media (its sounds are streamed .wem files)");
+        ImGuiListClipper clip;
+        clip.Begin((int)d.bank.wems.size(), rowH);
+        while (clip.Step())
+            for (int i = clip.DisplayStart; i < clip.DisplayEnd; i++) {
+                const BankWem& bw = d.bank.wems[i];
+                ImGui::PushID(i);
+                ImVec2 rp = ImGui::GetCursorScreenPos();
+                RowState rs = ListRow("##bw", ImVec2(rw, rowH), d.bankSel == i);
+                if (rs.pressed) d.bankSel = i;
+                if (rs.doubleClicked) {   // select + play (it is decoded at the top of the next frame)
+                    d.bankSel = i;
+                    m_playRequest = d.id;
+                    m_busyFrames = 3;
+                }
+                float cy = rp.y + rowH * 0.5f, ty = cy - ImGui::GetFontSize() * 0.5f;
+                IconNote(ldl, ImVec2(rp.x + Dip(10), cy), Dip(14), d.bankSel == i ? kText : kTextDim);
+                Text(ldl, ImVec2(rp.x + Dip(22), ty), kText, Fmt("%d   %u", i + 1, bw.id).c_str());
+                std::string sz = HumanSize(bw.size);
+                Text(ldl, ImVec2(rp.x + rw - Dip(6) - ImGui::CalcTextSize(sz.c_str()).x, ty), kTextDim, sz.c_str());
+                ImGui::PopID();
+            }
+        ImGui::EndChild();
+        y += listH + Dip(8);
+    }
+
+    if (!pcm) {
+        const char* msg = !clipError.empty() ? clipError.c_str() : d.isBank ? "Select a sound (double click plays it)" : "No audio";
+        Text(dl, ImVec2(p.x + m, y), clipError.empty() ? kTextDim : kError, msg);
+        return;
+    }
+
+    // waveform (min / max per pixel column, channels mixed) with the playhead; click to seek
+    float waveH = std::max(Dip(60), std::min(Dip(160), p.y + h - y - Dip(60)));
+    ImVec2 wa(p.x + m, y), wb(p.x + w - m, y + waveH);
+    int cols = std::max(1, (int)(wb.x - wa.x));
+    if (d.peaksFor != pcm.get() || d.peaksWidth != cols) {
+        d.peaks.assign(cols, {0.f, 0.f});
+        size_t frames = pcm->Frames();
+        for (int c = 0; c < cols; c++) {
+            size_t f0 = frames * c / cols, f1 = std::max(f0 + 1, frames * (c + 1) / cols);
+            float lo = 0, hi = 0;
+            for (size_t f = f0; f < f1 && f < frames; f++) {
+                float s = 0;
+                for (int ch = 0; ch < pcm->channels; ch++) s += pcm->samples[f * pcm->channels + ch];
+                s /= 32768.f * pcm->channels;
+                lo = std::min(lo, s);
+                hi = std::max(hi, s);
+            }
+            d.peaks[c] = {lo, hi};
+        }
+        d.peaksFor = pcm.get();
+        d.peaksWidth = cols;
+    }
+    dl->AddRectFilled(wa, wb, kBorder, Dip(3));
+    float mid = (wa.y + wb.y) * 0.5f, amp = waveH * 0.45f;
+    double pos = mine ? m_player.Position() : 0, len = std::max(1e-6, pcm->Seconds());
+    float playX = wa.x + (float)(pos / len) * (wb.x - wa.x);
+    for (int c = 0; c < cols; c++) {
+        float x = wa.x + c + 0.5f;
+        ImU32 col = mine && x <= playX ? kAccent : IM_COL32(120, 160, 230, 255);
+        dl->AddLine(ImVec2(x, mid - d.peaks[c].second * amp), ImVec2(x, mid - d.peaks[c].first * amp + 1), col);
+    }
+    dl->AddLine(ImVec2(wa.x, mid), ImVec2(wb.x, mid), Alpha(kText, 0.15f));
+    if (mine) dl->AddLine(ImVec2(playX, wa.y), ImVec2(playX, wb.y), kText, Dip(1.5f));
+    ImGui::SetCursorScreenPos(wa);
+    ImGui::InvisibleButton("##wave", ImVec2(wb.x - wa.x, waveH));
+    if (ImGui::IsItemHovered()) {
+        float t = (ImGui::GetIO().MousePos.x - wa.x) / (wb.x - wa.x);
+        dl->AddLine(ImVec2(ImGui::GetIO().MousePos.x, wa.y), ImVec2(ImGui::GetIO().MousePos.x, wb.y), Alpha(kText, 0.35f));
+        ImGui::SetTooltip("%.2f s", t * len);
+        if (ImGui::IsItemClicked()) {
+            if (mine) m_player.Seek(t * len);
+            else PlayAudio(d, pcm, t * len);
+        }
+    }
+
+    // transport: play / pause, stop, time, loop, volume, export
+    float by = wb.y + Dip(10), bs = Dip(30);
+    auto roundButton = [&](const char* id, float x, bool accent, auto&& icon, const char* tip) {
+        ImGui::SetCursorScreenPos(ImVec2(x, by));
+        bool r = ImGui::InvisibleButton(id, ImVec2(bs, bs));
+        float ht = HoverAnim();
+        ImVec2 c(x + bs * 0.5f, by + bs * 0.5f);
+        dl->AddCircleFilled(c, bs * 0.5f, Mix(accent ? kAccent : kField, accent ? Shade(kAccent, 1.2f) : kTabSel, ht));
+        icon(c);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
+        return r;
+    };
+    bool playing = mine && !m_player.Paused();
+    float x = p.x + m;
+    if (roundButton("##play", x, true, [&](ImVec2 c) {
+            float k = bs * 0.2f;
+            if (playing) {
+                dl->AddRectFilled(ImVec2(c.x - k, c.y - k), ImVec2(c.x - k * 0.3f, c.y + k), kText);
+                dl->AddRectFilled(ImVec2(c.x + k * 0.3f, c.y - k), ImVec2(c.x + k, c.y + k), kText);
+            } else {
+                dl->AddTriangleFilled(ImVec2(c.x - k * 0.7f, c.y - k), ImVec2(c.x + k, c.y), ImVec2(c.x - k * 0.7f, c.y + k), kText);
+            }
+        }, playing ? "Pause" : "Play")) {
+        if (playing) m_player.Pause();
+        else if (mine) m_player.Resume();
+        else PlayAudio(d, pcm, 0);
+    }
+    x += bs + Dip(6);
+    if (roundButton("##stop", x, false, [&](ImVec2 c) {
+            float k = bs * 0.16f;
+            dl->AddRectFilled(ImVec2(c.x - k, c.y - k), ImVec2(c.x + k, c.y + k), kText, Dip(1));
+        }, "Stop") && mine)
+        m_player.Stop();
+    x += bs + Dip(10);
+    std::string time = Fmt("%d:%05.2f / %d:%05.2f", (int)(pos / 60), fmod(pos, 60.0), (int)(len / 60), fmod(len, 60.0));
+    Text(dl, ImVec2(x, by + (bs - ImGui::GetFontSize()) * 0.5f), kText, time.c_str());
+    x += ImGui::CalcTextSize("00:00.00 / 00:00.00").x + Dip(12);
+    ImGui::SetCursorScreenPos(ImVec2(x, by + (bs - ImGui::GetFrameHeight()) * 0.5f));
+    ImGui::Checkbox("Loop", &m_playLoop);
+    // second row: volume, export
+    ImGui::SetCursorScreenPos(ImVec2(p.x + m, by + bs + Dip(10)));
+    float vol = m_player.Volume();
+    ImGui::SetNextItemWidth(std::max(Dip(80), std::min(Dip(200), w - m * 2 - Dip(120))));
+    if (ImGui::SliderFloat("##vol", &vol, 0, 1, "Volume %.2f")) m_player.SetVolume(vol);
+    ImGui::SameLine(0, Dip(8));
+    if (Button("Export WAV", ImVec2(0, 0))) ExportFiles({d.entry}, 0, 5);
 }
 
 // ================================================================== JSON editor (AvalonEdit look)
@@ -2101,7 +2319,7 @@ void App::DrawFileMenu(u32 e) {
         if (ImGui::MenuItem("Model", nullptr, false, pkg)) ExportFiles({e}, 0, 2);
         if (ImGui::MenuItem("World", nullptr, false, IEndsWith(path, ".umap"))) ExportFiles({e}, 0, 3);
         if (ImGui::MenuItem("Animation", nullptr, false, pkg)) ExportFiles({e}, 0, 4);
-        ImGui::MenuItem("Audio", nullptr, false, false);
+        if (ImGui::MenuItem("Audio", nullptr, false, IEndsWith(path, ".wem") || pkg)) ExportFiles({e}, 0, 5);
         ImGui::EndMenu();
     }
     ImGui::Separator();

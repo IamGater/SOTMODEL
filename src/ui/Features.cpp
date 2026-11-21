@@ -615,3 +615,75 @@ void App::CompareBackup(const std::wstring& file) {
     LOGI("backup comparison: %zu new, %zu modified, %zu removed", added.size(), modified.size(), removed.size());
     OpenTextTab("Backup Comparison", w.Take(), UINT32_MAX, true);
 }
+
+// ------------------------------------------------------------------ audio (.wem / WwiseBank)
+
+void App::LoadAudioDocument(std::shared_ptr<Document> d) {
+    d->loading = true;
+    m_jobs->Push([this, d] {
+        Bytes data;
+        std::string err;
+        JsonWriter w;
+        w.BeginObject();
+        if (!m_api->vfs.Read(d->entry, data, &err)) {
+            d->audioError = err;
+        } else if (ReadWemInfo(data.data(), data.size(), d->wem, &err)) {
+            auto pcm = std::make_shared<AudioPcm>();
+            if (DecodeWem(data.data(), data.size(), *pcm, &err)) d->audio = pcm;
+            else d->audioError = err;
+            w.KV("Codec", d->wem.codecName);
+            w.KV("Channels", d->wem.channels);
+            w.KV("SampleRate", d->wem.sampleRate);
+            if (d->audio) w.KV("Duration", d->audio->Seconds());
+            w.KV("Size", HumanSize(data.size()));
+        } else {
+            d->audioError = err;
+        }
+        if (!d->audioError.empty()) w.KV("Error", d->audioError);
+        w.EndObject();
+        d->json = w.Take();
+        d->lines.assign(1, 0);
+        for (u32 i = 0; i < (u32)d->json.size(); i++) if (d->json[i] == '\n') d->lines.push_back(i + 1);
+        d->loading = false;
+        Post([] {});
+    });
+}
+
+bool App::ExportAudioEntry(u32 entry, const ExportOptions& opt, std::vector<std::string>& written, std::string* error) {
+    Bytes data;
+    if (!m_api->vfs.Read(entry, data, error)) return false;
+    std::string rel(m_api->vfs.Path(entry));
+    rel = rel.substr(0, rel.rfind('.'));
+    if (!opt.keepDirectories) rel = rel.substr(rel.rfind('/') + 1);
+    auto write = [&](const AudioPcm& pcm, const std::string& r) {
+        Bytes wav = MakeWav(pcm);
+        std::wstring out = opt.outputDir + L"\\" + Widen(r + ".wav");
+        for (auto& c : out) if (c == L'/') c = L'\\';
+        CreateDirectories(out.substr(0, out.find_last_of(L'\\')));
+        if (!WriteWholeFile(out, wav.data(), wav.size())) return false;
+        written.push_back(Narrow(out));
+        return true;
+    };
+    if (data.size() >= 4 && !memcmp(data.data(), "RIFF", 4)) {
+        AudioPcm pcm;
+        return DecodeWem(data.data(), data.size(), pcm, error) && write(pcm, rel);
+    }
+    BankInfo bank;
+    if (!ParseBank(data.data(), data.size(), bank, nullptr, error)) return false;
+    bool all = true;
+    for (auto& m : bank.wems) {
+        AudioPcm pcm;
+        std::string e;
+        if (!DecodeWem(data.data() + m.offset, m.size, pcm, &e) || !write(pcm, rel + "/" + std::to_string(m.id))) {
+            all = false;
+            if (error) *error = e;
+        }
+    }
+    return all;
+}
+
+void App::PlayAudio(Document& d, std::shared_ptr<AudioPcm> pcm, double from) {
+    if (!pcm) return;
+    if (m_player.Play(pcm, from)) m_playDoc = d.id;
+    else LOGW("audio playback failed (no output device?)");
+}

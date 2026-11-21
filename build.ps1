@@ -84,7 +84,7 @@ $exe = Join-Path $bin 'SOTModel.exe'
 $needLink = -not (Test-Path $exe) -or $stale.Count -gt 0
 if ($needLink) {
     Write-Host 'Linking'
-    $libs = @('d3d11.lib', 'dxgi.lib', 'd3dcompiler.lib', 'bcrypt.lib', 'user32.lib', 'gdi32.lib', 'shell32.lib', 'ole32.lib', 'comdlg32.lib', 'dwmapi.lib', 'imm32.lib', 'shlwapi.lib')
+    $libs = @('d3d11.lib', 'dxgi.lib', 'd3dcompiler.lib', 'bcrypt.lib', 'user32.lib', 'gdi32.lib', 'shell32.lib', 'ole32.lib', 'comdlg32.lib', 'dwmapi.lib', 'imm32.lib', 'shlwapi.lib', 'winmm.lib')
     $largs = @('/nologo', "/OUT:$exe", '/SUBSYSTEM:WINDOWS', '/DEBUG', "/PDB:$bin\SOTModel.pdb") + $objs + $libs
     if (-not $Debug) { $largs += @('/LTCG', '/OPT:REF', '/OPT:ICF') }
     & link.exe @largs

@@ -24,6 +24,7 @@ struct ApiResult {
 class Api;
 void RegisterMeshTools(Api& api);   // ApiModels.cpp: mesh / animation / material tools
 void RegisterWorldTools(Api& api);  // ApiWorld.cpp: map / scene tools
+void RegisterAudioTools(Api& api);  // ApiAudio.cpp: Wwise audio tools
 struct ApiTool {
     std::string name;
     std::string description;

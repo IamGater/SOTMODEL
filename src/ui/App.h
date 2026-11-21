@@ -6,6 +6,7 @@
 #include "ue/Mesh.h"
 #include "ue/AnimPose.h"
 #include "export/Exporter.h"
+#include "audio/Player.h"
 #include <thread>
 #include <condition_variable>
 #include <deque>
@@ -94,6 +95,18 @@ struct Document {
     char worldFilter[128] = {};
     int worldOutliner = 0;   // 0 meshes, 1 levels
 
+    // audio: a .wem, or a sound bank (WwiseBank) with embedded media decoded on demand
+    std::shared_ptr<AudioPcm> audio;
+    WemInfo wem;
+    std::string audioError;
+    bool isBank = false;
+    BankInfo bank;
+    int bankSel = -1;
+    std::unordered_map<u32, std::shared_ptr<AudioPcm>> bankPcm;
+    std::vector<std::pair<float, float>> peaks;   // waveform min/max per column
+    const AudioPcm* peaksFor = nullptr;
+    int peaksWidth = 0;
+
     // material
     bool hasMaterial = false;
     MaterialInfo material;
@@ -134,6 +147,10 @@ private:
     void DrawDocContent(Document& d);
     void DrawJsonEditor(Document& d, ImVec2 size);
     void DrawImagePanel(Document& d);
+    void DrawAudioPanel(Document& d);
+    void LoadAudioDocument(std::shared_ptr<Document> d);
+    bool ExportAudioEntry(u32 entry, const ExportOptions& opt, std::vector<std::string>& written, std::string* error);
+    void PlayAudio(Document& d, std::shared_ptr<AudioPcm> pcm, double from = 0);
     void DrawLog(float width);
     void DrawSearchWindow();
     void DrawFolderMenu(u32 folder);
@@ -228,6 +245,9 @@ private:
     int m_thumbPending = 0;
     std::vector<std::thread> m_refThreads;
     std::atomic<bool> m_shutdown{false};
+    AudioPlayer m_player;
+    u64 m_playDoc = 0, m_playRequest = 0;
+    bool m_playLoop = false;
     bool m_showBackups = false;
     std::string m_backupMessage;
     double m_readyAt = 0;            // ImGui time the archives finished mounting ("Last Refresh")
