@@ -324,7 +324,7 @@ bool App::LoadAnimationMeshNow(Document& d, const std::string& meshPath) {
     d.poser = poser;
     d.gpuMesh = gm;
     d.lod = lod;
-    d.animMesh = mesh->name.empty() ? meshPath : meshPath;
+    d.animMesh = meshPath;
     snprintf(d.animMeshEdit, sizeof(d.animMeshEdit), "%s", meshPath.c_str());
     d.camera.Frame(mesh->boundsMin, mesh->boundsMax);
     d.camera.yaw = -135;
@@ -454,7 +454,7 @@ void App::LoadDocument(std::shared_ptr<Document> d) {
                     sm->name = "sphere";
                     sm->lods.push_back(MakePreviewSphere(50, 64, 32));
                     MeshMaterialSlot slot;
-                    slot.name = d->name;
+                    slot.name = d->name.substr(0, d->name.rfind(".uasset"));
                     slot.materialPath = objPath;
                     sm->materials.push_back(slot);
                     sm->ComputeBounds();
