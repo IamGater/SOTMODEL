@@ -25,6 +25,9 @@ class Api;
 void RegisterMeshTools(Api& api);   // ApiModels.cpp: mesh / animation / material tools
 void RegisterWorldTools(Api& api);  // ApiWorld.cpp: map / scene tools
 void RegisterAudioTools(Api& api);  // ApiAudio.cpp: Wwise audio tools
+void RegisterExportTools(Api& api); // ApiExport.cpp: map / animation set glTF exports
+// Several AnimSequence packages of one skeleton -> one .glb (ApiExport.cpp; also used by the UI).
+bool ExportAnimationSet(PackageCache& cache, const std::vector<std::shared_ptr<Package>>& animPkgs, const std::string& meshPath, Bytes& glb, std::string& note, std::string* error);
 struct ApiTool {
     std::string name;
     std::string description;

@@ -107,6 +107,11 @@ bool ExportMeshObj(const MeshData& mesh, int lodIndex, std::string& obj, std::st
 
 bool ExportAnimationGlb(PackageCache& cache, const AnimSequenceData& anim, const std::vector<Bone>& skeleton, const MeshData* mesh, const MeshExportOptions& opt,
                         Bytes& out, std::string* error) {
+    return ExportAnimationsGlb(cache, {&anim}, skeleton, mesh, opt, out, error);
+}
+
+bool ExportAnimationsGlb(PackageCache& cache, const std::vector<const AnimSequenceData*>& anims, const std::vector<Bone>& skeleton, const MeshData* mesh,
+                         const MeshExportOptions& opt, Bytes& out, std::string* error) {
     if (skeleton.empty()) { if (error) *error = "skeleton has no bones"; return false; }
     GltfBuilder g;
     // joints: the mesh's bones when a mesh is included (so it deforms), otherwise the animation skeleton itself
@@ -125,21 +130,90 @@ bool ExportAnimationGlb(PackageCache& cache, const AnimSequenceData& anim, const
     for (size_t s = 0; s < skeleton.size(); s++)
         for (size_t j = 0; j < joints.size(); j++)
             if (IEquals(skeleton[s].name, joints[j].name)) { toJoint[s] = (int)j; break; }
-    std::vector<float> times(anim.numFrames);
-    for (int f = 0; f < anim.numFrames; f++) times[f] = anim.numFrames > 1 ? f * anim.length / (anim.numFrames - 1) : 0.f;
-    std::vector<GltfBuilder::Track> tracks;
-    for (auto& t : anim.tracks) {
-        if (t.bone < 0 || t.bone >= (i32)toJoint.size() || toJoint[t.bone] < 0) continue;
-        GltfBuilder::Track tr;
-        tr.node = boneNodes[toJoint[t.bone]];
-        tr.times = times;
-        tr.translations = t.translation;
-        tr.rotations = t.rotation;
-        tr.scales = t.scale;
-        tracks.push_back(std::move(tr));
+    int clips = 0;
+    for (const AnimSequenceData* anim : anims) {   // one glTF animation (Blender action) per sequence
+        std::vector<float> times(anim->numFrames);
+        for (int f = 0; f < anim->numFrames; f++) times[f] = anim->numFrames > 1 ? f * anim->length / (anim->numFrames - 1) : 0.f;
+        std::vector<GltfBuilder::Track> tracks;
+        for (auto& t : anim->tracks) {
+            if (t.bone < 0 || t.bone >= (i32)toJoint.size() || toJoint[t.bone] < 0) continue;
+            GltfBuilder::Track tr;
+            tr.node = boneNodes[toJoint[t.bone]];
+            tr.times = times;
+            tr.translations = t.translation;
+            tr.rotations = t.rotation;
+            tr.scales = t.scale;
+            tracks.push_back(std::move(tr));
+        }
+        if (tracks.empty()) continue;
+        g.AddAnimation(anim->name, tracks);
+        clips++;
     }
-    if (tracks.empty()) { if (error) *error = "no animated bone matches the skeleton"; return false; }
-    g.AddAnimation(anim.name, tracks);
+    if (!clips) { if (error) *error = "no animated bone matches the skeleton"; return false; }
+    out = g.Finish();
+    return true;
+}
+
+// ------------------------------------------------------------------ whole maps
+
+bool ExportWorldGlb(PackageCache& cache, const WorldData& w, const WorldExportOptions& wo, Bytes& out, std::string* error,
+                    const std::function<void(int, int)>& progress) {
+    GltfBuilder g;
+    MeshExportOptions mo;
+    mo.embedTextures = wo.textures;
+    mo.maxTextureSize = wo.maxTextureSize;
+    mo.lod = wo.lod;
+    GltfMaterialResolver mats(cache, g, mo);
+    // one node per level, meshes underneath (instances share their glTF mesh)
+    std::vector<int> levelNodes;
+    for (auto& l : w.levels) {
+        std::string name = l.path.substr(l.path.rfind('/') + 1);
+        levelNodes.push_back(g.AddNode(name.substr(0, name.rfind('.')), -1));
+    }
+    if (levelNodes.empty()) levelNodes.push_back(g.AddNode("World", -1));
+    int done = 0, total = (int)w.groups.size() + (wo.landscape ? 1 : 0), meshes = 0;
+    for (auto& grp : w.groups) {
+        if (progress) progress(done, total);
+        done++;
+        std::string err;
+        auto pkg = cache.LoadPath(grp.mesh, &err);
+        MeshData mesh;
+        if (!pkg || !pkg->MainExport() || !ReadMesh(*pkg, pkg->MainExport() - 1, mesh, &err) || mesh.lods.empty()) {
+            LOGW("map export: %s: %s", grp.mesh.c_str(), err.c_str());
+            continue;
+        }
+        for (size_t s = 0; s < grp.materials.size() && s < mesh.materials.size(); s++)   // per-instance material overrides
+            if (!grp.materials[s].empty()) mesh.materials[s].materialPath = grp.materials[s];
+        std::vector<int> map = mats.ResolveAll(mesh);
+        int lod = std::clamp(wo.lod, 0, (int)mesh.lods.size() - 1);
+        int meshIdx = g.AddMesh(mesh, lod, map, false);
+        meshes++;
+        std::string shortName = grp.mesh.substr(grp.mesh.rfind('.') + 1);
+        for (auto& inst : grp.instances) {
+            float m[16];
+            GltfBuilder::ConvertMatrix(&inst.transform.m[0][0], m);
+            g.AddNode(shortName, meshIdx, m, levelNodes[std::min<size_t>(inst.level, levelNodes.size() - 1)]);
+        }
+    }
+    if (wo.landscape && !w.landscapes.empty()) {
+        // terrain patches are already in world space; vertex colours carry the paint layers
+        GltfBuilder::MaterialDesc land;
+        land.name = "Landscape";
+        land.baseColor[0] = land.baseColor[1] = land.baseColor[2] = 1;
+        int landMat = g.AddMaterial(land);
+        int landRoot = g.AddNode("Landscape", -1);
+        for (auto& l : w.landscapes) {
+            if (l.mesh.positions.empty()) continue;
+            MeshData md;
+            md.name = l.name;
+            md.lods.push_back(l.mesh);
+            if (md.lods[0].sections.empty()) md.lods[0].sections.push_back({0, 0, (u32)(l.mesh.indices.size() / 3), 0, (u32)l.mesh.positions.size() - 1, true, 0});
+            int mi = g.AddMesh(md, 0, {landMat}, false);
+            g.AddNode(l.name, mi, nullptr, landRoot);
+        }
+    }
+    if (progress) progress(total, total);
+    if (!meshes && w.landscapes.empty()) { if (error) *error = "the map has no exportable meshes"; return false; }
     out = g.Finish();
     return true;
 }

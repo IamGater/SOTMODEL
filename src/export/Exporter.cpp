@@ -5,6 +5,8 @@
 #include "export/MeshExport.h"
 #include "ue/Mesh.h"
 #include "ue/AnimPose.h"
+#include "ue/World.h"
+#include "ue/World.h"
 
 std::wstring ExportPathFor(const ExportOptions& opt, const Package& pkg, const std::wstring& ext) {
     std::string rel = pkg.GamePath();
@@ -129,6 +131,17 @@ bool ExportPackage(PackageCache& cache, const Package& pkg, const ExportOptions&
                 else ok &= WriteOut(ExportPathFor(opt, pkg, L".glb"), glb.data(), glb.size(), written);
             }
         }
+    } else if (IsWorldClass(cls) && opt.worlds) {   // the whole map (with its sublevels) as one scene
+        std::string err;
+        WorldLoader loader(cache);
+        WorldOptions wopt;
+        WorldData world;
+        WorldExportOptions wo;
+        wo.maxTextureSize = opt.maxTextureSize ? opt.maxTextureSize : 1024;
+        wo.textures = opt.embedTextures;
+        Bytes glb;
+        if (!loader.Load(pkg.GamePath(), wopt, world, &err) || !ExportWorldGlb(cache, world, wo, glb, &err)) { ok = false; if (error) *error = "map: " + err; }
+        else ok &= WriteOut(ExportPathFor(opt, pkg, L".glb"), glb.data(), glb.size(), written);
     }
     if (opt.json) {
         std::string j = PackageToJson(pkg);

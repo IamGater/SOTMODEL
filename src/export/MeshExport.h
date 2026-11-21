@@ -2,6 +2,7 @@
 #include "export/Gltf.h"
 #include "ue/Material.h"
 #include "ue/Animation.h"
+#include "ue/World.h"
 #include <map>
 
 struct MeshExportOptions {
@@ -34,3 +35,17 @@ bool TextureToPng(PackageCache& cache, const std::string& path, int maxSize, Byt
 // Animation as glTF: skeleton joints (+ the skinned mesh when given) and one animation clip.
 bool ExportAnimationGlb(PackageCache& cache, const AnimSequenceData& anim, const std::vector<Bone>& skeleton, const MeshData* mesh, const MeshExportOptions& opt,
                         Bytes& out, std::string* error);
+// Several animations of one skeleton in one file: the skinned mesh once, one glTF animation (Blender action) per sequence.
+bool ExportAnimationsGlb(PackageCache& cache, const std::vector<const AnimSequenceData*>& anims, const std::vector<Bone>& skeleton, const MeshData* mesh,
+                         const MeshExportOptions& opt, Bytes& out, std::string* error);
+
+// A loaded map as one glTF scene: a node per level, every mesh once with an instance node per placement (textures embedded,
+// downscaled to maxTextureSize), landscape terrain as world-space meshes.
+struct WorldExportOptions {
+    int lod = 0;
+    bool textures = true;
+    int maxTextureSize = 1024;
+    bool landscape = true;
+};
+bool ExportWorldGlb(PackageCache& cache, const WorldData& world, const WorldExportOptions& opt, Bytes& out, std::string* error = nullptr,
+                    const std::function<void(int, int)>& progress = {});

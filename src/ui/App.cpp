@@ -830,6 +830,39 @@ void App::ExportFiles(std::vector<u32> entries, int mode, int kind) {
     m_exportFailed = 0;
     m_exportTotal = (int)entries.size();
     ExportOptions opt = MakeExportOptions();
+    if (mode == 0 && kind == 4 && entries.size() > 1) {   // several animations: one .glb per skeleton with every clip in it
+        m_jobs->Push([this, entries = std::move(entries), opt] {
+            std::map<std::string, std::vector<std::shared_ptr<Package>>> bySkeleton;
+            for (u32 e : entries) {
+                if (m_exportCancel) break;
+                m_exportDone++;
+                if (!IsPackageFile(m_api->vfs.Path(e))) continue;
+                std::string err;
+                auto pkg = m_api->cache->Load(e, &err);
+                i32 main = pkg ? pkg->MainExport() : 0;
+                AnimSequenceData a;
+                if (!main || !IsAnimSequenceClass(pkg->ExportClass(main - 1)) || !ReadAnimSequence(*pkg, main - 1, a, &err)) continue;
+                bySkeleton[a.skeletonPath].push_back(pkg);
+            }
+            size_t files = 0;
+            for (auto& [skel, pkgs] : bySkeleton) {
+                Bytes glb;
+                std::string note, err;
+                if (!ExportAnimationSet(*m_api->cache, pkgs, "", glb, note, &err)) { m_exportFailed++; LOGW("animations of %s: %s", skel.c_str(), err.c_str()); continue; }
+                std::string rel = pkgs[0]->GamePath();
+                rel = rel.substr(0, rel.rfind('/') + 1) + "Animations_" + skel.substr(skel.rfind('.') + 1) + ".glb";
+                if (!opt.keepDirectories) rel = rel.substr(rel.rfind('/') + 1);
+                std::wstring out = opt.outputDir + L"\\" + Widen(rel);
+                for (auto& c : out) if (c == L'/') c = L'\\';
+                CreateDirectories(out.substr(0, out.find_last_of(L'\\')));
+                if (WriteWholeFile(out, glb.data(), glb.size())) { files++; LOGI("%s -> %s", note.c_str(), Narrow(out).c_str()); }
+            }
+            LOGI("exported %zu animation set(s) from %zu skeleton(s)", files, bySkeleton.size());
+            m_exporting = false;
+            Post([] {});
+        });
+        return;
+    }
     m_jobs->Push([this, entries = std::move(entries), mode, kind, opt] {
         auto t0 = std::chrono::steady_clock::now();
         size_t files = 0;
@@ -893,6 +926,7 @@ void App::ExportFiles(std::vector<u32> entries, int mode, int kind) {
                 if (pkg) {
                     ExportOptions o = opt;
                     o.json = mode == 2;
+                    o.worlds = kind == 3;   // Export > World: the whole map as .glb
                     ok = ExportPackage(*m_api->cache, *pkg, o, written, &err);
                     if (ok && written.empty() && mode == 0 && entries.size() == 1) {
                         // nothing visual to export for this type: save its properties instead

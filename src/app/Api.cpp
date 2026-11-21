@@ -52,6 +52,7 @@ Api::Api(Settings& s) : settings(s) {
     RegisterMeshTools(*this);
     RegisterWorldTools(*this);
     RegisterAudioTools(*this);
+    RegisterExportTools(*this);
 }
 
 bool Api::EnsureMounted(std::string* error) {
