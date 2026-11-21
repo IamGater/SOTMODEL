@@ -50,6 +50,7 @@ Api::Api(Settings& s) : settings(s) {
     RegisterAssetTools();
     RegisterMeshTools(*this);
     RegisterWorldTools(*this);
+    RegisterAudioTools(*this);
 }
 
 bool Api::EnsureMounted(std::string* error) {
@@ -323,10 +324,33 @@ void Api::RegisterAssetTools() {
               "path",
               [](Api& a, const JsonValue& args) {
                   std::string err;
+                  std::string od = args.GetStr("output_dir");
+                  if (args.GetBool("raw", false)) {   // any file (.wem, .bnk, .ini, ...): its bytes as stored
+                      i64 e = a.ResolveFile(args.GetStr("path"));
+                      Bytes data;
+                      if (e < 0) return ApiResult::Error("file not found: " + args.GetStr("path"));
+                      if (!a.vfs.Read((u32)e, data, &err)) return ApiResult::Error(err);
+                      std::string rel(a.vfs.Path((u32)e));
+                      if (!a.settings.exportKeepDirectories) rel = rel.substr(rel.rfind('/') + 1);
+                      std::wstring out = (od.empty() ? a.settings.outputDir : Widen(od)) + L"\\" + Widen(rel);
+                      for (auto& c : out) if (c == L'/') c = L'\\';
+                      CreateDirectories(out.substr(0, out.find_last_of(L'\\')));
+                      if (!WriteWholeFile(out, data.data(), data.size())) return ApiResult::Error("could not write " + Narrow(out));
+                      JsonWriter w;
+                      w.BeginObject();
+                      w.KV("ok", true);
+                      w.Key("files");
+                      w.BeginArray();
+                      w.Str(Narrow(out));
+                      w.EndArray();
+                      w.EndObject();
+                      ApiResult r;
+                      r.json = w.Take();
+                      return r;
+                  }
                   auto pkg = a.LoadPackage(args.GetStr("path"), &err);
                   if (!pkg) return ApiResult::Error(err);
                   ExportOptions opt;
-                  std::string od = args.GetStr("output_dir");
                   opt.outputDir = od.empty() ? a.settings.outputDir : Widen(od);
                   opt.textureFormat = args.GetStr("texture_format", a.settings.textureFormat ? "dds" : "png") == "dds" ? 1 : 0;
                   opt.meshFormat = args.GetStr("mesh_format", a.settings.meshFormat ? "obj" : "glb") == "obj" ? 1 : 0;
