@@ -1455,6 +1455,7 @@ void App::DrawDocTabs(float height) {
             if (MenuItemIcon("Find References", nullptr, IconSearch, pkg)) FindReferences(d.entry);
             if (MenuItemIcon("Decompile Blueprint", nullptr, IconCube, pkg)) DecompileBlueprintTab(d.entry);
             if (MenuItemIcon("Decompile Shaders", nullptr, IconCube, pkg || (!d.newTab && IsShaderCacheFile(d.gamePath)))) DecompileShadersTab(d.entry);
+            if (MenuItemIcon("Material HLSL", nullptr, IconCube, pkg)) MaterialHlslTab(d.entry);
             ImGui::Separator();
             if (ImGui::BeginMenu("      Export", !d.newTab)) {
                 if (ImGui::MenuItem("Raw Data (.uasset)")) ExportFiles({d.entry}, 1);
@@ -1549,9 +1550,10 @@ void App::DrawDocContent(Document& d) {
     bool hasAudio = !d.loading && (d.audio || d.isBank || !d.audioError.empty());
     bool hasTable = !d.loading && d.table != nullptr;
     bool hasShaders = d.shaders != nullptr;
-    bool side = has3d || hasImage || hasAudio || hasTable || hasShaders;
+    bool hasGraph = d.matGraph != nullptr;
+    bool side = has3d || hasImage || hasAudio || hasTable || hasShaders || hasGraph;
     float splitW = Dip(4);
-    if (side && d.sideW <= 0) d.sideW = hasShaders ? std::min(avail.x * 0.4f, Dip(520)) : has3d || hasTable ? avail.x * 0.6f : std::min(avail.x * 0.45f, Dip(400) + avail.x * 0.1f);
+    if (side && d.sideW <= 0) d.sideW = hasGraph ? avail.x * 0.55f : hasShaders ? std::min(avail.x * 0.4f, Dip(520)) : has3d || hasTable ? avail.x * 0.6f : std::min(avail.x * 0.45f, Dip(400) + avail.x * 0.1f);
     float sideW = side ? std::clamp(d.sideW, Dip(160), std::max(Dip(160), avail.x - Dip(200))) : 0;
     float editW = side ? avail.x - sideW - splitW : avail.x;
     ImVec2 p = ImGui::GetCursorScreenPos();
@@ -1563,6 +1565,12 @@ void App::DrawDocContent(Document& d) {
     if (ImGui::IsItemActive()) d.sideW = sideW - ImGui::GetIO().MouseDelta.x;
     ImGui::GetWindowDrawList()->AddRectFilled(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), kLayer0);
     ImGui::SetCursorScreenPos(ImVec2(p.x + editW + splitW, p.y));
+    if (hasGraph) {
+        ImGui::BeginChild("##matgraph", ImVec2(sideW, avail.y), ImGuiChildFlags_None, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+        DrawMaterialGraphPanel(d);
+        ImGui::EndChild();
+        return;
+    }
     if (hasShaders) {
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(Dip(6), Dip(6)));
         ImGui::BeginChild("##shaders", ImVec2(sideW, avail.y), ImGuiChildFlags_AlwaysUseWindowPadding, ImGuiWindowFlags_NoScrollbar);
@@ -1706,6 +1714,118 @@ void App::DrawImagePanel(Document& d) {
 }
 
 // ================================================================== DataTable / CurveTable grid
+
+// material node graph at the editor positions: wheel zooms around the cursor, drag pans, hover shows a node's links
+void App::DrawMaterialGraphPanel(Document& d) {
+    auto& nodes = *d.matGraph;
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    ImVec2 p0 = ImGui::GetCursorScreenPos(), sz = ImGui::GetContentRegionAvail();
+    dl->AddRectFilled(p0, ImVec2(p0.x + sz.x, p0.y + sz.y), kBorder);
+    std::unordered_map<std::string, int> index;
+    for (int i = 0; i < (int)nodes.size(); i++) index[nodes[i].name] = i;
+    std::vector<int> outCount(nodes.size(), 1);
+    for (int i = 0; i < (int)nodes.size(); i++) outCount[i] = std::max(1, (int)nodes[i].outputs.size());
+    for (auto& n : nodes)
+        for (auto& l : n.inputs)
+            if (auto it = index.find(l.from); it != index.end()) outCount[it->second] = std::max(outCount[it->second], l.output + 1);
+    const float nodeW = 190, headH = 22, rowH = 16;
+    auto height = [&](int i) { return headH + std::max((int)nodes[i].inputs.size(), outCount[i]) * rowH + 6; };
+    if (d.graphZoom <= 0 && !nodes.empty()) {   // fit
+        float mnx = 1e9f, mny = 1e9f, mxx = -1e9f, mxy = -1e9f;
+        for (int i = 0; i < (int)nodes.size(); i++) {
+            mnx = std::min(mnx, (float)nodes[i].x); mny = std::min(mny, (float)nodes[i].y);
+            mxx = std::max(mxx, nodes[i].x + nodeW); mxy = std::max(mxy, nodes[i].y + height(i));
+        }
+        d.graphZoom = std::clamp(std::min(sz.x / std::max(1.f, mxx - mnx + 80), sz.y / std::max(1.f, mxy - mny + 80)), 0.05f, 1.5f);
+        d.graphPanX = sz.x * 0.5f - (mnx + mxx) * 0.5f * d.graphZoom;
+        d.graphPanY = sz.y * 0.5f - (mny + mxy) * 0.5f * d.graphZoom;
+    }
+    float z = d.graphZoom;
+    ImGui::InvisibleButton("##graphcanvas", sz, ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonMiddle | ImGuiButtonFlags_MouseButtonRight);
+    bool hovered = ImGui::IsItemHovered();
+    ImGuiIO& io = ImGui::GetIO();
+    if (ImGui::IsItemActive() && (ImGui::IsMouseDragging(ImGuiMouseButton_Left) || ImGui::IsMouseDragging(ImGuiMouseButton_Middle) || ImGui::IsMouseDragging(ImGuiMouseButton_Right))) {
+        d.graphPanX += io.MouseDelta.x;
+        d.graphPanY += io.MouseDelta.y;
+    }
+    if (hovered && io.MouseWheel != 0) {
+        float nz = std::clamp(z * (io.MouseWheel > 0 ? 1.15f : 1 / 1.15f), 0.03f, 3.f);
+        float mx = io.MousePos.x - p0.x, my = io.MousePos.y - p0.y;
+        d.graphPanX = mx - (mx - d.graphPanX) * nz / z;
+        d.graphPanY = my - (my - d.graphPanY) * nz / z;
+        z = d.graphZoom = nz;
+    }
+    auto toScreen = [&](float x, float y) { return ImVec2(p0.x + d.graphPanX + x * z, p0.y + d.graphPanY + y * z); };
+    dl->PushClipRect(p0, ImVec2(p0.x + sz.x, p0.y + sz.y), true);
+    // hit test
+    int hot = -1;
+    for (int i = (int)nodes.size() - 1; i >= 0 && hovered; i--) {
+        ImVec2 a = toScreen((float)nodes[i].x, (float)nodes[i].y), b = toScreen(nodes[i].x + nodeW, nodes[i].y + height(i));
+        if (io.MousePos.x >= a.x && io.MousePos.x <= b.x && io.MousePos.y >= a.y && io.MousePos.y <= b.y) { hot = i; break; }
+    }
+    if (hovered && ImGui::IsMouseReleased(ImGuiMouseButton_Left) && !ImGui::IsMouseDragPastThreshold(ImGuiMouseButton_Left)) d.graphSel = hot;
+    if (hot >= 0 && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && !nodes[hot].function.empty()) {   // open the function's own graph
+        i64 e = m_api->ResolveFile(nodes[hot].function);
+        if (e >= 0) MaterialHlslTab((u32)e);
+    }
+    int focus = hot >= 0 ? hot : d.graphSel;
+    // links
+    for (int i = 0; i < (int)nodes.size(); i++)
+        for (size_t k = 0; k < nodes[i].inputs.size(); k++) {
+            auto& l = nodes[i].inputs[k];
+            auto it = index.find(l.from);
+            if (it == index.end()) continue;
+            int s = it->second;
+            ImVec2 a = toScreen(nodes[s].x + nodeW, nodes[s].y + headH + (l.output + 0.5f) * rowH);
+            ImVec2 b = toScreen((float)nodes[i].x, nodes[i].y + headH + (k + 0.5f) * rowH);
+            bool hi = focus == i || focus == s;
+            float dx = std::max(30.f * z, (b.x - a.x) * 0.5f);
+            dl->AddBezierCubic(a, ImVec2(a.x + dx, a.y), ImVec2(b.x - dx, b.y), b, hi ? kAccent : IM_COL32(150, 150, 165, 140), hi ? 2.5f : 1.2f);
+        }
+    // nodes
+    bool text = z > 0.35f;
+    float fs = ImGui::GetFontSize() * std::clamp(z, 0.5f, 1.2f);
+    for (int i = 0; i < (int)nodes.size(); i++) {
+        auto& n = nodes[i];
+        ImVec2 a = toScreen((float)n.x, (float)n.y), b = toScreen(n.x + nodeW, n.y + height(i));
+        if (b.x < p0.x || a.x > p0.x + sz.x || b.y < p0.y || a.y > p0.y + sz.y) continue;
+        ImU32 head = n.type == "Material" ? IM_COL32(120, 120, 130, 255)
+                   : n.type.find("Parameter") != std::string::npos ? IM_COL32(60, 120, 60, 255)
+                   : n.type.find("Texture") != std::string::npos ? IM_COL32(140, 60, 50, 255)
+                   : n.type == "MaterialFunctionCall" ? IM_COL32(40, 90, 150, 255)
+                   : n.type.rfind("Constant", 0) == 0 ? IM_COL32(90, 90, 100, 255)
+                   : n.type.rfind("Landscape", 0) == 0 ? IM_COL32(140, 110, 40, 255)
+                   : n.type == "Custom" ? IM_COL32(120, 60, 140, 255) : IM_COL32(70, 72, 90, 255);
+        float r = 4 * z;
+        dl->AddRectFilled(a, b, IM_COL32(30, 31, 40, 235), r);
+        dl->AddRectFilled(a, ImVec2(b.x, a.y + headH * z), head, r, ImDrawFlags_RoundCornersTop);
+        dl->AddRect(a, b, i == d.graphSel ? kAccent : i == hot ? kText : IM_COL32(20, 20, 26, 255), r, 0, i == d.graphSel ? 2.f : 1.f);
+        if (!text) continue;
+        std::string title = n.caption.empty() ? n.type : n.caption;
+        dl->PushClipRect(a, b, true);
+        dl->AddText(ImGui::GetFont(), fs, ImVec2(a.x + 6 * z, a.y + 3 * z), kText, title.c_str());
+        for (size_t k = 0; k < n.inputs.size(); k++)
+            dl->AddText(ImGui::GetFont(), fs * 0.85f, ImVec2(a.x + 8 * z, a.y + (headH + k * rowH + 1) * z), kTextDim, n.inputs[k].input.c_str());
+        for (size_t k = 0; k < n.outputs.size(); k++) {
+            float tw = ImGui::GetFont()->CalcTextSizeA(fs * 0.85f, FLT_MAX, 0, n.outputs[k].c_str()).x;
+            dl->AddText(ImGui::GetFont(), fs * 0.85f, ImVec2(b.x - 8 * z - tw, a.y + (headH + k * rowH + 1) * z), kTextDim, n.outputs[k].c_str());
+        }
+        if (!n.caption.empty() && n.inputs.empty() && n.outputs.empty())
+            dl->AddText(ImGui::GetFont(), fs * 0.85f, ImVec2(a.x + 8 * z, a.y + (headH + 1) * z), kTextDim, n.type.c_str());
+        dl->PopClipRect();
+    }
+    dl->PopClipRect();
+    // overlay: counts + help, the hovered / selected node's details
+    std::string info = Fmt("%zu nodes   wheel: zoom   drag: pan   F: fit   double click a function: open it", nodes.size());
+    dl->AddText(ImVec2(p0.x + Dip(8), p0.y + Dip(6)), kTextDim, info.c_str());
+    if (hot >= 0) {
+        auto& n = nodes[hot];
+        std::string tip = n.type + (n.caption.empty() ? "" : "  \"" + n.caption + "\"") + "\n" + n.name;
+        for (auto& l : n.inputs) tip += "\n  " + l.input + " <- " + l.from + (l.output ? Fmt(" [%d]", l.output) : "");
+        ImGui::SetTooltip("%s", tip.c_str());
+    }
+    if (ImGui::IsWindowHovered() && ImGui::IsKeyPressed(ImGuiKey_F, false)) d.graphZoom = 0;   // F: fit
+}
 
 // compiled shaders of a material / the global shader cache: pick one, see it as HLSL / assembly / reflection
 void App::DrawShaderPanel(Document& d) {
@@ -2632,6 +2752,7 @@ void App::DrawFileMenu(u32 e) {
     if (MenuItemIcon("Find References", nullptr, IconSearch, pkg)) FindReferences(e);
     if (MenuItemIcon("Decompile Blueprint", nullptr, IconCube, pkg)) DecompileBlueprintTab(e);
     if (MenuItemIcon("Decompile Shaders", nullptr, IconCube, pkg || IsShaderCacheFile(path))) DecompileShadersTab(e);
+    if (MenuItemIcon("Material HLSL", nullptr, IconCube, pkg)) MaterialHlslTab(e);
     ImGui::Separator();
     if (ImGui::BeginMenu("      Export")) {
         if (ImGui::MenuItem("Raw Data (.uasset)")) ExportFiles({e}, 1);

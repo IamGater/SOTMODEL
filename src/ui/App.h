@@ -9,6 +9,7 @@
 #include "audio/Player.h"
 #include "ue/DataTable.h"
 #include "ue/Shaders.h"
+#include "ue/MaterialGraph.h"
 #include <thread>
 #include <condition_variable>
 #include <deque>
@@ -119,6 +120,11 @@ struct Document {
     int shaderSel = -1, shaderMode = 0;   // 0 HLSL, 1 bit-exact HLSL, 2 assembly, 3 reflection
     char shaderFilter[128] = {};
 
+    // material graph (Material HLSL): the translated code in the editor, the node graph in the side panel
+    std::shared_ptr<std::vector<MaterialGraphNode>> matGraph;
+    float graphZoom = 0, graphPanX = 0, graphPanY = 0;   // zoom 0 = fit on the next frame
+    int graphSel = -1;
+
     // material
     bool hasMaterial = false;
     MaterialInfo material;
@@ -180,6 +186,8 @@ private:
     void DecompileShadersTab(u32 entry);
     void ShowShader(std::shared_ptr<Document> d, int index, int mode);   // decompiles in the background into the editor
     void DrawShaderPanel(Document& d);
+    void MaterialHlslTab(u32 entry);
+    void DrawMaterialGraphPanel(Document& d);
     void ShowMetadata(u32 entry, bool newTab = false);
     void ShowArchivesInfo();
     void FindReferences(u32 entry);

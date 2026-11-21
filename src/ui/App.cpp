@@ -245,9 +245,11 @@ void App::StartMount() {
             if (m_folder) SelectFolder(m_folder);
             for (auto& p0 : openOnStart) {
                 bool shaders = p0.rfind("shaders:", 0) == 0;   // --shaders <path>: open its compiled shaders
-                std::string p = shaders ? p0.substr(8) : p0;
+                bool hlsl = p0.rfind("hlsl:", 0) == 0;         // --material-hlsl <path>: its graph as HLSL
+                std::string p = shaders ? p0.substr(8) : hlsl ? p0.substr(5) : p0;
                 i64 e = m_api->ResolveFile(p);
                 if (e >= 0 && shaders) DecompileShadersTab((u32)e);
+                else if (e >= 0 && hlsl) MaterialHlslTab((u32)e);
                 else if (e >= 0) OpenFile((u32)e);
                 else LOGW("not found: %s", p.c_str());
             }

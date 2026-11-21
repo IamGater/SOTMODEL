@@ -7,6 +7,7 @@
 #include "ue/Texture.h"
 #include "ue/Blueprint.h"
 #include "render/ShaderTools.h"
+#include "ue/Material.h"
 #include "imgui.h"
 #include <windows.h>
 #include <shellapi.h>
@@ -773,6 +774,40 @@ void App::ShowShader(std::shared_ptr<Document> d, int index, int mode) {
                 if (d->json[i] == '\n') d->lines.push_back(i + 1);
             d->selA = d->selB = 0;
             d->scrollToLine = 0;
+        });
+    });
+}
+
+// ------------------------------------------------------------------ Material HLSL (graph translated to code + node graph)
+
+void App::MaterialHlslTab(u32 entry) {
+    if (m_mountState != MountState::Ready) return;
+    std::string path(m_api->vfs.Path(entry)), title(m_api->vfs.FileName(entry));
+    title = title.substr(0, title.rfind('.')) + " (HLSL)";
+    m_jobs->Push([this, entry, path, title] {
+        std::string err, hlsl;
+        MaterialGraphStats st;
+        bool ok = MaterialToHlsl(*m_api->cache, path, hlsl, &st, &err);
+        auto graph = std::make_shared<std::vector<MaterialGraphNode>>();
+        if (ok) {
+            ReadMaterialGraph(*m_api->cache, path, *graph, nullptr);
+            bool hasExpressions = std::any_of(graph->begin(), graph->end(), [](auto& n) { return n.type != "Material"; });
+            if (!hasExpressions) {   // an instance: show its master's graph
+                MaterialInfo mi;
+                if (ReadMaterial(*m_api->cache, path, mi, nullptr) && !mi.baseMaterial.empty())
+                    ReadMaterialGraph(*m_api->cache, mi.baseMaterial.substr(0, mi.baseMaterial.find('.')), *graph, nullptr);
+            }
+        }
+        Post([this, entry, title, hlsl, graph, ok, err, st] {
+            if (!ok) {
+                LOGW("material HLSL: %s", err.c_str());
+                return;
+            }
+            LOGI("%s: %d nodes, %d function calls%s", title.c_str(), st.nodes, st.functions,
+                 st.unsupported.empty() ? "" : Fmt(", %zu node types not translated", st.unsupported.size()).c_str());
+            OpenTextTab(title, hlsl, entry, true, 1);
+            auto it = std::find_if(m_docs.begin(), m_docs.end(), [&](auto& x) { return x->id == m_activeDoc; });
+            if (it != m_docs.end() && !graph->empty()) (*it)->matGraph = graph;
         });
     });
 }

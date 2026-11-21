@@ -4,6 +4,7 @@
 #include "core/Json.h"
 #include "ue/Shaders.h"
 #include "render/ShaderTools.h"
+#include "ue/MaterialGraph.h"
 
 namespace {
 
@@ -132,6 +133,91 @@ void RegisterShaderTools(Api& api) {
                           }
                           w.KV("text", text);
                       }
+                      w.EndObject();
+                      ApiResult r;
+                      r.json = w.Take();
+                      return r;
+                  }});
+
+    api.Register({"get_material_hlsl",
+                  "Translate a material's node graph to readable HLSL (UE 4.10 HLSLMaterialTranslator style): parameters with their "
+                  "values, Custom nodes as functions, material functions inlined, static switches resolved, then the connected "
+                  "attributes (BaseColor, Normal, Roughness, ..., WorldPositionOffset, CustomizedUVs). Works on a Material, a "
+                  "MaterialInstance (master graph + the instance's values and static switches) or a MaterialFunction. 'save_to' writes a file.",
+                  R"({"type":"object","properties":{"path":{"type":"string"},"save_to":{"type":"string"},"max_chars":{"type":"integer","default":200000}},"required":["path"]})",
+                  "path",
+                  [](Api& a, const JsonValue& args) {
+                      std::string err, hlsl;
+                      MaterialGraphStats st;
+                      if (!a.EnsureMounted(&err)) return ApiResult::Error(err);
+                      if (!MaterialToHlsl(*a.cache, args.GetStr("path"), hlsl, &st, &err)) return ApiResult::Error(err);
+                      JsonWriter w;
+                      w.BeginObject();
+                      w.KV("nodes", (i64)st.nodes);
+                      w.KV("functionCalls", (i64)st.functions);
+                      w.Key("attributes");
+                      w.BeginArray();
+                      for (auto& x : st.attributes) w.Str(x);
+                      w.EndArray();
+                      w.Key("unsupported");
+                      w.BeginArray();
+                      for (auto& x : st.unsupported) w.Str(x);
+                      w.EndArray();
+                      std::string save = args.GetStr("save_to");
+                      if (!save.empty()) {
+                          std::wstring p = Widen(save);
+                          size_t slash = p.find_last_of(L"\/");
+                          if (slash != std::wstring::npos) CreateDirectories(p.substr(0, slash));
+                          if (!WriteWholeFile(p, hlsl.data(), hlsl.size())) return ApiResult::Error("could not write " + save);
+                          w.KV("written", save);
+                      } else {
+                          size_t maxc = (size_t)args.GetNum("max_chars", 200000);
+                          if (hlsl.size() > maxc) { w.KV("truncated", true); hlsl.resize(maxc); }
+                          w.KV("hlsl", hlsl);
+                      }
+                      w.EndObject();
+                      ApiResult r;
+                      r.json = w.Take();
+                      return r;
+                  }});
+
+    api.Register({"get_material_graph",
+                  "The expression nodes of a material or material function as a graph: name, type, caption (parameter / function / "
+                  "constant), editor position and input links (input pin -> source node and output index).",
+                  R"({"type":"object","properties":{"path":{"type":"string"}},"required":["path"]})",
+                  "path",
+                  [](Api& a, const JsonValue& args) {
+                      std::string err;
+                      std::vector<MaterialGraphNode> nodes;
+                      if (!a.EnsureMounted(&err)) return ApiResult::Error(err);
+                      if (!ReadMaterialGraph(*a.cache, args.GetStr("path"), nodes, &err)) return ApiResult::Error(err);
+                      JsonWriter w;
+                      w.BeginObject();
+                      w.KV("count", (i64)nodes.size());
+                      w.Key("nodes");
+                      w.BeginArray();
+                      for (auto& n : nodes) {
+                          w.BeginObject();
+                          w.KV("name", n.name);
+                          w.KV("type", n.type);
+                          if (!n.caption.empty()) w.KV("caption", n.caption);
+                          w.KV("x", (i64)n.x);
+                          w.KV("y", (i64)n.y);
+                          if (!n.inputs.empty()) {
+                              w.Key("inputs");
+                              w.BeginArray();
+                              for (auto& l : n.inputs) {
+                                  w.BeginObject();
+                                  w.KV("input", l.input);
+                                  w.KV("from", l.from);
+                                  if (l.output) w.KV("output", (i64)l.output);
+                                  w.EndObject();
+                              }
+                              w.EndArray();
+                          }
+                          w.EndObject();
+                      }
+                      w.EndArray();
                       w.EndObject();
                       ApiResult r;
                       r.json = w.Take();

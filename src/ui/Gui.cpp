@@ -195,6 +195,7 @@ int RunGui(const std::vector<std::string>& args) {
         else if (args[i] == "--folder" && i + 1 < args.size()) startFolder = args[++i];
         else if (args[i] == "--delay" && i + 1 < args.size()) delay = atof(args[++i].c_str());
         else if (args[i] == "--shaders" && i + 1 < args.size()) open.push_back("shaders:" + args[++i]);
+        else if (args[i] == "--material-hlsl" && i + 1 < args.size()) open.push_back("hlsl:" + args[++i]);
         else open.push_back(args[i]);
     }
     ULONGLONG start = GetTickCount64();
