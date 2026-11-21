@@ -354,7 +354,17 @@ bool Vfs::Read(u32 index, Bytes& out, std::string* error) const {
             u32 magic = 0;
             if (out.size() >= 4) memcpy(&magic, out.data(), 4);
             verified = magic == PackageMagic;
-        } else verified = false;
+        } else {
+            // other files: a known container signature (Wwise RIFF / bank / pack, Ogg, PNG) or plain text
+            static const char* sigs[] = {"RIFF", "RIFX", "BKHD", "AKPK", "OggS", "\x89PNG"};
+            verified = false;
+            for (auto* s : sigs) if (out.size() >= 4 && memcmp(out.data(), s, 4) == 0) verified = true;
+            if (!verified && out.size() >= 16) {
+                size_t n = std::min<size_t>(out.size(), 256), printable = 0;
+                for (size_t q = 0; q < n; q++) printable += (out[q] >= 0x20 && out[q] < 0x7f) || out[q] == '\n' || out[q] == '\r' || out[q] == '\t';
+                verified = printable == n;
+            }
+        }
         if (verified) {
             pak.keyIndex = i;
             return true;
