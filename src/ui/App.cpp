@@ -5,6 +5,7 @@
 #include "ue/Collision.h"
 #include "ue/WorldLayout.h"
 #include "render/Offscreen.h"
+#include "app/WwiseEvents.h"
 #include "imgui.h"
 #include "imgui_internal.h"
 #include <windows.h>
@@ -507,6 +508,10 @@ void App::LoadDocument(std::shared_ptr<Document> d) {
         } else if (main && d->className == "WwiseBank") {   // the bank bytes follow the properties: list its embedded media
             d->isBank = ParseBank(pkg->Data().data(), pkg->Data().size(), d->bank, nullptr, &err);
             if (!d->isBank) d->audioError = "bank: " + err;
+        } else if (main && d->className == "WwiseEvent") {   // the sounds it plays, through its bank's hierarchy
+            WwiseEventInfo ev;
+            if (LoadWwiseEvent(*m_api, d->gamePath, ev, &err)) FillEventDocument(*d, ev);
+            else d->audioError = "event: " + err;
         }
         if (!d->anim && !d->isWorld)
             for (size_t i = 0; i < pkg->Exports().size(); i++)

@@ -8,6 +8,7 @@
 #include "ue/Blueprint.h"
 #include "render/ShaderTools.h"
 #include "ue/Material.h"
+#include "app/WwiseEvents.h"
 #include "imgui.h"
 #include <windows.h>
 #include <shellapi.h>
@@ -583,6 +584,73 @@ void App::LoadAudioDocument(std::shared_ptr<Document> d) {
         d->json = w.Take();
         d->lines.assign(1, 0);
         for (u32 i = 0; i < (u32)d->json.size(); i++) if (d->json[i] == '\n') d->lines.push_back(i + 1);
+        d->loading = false;
+        Post([] {});
+    });
+}
+
+void App::FillEventDocument(Document& d, const WwiseEventInfo& ev) {
+    d.isBank = d.isEvent = true;
+    d.eventName = ev.name.empty() ? std::to_string(ev.id) : ev.name;
+    d.eventId = ev.id;
+    d.eventBank = ev.bankPath;
+    d.bank = BankInfo{};
+    d.bank.bankId = ev.bankInfo.bankId;
+    d.bank.version = ev.bankInfo.version;
+    d.mediaBytes.clear();
+    d.mediaWhere.clear();
+    JsonWriter w;
+    w.BeginObject();
+    w.KV("Event", d.eventName);
+    w.KV("WwiseId", (i64)ev.id);
+    w.KV("Bank", ev.bankPath);
+    w.Key("Sounds");
+    w.BeginArray();
+    static const char* where[] = {"in another bank", "embedded in the bank", "streamed"};
+    for (auto& m : ev.media) {
+        Bytes b;
+        BankWem bw;
+        bw.id = m.id;
+        if (m.where != WwiseEventMedia::Missing && ReadEventMedia(*m_api, ev, m, b)) {
+            bw.offset = (u32)d.mediaBytes.size();
+            bw.size = (u32)b.size();
+            d.mediaBytes.insert(d.mediaBytes.end(), b.begin(), b.end());
+        }
+        d.bank.wems.push_back(bw);
+        d.mediaWhere.push_back((u8)m.where);
+        w.BeginObject();
+        w.KV("Media", (i64)m.id);
+        w.KV("Location", where[m.where]);
+        if (m.where == WwiseEventMedia::Stream) w.KV("File", std::string(m_api->vfs.Path(m.entry)));
+        w.EndObject();
+    }
+    w.EndArray();
+    w.EndObject();
+    if (d.json.empty()) {   // an event of a bank (an event asset keeps its properties)
+        d.json = w.Take();
+        d.lines.assign(1, 0);
+        for (u32 i = 0; i < (u32)d.json.size(); i++) if (d.json[i] == '\n') d.lines.push_back(i + 1);
+    }
+    d.bankSel = d.bank.wems.empty() ? -1 : 0;
+}
+
+void App::OpenBankEvent(Document& bankDoc, u32 eventId) {
+    if (!bankDoc.pkg) return;
+    auto d = std::make_shared<Document>();
+    d->entry = bankDoc.entry;
+    std::string name = WwiseEventName(*m_api, eventId);
+    d->name = name.empty() ? Fmt("event %u", eventId) : name;
+    d->gamePath = bankDoc.gamePath;
+    d->className = "WwiseEvent";
+    d->loading = true;
+    auto pkg = bankDoc.pkg;
+    BankInfo info = bankDoc.bank;
+    PlaceDocument(d, true);
+    m_jobs->Push([this, d, pkg, info, eventId] {
+        WwiseEventInfo ev;
+        std::string err;
+        if (ResolveEventInBank(*m_api, pkg, info, eventId, ev, &err)) FillEventDocument(*d, ev);
+        else d->audioError = err;
         d->loading = false;
         Post([] {});
     });

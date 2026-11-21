@@ -2,6 +2,7 @@
 // panel, the assets explorer or the document tabs (JSON editor + preview column), the collapsible log and the status bar.
 // Sizes and colours follow FModel's XAML; every icon is drawn here (no FModel artwork). The 3D preview is our own viewer.
 #include "ui/App.h"
+#include "app/WwiseEvents.h"
 #include "ui/UiCommon.h"
 #include "ui/Icons.h"
 #include "render/ShaderTools.h"
@@ -2087,22 +2088,29 @@ void App::DrawAudioPanel(Document& d) {
     WemInfo info = d.wem;
     if (d.isBank) {
         if (d.bankSel >= (int)d.bank.wems.size()) d.bankSel = -1;
-        if (d.bankSel >= 0 && d.pkg) {
+        const u8* base = d.isEvent ? d.mediaBytes.data() : d.pkg ? d.pkg->Data().data() : nullptr;
+        if (d.bankSel >= 0 && base) {
             const BankWem& m = d.bank.wems[d.bankSel];
-            const u8* src = d.pkg->Data().data() + m.offset;
-            ReadWemInfo(src, m.size, info);
-            auto& slot = d.bankPcm[m.id];
-            if (!slot) {
-                auto np = std::make_shared<AudioPcm>();
-                std::string err;
-                if (DecodeWem(src, m.size, *np, &err)) slot = np;
-                else clipError = err;
+            if (!m.size) {
+                pcm = nullptr;
+                clipError = Fmt("Sound %u is in another bank", m.id);
+            } else {
+                const u8* src = base + m.offset;
+                ReadWemInfo(src, m.size, info);
+                auto& slot = d.bankPcm[m.id];
+                if (!slot) {
+                    auto np = std::make_shared<AudioPcm>();
+                    std::string err;
+                    if (DecodeWem(src, m.size, *np, &err)) slot = np;
+                    else clipError = err;
+                }
+                pcm = slot;
             }
-            pcm = slot;
-            clipName = std::to_string(m.id);
+            clipName = d.isEvent ? Fmt("%s - sound %d of %zu (%u)", d.eventName.c_str(), d.bankSel + 1, d.bank.wems.size(), m.id) : std::to_string(m.id);
         } else {
             pcm = nullptr;
-            clipName = Fmt("%s - %zu embedded sounds", d.name.substr(0, d.name.rfind('.')).c_str(), d.bank.wems.size());
+            clipName = d.isEvent ? Fmt("%s - %zu sounds", d.eventName.c_str(), d.bank.wems.size())
+                                 : Fmt("%s - %zu embedded sounds", d.name.substr(0, d.name.rfind('.')).c_str(), d.bank.wems.size());
         }
     }
     if (m_playRequest == d.id && pcm) {
@@ -2125,43 +2133,92 @@ void App::DrawAudioPanel(Document& d) {
                                      (int)(pcm->Seconds() / 60), fmod(pcm->Seconds(), 60.0))
                                : std::string();
         Text(dl, ImVec2(x, y2), kTextDim, rest.c_str());
+    } else if (d.isEvent) {
+        Text(dl, ImVec2(p.x + padL, y2), kTextDim, Fmt("Event %u in %s", d.eventId, d.eventBank.substr(d.eventBank.find_last_of('/') + 1).c_str()).c_str());
     } else if (d.isBank) {
-        Text(dl, ImVec2(p.x + padL, y2), kTextDim, Fmt("Bank %u / %u objects", d.bank.bankId, d.bank.hircObjects).c_str());
+        Text(dl, ImVec2(p.x + padL, y2), kTextDim, Fmt("Bank %u / %u objects / %zu events", d.bank.bankId, d.bank.hircObjects, d.bank.Events().size()).c_str());
     }
     float headH = padT + nameH + Dip(2) + ImGui::GetFontSize() + Dip(8);
     ImGui::PopFont();
     dl->AddLine(ImVec2(p.x, p.y + headH), ImVec2(p.x + w, p.y + headH), kSeparator);
     float y = p.y + headH + Dip(8), m = Dip(8);
 
-    // bank media list
+    // bank media list (an event: the sounds it can play); a bank also lists its events
     if (d.isBank) {
         float listH = std::max(Dip(120), (h - headH) * 0.45f);
+        std::vector<u32> evIds = d.isEvent ? std::vector<u32>{} : d.bank.Events();
+        if (!evIds.empty()) {   // Media | Events switch + "play by name"
+            if (!d.bankEventsListed) {
+                d.bankEventsListed = true;
+                for (u32 id : evIds) d.bankEvents.push_back({id, WwiseEventName(*m_api, id)});
+                std::sort(d.bankEvents.begin(), d.bankEvents.end(), [](auto& a, auto& b) {
+                    return a.second.empty() != b.second.empty() ? !a.second.empty() : a.second != b.second ? a.second < b.second : a.first < b.first;
+                });
+            }
+            ImGui::SetCursorScreenPos(ImVec2(p.x + m, y));
+            if (ImGui::RadioButton(Fmt("Media (%zu)", d.bank.wems.size()).c_str(), d.bankTab == 0)) d.bankTab = 0;
+            ImGui::SameLine();
+            if (ImGui::RadioButton(Fmt("Events (%zu)", evIds.size()).c_str(), d.bankTab == 1)) d.bankTab = 1;
+            if (d.bankTab == 1) {
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(std::max(Dip(80), p.x + w - m - ImGui::GetCursorScreenPos().x));
+                if (ImGui::InputTextWithHint("##evname", "play event by name (Enter)", d.eventEdit, sizeof(d.eventEdit), ImGuiInputTextFlags_EnterReturnsTrue) &&
+                    d.eventEdit[0]) {
+                    u32 id = WwiseShortId(d.eventEdit);
+                    if (d.bank.Find(id)) OpenBankEvent(d, id);
+                    else LOGW("event %s (%u) is not in this bank", d.eventEdit, id);
+                }
+            }
+            y = ImGui::GetCursorScreenPos().y + Dip(4);
+            listH -= ImGui::GetFrameHeightWithSpacing();
+        } else d.bankTab = 0;
         ImGui::SetCursorScreenPos(ImVec2(p.x + m, y));
         ImGui::BeginChild("##bankmedia", ImVec2(w - m * 2, listH), ImGuiChildFlags_None);
         ImDrawList* ldl = ImGui::GetWindowDrawList();
         float rowH = Dip(22), rw = ImGui::GetContentRegionAvail().x;
-        if (d.bank.wems.empty()) ImGui::TextDisabled("This bank has no embedded media (its sounds are streamed .wem files)");
-        ImGuiListClipper clip;
-        clip.Begin((int)d.bank.wems.size(), rowH);
-        while (clip.Step())
-            for (int i = clip.DisplayStart; i < clip.DisplayEnd; i++) {
-                const BankWem& bw = d.bank.wems[i];
-                ImGui::PushID(i);
-                ImVec2 rp = ImGui::GetCursorScreenPos();
-                RowState rs = ListRow("##bw", ImVec2(rw, rowH), d.bankSel == i);
-                if (rs.pressed) d.bankSel = i;
-                if (rs.doubleClicked) {   // select + play (it is decoded at the top of the next frame)
-                    d.bankSel = i;
-                    m_playRequest = d.id;
-                    m_busyFrames = 3;
+        if (d.bankTab == 1) {
+            ImGuiListClipper clip;
+            clip.Begin((int)d.bankEvents.size(), rowH);
+            while (clip.Step())
+                for (int i = clip.DisplayStart; i < clip.DisplayEnd; i++) {
+                    auto& [id, name] = d.bankEvents[i];
+                    ImGui::PushID(i);
+                    ImVec2 rp = ImGui::GetCursorScreenPos();
+                    RowState rs = ListRow("##ev", ImVec2(rw, rowH), false);
+                    if (rs.doubleClicked) OpenBankEvent(d, id);
+                    if (rs.hovered) ImGui::SetTooltip("Double-click: open the event and the sounds it plays");
+                    float cy = rp.y + rowH * 0.5f, ty = cy - ImGui::GetFontSize() * 0.5f;
+                    IconNote(ldl, ImVec2(rp.x + Dip(10), cy), Dip(14), kTextDim);
+                    Text(ldl, ImVec2(rp.x + Dip(22), ty), name.empty() ? kTextDim : kText, name.empty() ? Fmt("event %u", id).c_str() : name.c_str());
+                    ImGui::PopID();
                 }
-                float cy = rp.y + rowH * 0.5f, ty = cy - ImGui::GetFontSize() * 0.5f;
-                IconNote(ldl, ImVec2(rp.x + Dip(10), cy), Dip(14), d.bankSel == i ? kText : kTextDim);
-                Text(ldl, ImVec2(rp.x + Dip(22), ty), kText, Fmt("%d   %u", i + 1, bw.id).c_str());
-                std::string sz = HumanSize(bw.size);
-                Text(ldl, ImVec2(rp.x + rw - Dip(6) - ImGui::CalcTextSize(sz.c_str()).x, ty), kTextDim, sz.c_str());
-                ImGui::PopID();
-            }
+        } else {
+            if (d.bank.wems.empty())
+                ImGui::TextDisabled(d.isEvent ? "The event plays no sounds (only actions such as Stop or Set State)"
+                                              : "This bank has no embedded media (its sounds are streamed .wem files)");
+            ImGuiListClipper clip;
+            clip.Begin((int)d.bank.wems.size(), rowH);
+            while (clip.Step())
+                for (int i = clip.DisplayStart; i < clip.DisplayEnd; i++) {
+                    const BankWem& bw = d.bank.wems[i];
+                    ImGui::PushID(i);
+                    ImVec2 rp = ImGui::GetCursorScreenPos();
+                    RowState rs = ListRow("##bw", ImVec2(rw, rowH), d.bankSel == i);
+                    if (rs.pressed) d.bankSel = i;
+                    if (rs.doubleClicked) {   // select + play (it is decoded at the top of the next frame)
+                        d.bankSel = i;
+                        m_playRequest = d.id;
+                        m_busyFrames = 3;
+                    }
+                    float cy = rp.y + rowH * 0.5f, ty = cy - ImGui::GetFontSize() * 0.5f;
+                    IconNote(ldl, ImVec2(rp.x + Dip(10), cy), Dip(14), d.bankSel == i ? kText : kTextDim);
+                    Text(ldl, ImVec2(rp.x + Dip(22), ty), kText, Fmt("%d   %u", i + 1, bw.id).c_str());
+                    u8 where = d.isEvent && i < (int)d.mediaWhere.size() ? d.mediaWhere[i] : 1;
+                    std::string sz = where == 0 ? "other bank" : d.isEvent ? HumanSize(bw.size) + (where == 2 ? "  stream" : "  bank") : HumanSize(bw.size);
+                    Text(ldl, ImVec2(rp.x + rw - Dip(6) - ImGui::CalcTextSize(sz.c_str()).x, ty), where == 0 ? kError : kTextDim, sz.c_str());
+                    ImGui::PopID();
+                }
+        }
         ImGui::EndChild();
         y += listH + Dip(8);
     }

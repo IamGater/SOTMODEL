@@ -2,6 +2,7 @@
 #include "app/Api.h"
 #include "core/Json.h"
 #include "audio/Wwise.h"
+#include "app/WwiseEvents.h"
 
 namespace {
 
@@ -60,6 +61,17 @@ void RegisterAudioTools(Api& api) {
                           w.KV("bankVersion", (i64)bank.version);
                           w.KV("hircObjects", (i64)bank.hircObjects);
                           w.KV("embeddedMedia", (i64)bank.wems.size());
+                          std::vector<u32> events = bank.Events();
+                          w.Key("events");
+                          w.BeginArray();
+                          for (size_t i = 0; i < events.size() && (int)i < (int)args.GetNum("limit", 200); i++) {
+                              w.BeginObject();
+                              w.KV("id", (i64)events[i]);
+                              std::string n = WwiseEventName(a, events[i]);
+                              if (!n.empty()) w.KV("name", n);
+                              w.EndObject();
+                          }
+                          w.EndArray();
                           w.Key("media");
                           w.BeginArray();
                           int limit = (int)args.GetNum("limit", 200);
@@ -73,6 +85,49 @@ void RegisterAudioTools(Api& api) {
                           }
                           w.EndArray();
                       }
+                      w.EndObject();
+                      ApiResult r;
+                      r.json = w.Take();
+                      return r;
+                  }});
+
+    api.Register({"get_wwise_event",
+                  "Resolve a Wwise event to the sounds it plays: 'event' is a WwiseEvent asset path or an event name (Play_sfx_...). The event is "
+                  "looked up in its RequiredBank's HIRC hierarchy (event -> Play actions -> containers -> sounds / music tracks); each media is "
+                  "embedded in the bank or streamed (WwiseAudio/Streams/<id>.wem). 'output_dir' also decodes them to .wav files there.",
+                  R"({"type":"object","properties":{"event":{"type":"string"},"output_dir":{"type":"string"}},"required":["event"]})", "event",
+                  [](Api& a, const JsonValue& args) {
+                      std::string err;
+                      WwiseEventInfo ev;
+                      if (!LoadWwiseEvent(a, args.GetStr("event"), ev, &err)) return ApiResult::Error(err);
+                      std::string outDir = args.GetStr("output_dir");
+                      JsonWriter w;
+                      w.BeginObject();
+                      w.KV("event", ev.name);
+                      w.KV("id", (i64)ev.id);
+                      w.KV("bank", ev.bankPath);
+                      w.KV("bankVersion", (i64)ev.bankInfo.version);
+                      w.Key("media");
+                      w.BeginArray();
+                      static const char* where[] = {"missing (another bank)", "bank", "stream"};
+                      for (auto& m : ev.media) {
+                          w.BeginObject();
+                          w.KV("id", (i64)m.id);
+                          w.KV("location", where[m.where]);
+                          Bytes data;
+                          if (m.where != WwiseEventMedia::Missing && ReadEventMedia(a, ev, m, data)) {
+                              WriteWemInfo(w, data.data(), data.size(), false);
+                              AudioPcm pcm;
+                              std::string e;
+                              if (!outDir.empty() && DecodeWem(data.data(), data.size(), pcm, &e)) {
+                                  std::wstring f = OutPath(a, outDir, (ev.name.empty() ? std::to_string(ev.id) : ev.name) + "_" + std::to_string(m.id) + ".wav");
+                                  Bytes wav = MakeWav(pcm);
+                                  if (WriteWholeFile(f, wav.data(), wav.size())) w.KV("written", Narrow(f));
+                              }
+                          }
+                          w.EndObject();
+                      }
+                      w.EndArray();
                       w.EndObject();
                       ApiResult r;
                       r.json = w.Take();

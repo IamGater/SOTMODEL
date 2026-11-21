@@ -7,6 +7,9 @@
 #include "audio/WwiseCodebooks.inc"
 #include <cstring>
 #include <stdexcept>
+#include <functional>
+#include <unordered_map>
+#include <unordered_set>
 
 extern "C" int stb_vorbis_decode_memory(const unsigned char* mem, int len, int* channels, int* sample_rate, short** output);
 
@@ -673,6 +676,105 @@ Bytes MakeWav(const AudioPcm& pcm) {
     return w;
 }
 
+const HircObject* BankInfo::Find(u32 id) const {
+    for (auto& o : hirc)
+        if (o.id == id) return &o;
+    return nullptr;
+}
+
+std::vector<u32> BankInfo::Events() const {
+    std::vector<u32> r;
+    for (auto& o : hirc)
+        if (o.type == 4) r.push_back(o.id);
+    return r;
+}
+
+u32 WwiseShortId(std::string_view name) {
+    u32 h = 2166136261u;
+    for (char c : name) {
+        h *= 16777619u;
+        h ^= (u8)(c >= 'A' && c <= 'Z' ? c + 32 : c);
+    }
+    return h;
+}
+
+bool ResolveWwiseEvent(const u8* data, const BankInfo& bank, u32 eventId, std::vector<u32>& media, std::string* error) {
+    media.clear();
+    const HircObject* ev = bank.Find(eventId);
+    if (!ev || ev->type != 4) {
+        if (error) *error = Fmt("event %u is not in bank %u", eventId, bank.bankId);
+        return false;
+    }
+    std::unordered_map<u32, const HircObject*> byId;
+    for (auto& o : bank.hirc) byId[o.id] = &o;
+    // CAkEvent: action count (u32 up to bank version 122, then a variable-length int), action ids
+    const u8* b = data + ev->offset;
+    size_t p = 0, count = 0;
+    if (bank.version <= 122) {
+        if (ev->size < 4) return false;
+        count = Rd32(b);
+        p = 4;
+    } else {
+        for (int k = 0; k < 5 && p < ev->size; k++) {
+            u8 c = b[p++];
+            count = (count << 7) | (c & 0x7f);
+            if (!(c & 0x80)) break;
+        }
+    }
+    std::vector<u32> targets;
+    for (size_t k = 0; k < count && p + 4 <= ev->size; k++, p += 4) {
+        auto it = byId.find(Rd32(b + p));
+        if (it == byId.end() || it->second->type != 3 || it->second->size < 6) continue;
+        const u8* a = data + it->second->offset;
+        u16 actionType = (u16)(a[0] | (a[1] << 8));
+        if ((actionType & 0xff00) == 0x0400) targets.push_back(Rd32(a + 2));   // Play: ulActionType 0x04xx, idExt = the played node
+    }
+    // nodes: children lists are "u32 count + count ids of nodes in this bank"; a node's lone parent id has no count in front
+    auto isNode = [&](u32 id) {
+        auto it = byId.find(id);
+        if (it == byId.end()) return false;
+        u8 t = it->second->type;
+        return t == 2 || t == 5 || t == 6 || t == 9 || t == 10 || t == 11 || t == 12 || t == 13;
+    };
+    std::unordered_set<u32> seen, mediaSeen;
+    auto addMedia = [&](u32 id) {
+        if (id && mediaSeen.insert(id).second) media.push_back(id);
+    };
+    std::function<void(u32, int)> walk = [&](u32 id, int depth) {
+        auto it = byId.find(id);
+        if (depth > 24 || it == byId.end() || !seen.insert(id).second) return;
+        const HircObject& o = *it->second;
+        const u8* d = data + o.offset;
+        if (o.type == 2) {   // CAkSound: AkBankSourceData = u32 plugin, u8 stream type, u32 source id, ...
+            if (o.size >= 9) addMedia(Rd32(d + 5));
+            return;
+        }
+        if (o.type == 11) {   // CAkMusicTrack: u8 flags, u32 source count, sources of 14 bytes (as above + u32 size, u8 bits)
+            if (o.size < 5) return;
+            u32 n = Rd32(d + 1);
+            for (u32 k = 0; k < n && k < 256 && 5 + (size_t)(k + 1) * 14 <= o.size; k++) addMedia(Rd32(d + 5 + k * 14 + 5));
+            return;
+        }
+        for (size_t q = 0; q + 8 <= o.size;) {
+            u32 n = Rd32(d + q);
+            bool run = n >= 1 && n <= 512 && q + 4 + (size_t)n * 4 <= o.size;
+            for (u32 k = 0; run && k < n; k++) {
+                u32 c = Rd32(d + q + 4 + k * 4);
+                run = c != id && isNode(c);
+            }
+            if (!run) {
+                q++;
+                continue;
+            }
+            for (u32 k = 0; k < n; k++) walk(Rd32(d + q + 4 + k * 4), depth + 1);
+            q += 4 + (size_t)n * 4;
+        }
+    };
+    for (u32 t : targets) walk(t, 0);
+    if (targets.empty() && error) *error = "the event has no Play action";
+    return !targets.empty();
+}
+
 bool ParseBank(const u8* data, size_t size, BankInfo& out, size_t* bankStart, std::string* error) {
     // the bank starts with its BKHD chunk; packages carry it after their own header
     size_t start = SIZE_MAX;
@@ -690,7 +792,22 @@ bool ParseBank(const u8* data, size_t size, BankInfo& out, size_t* bankStart, st
         if (!memcmp(tag, "BKHD", 4) && csize >= 8) { out.version = Rd32(data + off + 8); out.bankId = Rd32(data + off + 12); }
         else if (!memcmp(tag, "DIDX", 4)) { didx = off + 8; didxSize = csize; }
         else if (!memcmp(tag, "DATA", 4)) dataChunk = off + 8;
-        else if (!memcmp(tag, "HIRC", 4) && csize >= 4) out.hircObjects = Rd32(data + off + 8);
+        else if (!memcmp(tag, "HIRC", 4) && csize >= 4) {
+            out.hircObjects = Rd32(data + off + 8);
+            size_t end = std::min(size, off + 8 + (size_t)csize);
+            size_t p = off + 12;
+            for (u32 k = 0; k < out.hircObjects && p + 9 <= end; k++) {   // u8 type, u32 size (from the id on), u32 id
+                HircObject o;
+                o.type = data[p];
+                u32 osize = Rd32(data + p + 1);
+                if (osize < 4 || p + 5 + (size_t)osize > end) break;
+                o.id = Rd32(data + p + 5);
+                o.offset = (u32)(p + 9);
+                o.size = osize - 4;
+                out.hirc.push_back(o);
+                p += 5 + (size_t)osize;
+            }
+        }
         else if (memcmp(tag, "STID", 4) && memcmp(tag, "STMG", 4) && memcmp(tag, "ENVS", 4) && memcmp(tag, "INIT", 4) && memcmp(tag, "PLAT", 4) && memcmp(tag, "FXPR", 4))
             break;   // past the bank
         off += 8 + (size_t)csize;

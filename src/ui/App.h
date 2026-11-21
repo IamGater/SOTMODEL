@@ -175,6 +175,17 @@ struct Document {
     bool isBank = false;
     BankInfo bank;
     int bankSel = -1;
+    // a Wwise event (shown like a bank: bank.wems are the sounds it can play, their bytes copied into mediaBytes)
+    bool isEvent = false;
+    std::string eventName, eventBank;
+    u32 eventId = 0;
+    Bytes mediaBytes;
+    std::vector<u8> mediaWhere;   // WwiseEventMedia::Where per bank.wems entry
+    // bank: its events (HIRC), named from the WwiseEvent assets
+    int bankTab = 0;   // 0 media, 1 events
+    std::vector<std::pair<u32, std::string>> bankEvents;
+    bool bankEventsListed = false;
+    char eventEdit[128] = {};
     std::unordered_map<u32, std::shared_ptr<AudioPcm>> bankPcm;
     std::vector<std::pair<float, float>> peaks;   // waveform min/max per column
     const AudioPcm* peaksFor = nullptr;
@@ -249,6 +260,8 @@ private:
     void DrawAudioPanel(Document& d);
     void DrawTablePanel(Document& d);
     void LoadAudioDocument(std::shared_ptr<Document> d);
+    void FillEventDocument(Document& d, const struct WwiseEventInfo& ev);   // worker: the event's sounds as a bank-like list
+    void OpenBankEvent(Document& bankDoc, u32 eventId);                     // an event of an open bank in a new tab
     bool ExportAudioEntry(u32 entry, const ExportOptions& opt, std::vector<std::string>& written, std::string* error);
     void PlayAudio(Document& d, std::shared_ptr<AudioPcm> pcm, double from = 0);
     void DrawLog(float width);
