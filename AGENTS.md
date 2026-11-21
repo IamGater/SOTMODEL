@@ -76,6 +76,8 @@ or `/Game/Models/Props/Common/cmn_barrel_debris_02_a.cmn_barrel_debris_02_a`.
 | `get_animation_info` | AnimSequence: frames, length, fps, compression, skeleton, animated bones (+ a mesh that can show it) |
 | `preview_animation` | contact sheet PNG of an animation posed on a skeletal mesh (found automatically or `mesh=`) |
 | `get_anim_asset_info` | AnimMontage (sections, slot segments, notifies with times), BlendSpace / 1D / AimOffset (axes, samples; `x=`/`y=` adds the sample weights there), animation blueprint (baked state machines, transitions with crossfade, sequence / blend space players, notify events); plain sequences list their notifies |
+| `get_particle_system` | Cascade ParticleSystem: emitters (sprite / mesh / GPU / beam / ribbon, material + blend mode, mesh, alignment, duration / loops, subUV grid, spawn rate, bursts) and each module's baked distributions (`curves=true` adds sampled values) |
+| `preview_particles` | contact sheet PNG of the CPU-simulated sprites (`time`, `frames`, `size`, `yaw`, `pitch`) |
 | `preview_blend_space` | PNG of the blended pose of a blend space at `x`/`y` (`time` 0..1 of each sample, played in sync) |
 | `get_world_info` | a map (.umap) as a scene: sublevels, placed meshes with Blueprint templates resolved, landscape components, instance counts, unresolved components (`filter=rock,-small` narrows the meshes). `path=Athena/Content/Maps/World_Layout/sot_world_layout_2.umap` is the whole sea: every island placed by the world layout; `islands=wsp_,-fort` / `region=[minX,minY,maxX,maxY]` select islands, `proxies=true` loads each island's merged LOD proxy instead (whole sea in seconds). Also lists lights by type, decal materials, height fog and the water level |
 | `preview_world` | renders a whole map (meshes, Blueprint components, landscape terrain coloured by paint layers) to a PNG; orbit with `yaw`/`pitch`/`zoom` or place the camera with `eye`/`target`. Lit by the map's sun / sky light / nearest 32 point and spot lights with its exponential height fog and the sea plane at the water level (`lights`, `fog`, `water`); `gizmos=true` outlines light ranges, spot cones and decal boxes |
@@ -127,6 +129,13 @@ Typical flow: `search` → `get_package` → `get_properties` / `preview_*` → 
   AnimBlueprintGeneratedClass.BakedStateMachines has states / transitions; the class defaults hold the
   `AnimGraphNode_*` player structs (node indices can't be mapped to states in cooked data). The GUI shows montages as a
   timeline over the posed mesh, blend spaces as a draggable grid with the blended pose, anim blueprints as a state graph.
+- Particles (Cascade): each module's `FRawDistribution*` property carries the cooked lookup table as tagged properties
+  (`Table{Op, EntryCount, EntryStride, SubEntryStride, TimeScale, TimeBias, Values}`; Op 1 value, 2 random min..max,
+  3 min or max); without a table the distribution export is read. SoT specifics: `Additional*` properties are per-group
+  overrides (ignored), Lifetime 0 = lives until the emitter dies with relative time looping over Required `LoopTime`,
+  SubImageIndex runs past the grid (wraps), VFX textures are often masks without alpha (brightness used as alpha).
+  The preview simulation covers spawn / bursts / lifetime / size / color / velocity / cone / acceleration / drag /
+  sphere + cylinder location / rotation / subUV; other modules are listed as not previewed.
 - Morph targets (UMorphTarget): after the tagged properties a 4-byte object-guid flag, the strip flags (2 bytes), then per
   LOD `{PositionDelta, TangentZDelta, SourceIdx}` (28 bytes, SourceIdx = render vertex). SoT's `MeshPatchAsset` exports
   in the same packages are a different (custom) thing.

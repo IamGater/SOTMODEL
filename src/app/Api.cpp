@@ -57,6 +57,7 @@ Api::Api(Settings& s) : settings(s) {
     RegisterLocalizationTools(*this);
     RegisterSearchTools(*this);
     RegisterShaderTools(*this);
+    RegisterParticleTools(*this);
 }
 
 bool Api::EnsureMounted(std::string* error) {

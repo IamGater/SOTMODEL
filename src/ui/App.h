@@ -7,6 +7,7 @@
 #include "ue/MeshExtras.h"
 #include "ue/AnimPose.h"
 #include "ue/AnimAssets.h"
+#include "ue/Particles.h"
 #include "export/Exporter.h"
 #include "audio/Player.h"
 #include "ue/DataTable.h"
@@ -98,6 +99,15 @@ struct Document {
     // animation blueprint: baked state machines (graph in the side panel)
     std::shared_ptr<AnimBlueprintInfo> animBp;
     int smSel = 0, smState = -1;
+    // particle system: CPU simulation drawn as sprites in the side panel
+    std::shared_ptr<ParticleSystemInfo> particles;
+    std::shared_ptr<ParticleSim> psim;
+    std::vector<std::shared_ptr<GpuTexture>> psTextures;   // per emitter (material's texture, masks as alpha)
+    std::vector<char> psVisible;
+    float psTime = 0, psSpeed = 1, psLength = 1, psYaw = -135, psPitch = -15, psDist = 300;
+    Vec3 psCentre;
+    bool psPlaying = true, psLoop = true, psGrid = true, psSolo = false;
+    int psSel = -1, psModule = -1;
     std::shared_ptr<CollisionData> collision;   // loaded when "Collision" is first switched on
     std::string collisionNote;
     bool showCollision = false;
@@ -235,6 +245,7 @@ private:
     bool AnimAssetPose(Document& d, std::vector<Bone>& pose);
     void DrawAnimAssetHeader(Document& d);
     void DrawStateMachinePanel(Document& d);
+    void DrawParticlePanel(Document& d);   // ParticlePanel.cpp
     void DrawWorld(Document& d);
     void LoadWorld(std::shared_ptr<Document> d);
     void LoadAnimationMesh(std::shared_ptr<Document> d, std::string meshPath);

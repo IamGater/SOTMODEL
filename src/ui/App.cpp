@@ -467,6 +467,22 @@ void App::LoadDocument(std::shared_ptr<Document> d) {
             } else {
                 d->error = "material: " + err;
             }
+        } else if (main && d->className == "ParticleSystem") {
+            auto ps = std::make_shared<ParticleSystemInfo>();
+            if (ReadParticleSystem(*m_api->cache, *pkg, main - 1, *ps, &err)) {
+                for (auto& e : ps->emitters) {
+                    Image img;
+                    d->psTextures.push_back(LoadParticleTexture(*m_api->cache, e.material, 1024, img) ? m_renderer->CreateTexture(img, true, false) : nullptr);
+                    d->psLength = std::max(d->psLength, e.delay + e.duration);
+                }
+                d->psLength = std::min(d->psLength, 10.f);
+                d->psVisible.assign(ps->emitters.size(), 1);
+                ParticleFrame(*ps, d->psLength, d->psCentre, d->psDist);
+                auto sim = std::make_shared<ParticleSim>();
+                sim->Init(*ps);
+                d->particles = ps;
+                d->psim = sim;
+            } else d->error = "particles: " + err;
         } else if (main && IsWorldClass(d->className)) {
             d->isWorld = true;
             d->worldSea = IsWorldLayoutMap(d->gamePath);

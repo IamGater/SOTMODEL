@@ -1552,9 +1552,10 @@ void App::DrawDocContent(Document& d) {
     bool hasShaders = d.shaders != nullptr;
     bool hasGraph = d.matGraph != nullptr;
     bool hasSm = !d.loading && d.animBp != nullptr;
-    bool side = hasSm || has3d || hasImage || hasAudio || hasTable || hasShaders || hasGraph;
+    bool hasParticles = !d.loading && d.particles != nullptr;
+    bool side = hasParticles || hasSm || has3d || hasImage || hasAudio || hasTable || hasShaders || hasGraph;
     float splitW = Dip(4);
-    if (side && d.sideW <= 0) d.sideW = hasGraph || hasSm ? avail.x * 0.55f : hasShaders ? std::min(avail.x * 0.4f, Dip(520)) : has3d || hasTable ? avail.x * 0.6f : std::min(avail.x * 0.45f, Dip(400) + avail.x * 0.1f);
+    if (side && d.sideW <= 0) d.sideW = hasGraph || hasSm || hasParticles ? avail.x * 0.6f : hasShaders ? std::min(avail.x * 0.4f, Dip(520)) : has3d || hasTable ? avail.x * 0.6f : std::min(avail.x * 0.45f, Dip(400) + avail.x * 0.1f);
     float sideW = side ? std::clamp(d.sideW, Dip(160), std::max(Dip(160), avail.x - Dip(200))) : 0;
     float editW = side ? avail.x - sideW - splitW : avail.x;
     ImVec2 p = ImGui::GetCursorScreenPos();
@@ -1570,6 +1571,14 @@ void App::DrawDocContent(Document& d) {
         ImGui::BeginChild("##matgraph", ImVec2(sideW, avail.y), ImGuiChildFlags_None, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
         DrawMaterialGraphPanel(d);
         ImGui::EndChild();
+        return;
+    }
+    if (hasParticles) {
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(Dip(6), Dip(6)));
+        ImGui::BeginChild("##particles", ImVec2(sideW, avail.y), ImGuiChildFlags_AlwaysUseWindowPadding, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+        DrawParticlePanel(d);
+        ImGui::EndChild();
+        ImGui::PopStyleVar();
         return;
     }
     if (hasSm) {
