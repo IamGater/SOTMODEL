@@ -108,6 +108,9 @@ bool IsHelperMesh(const std::string& meshPath) {
     for (auto pre : {"volumetric_", "shape_", "cmn_shape_", "wil_fish_", "cyl", "sm_proxy_"})   // sm_proxy_: merged HLOD stand-in of a whole level
         if (n.rfind(pre, 0) == 0) return true;
     if (n == "cube" || n == "quad_plane" || n == "sphere" || n == "plane") return true;
+    // ship helpers: the water / rain occluder hulls, the on-board volume and the simplified hit mesh
+    for (auto part : {"_water_occ", "_rain_occlusion", "_onboard_vol", "_hits_simple"})
+        if (n.find(part) != std::string::npos) return true;
     return n.find("procanim") != std::string::npos || n.find("splineeditormesh") != std::string::npos;
 }
 
