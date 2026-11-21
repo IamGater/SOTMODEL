@@ -4,6 +4,7 @@
 #include "imgui_impl_win32.h"
 #include "imgui_impl_dx11.h"
 #include "export/Png.h"
+#include "ui/Icons.h"
 #include <windows.h>
 #include <dwmapi.h>
 #include <d3d11.h>
@@ -11,6 +12,9 @@
 #include <dxgi1_2.h>
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
+
+ImFont* g_iconFont = nullptr;
+ImFont* g_iconFillFont = nullptr;
 
 namespace {
 ComPtr<ID3D11Device> g_dev;
@@ -392,6 +396,17 @@ int RunGui(const std::vector<std::string>& args) {
     }
     ImFont* mono = io.Fonts->AddFontFromFileTTF((fonts + "consola.ttf").c_str(), 13.f * scale, &cfg);
     ImFont* bold = io.Fonts->AddFontFromFileTTF((fonts + "seguisb.ttf").c_str(), 16.f * scale, &cfg);   // Segoe UI Semibold: card titles
+    // Phosphor icon fonts, embedded (Resources.rc); the atlas reads the resource memory in place
+    for (int id : {101, 102}) {
+        HRSRC rs = FindResourceW(nullptr, MAKEINTRESOURCEW(id), MAKEINTRESOURCEW(10) /*RT_RCDATA*/);
+        HGLOBAL rg = rs ? LoadResource(nullptr, rs) : nullptr;
+        void* data = rg ? LockResource(rg) : nullptr;
+        if (!data) continue;
+        ImFontConfig ic;
+        ic.FontDataOwnedByAtlas = false;
+        ImFont* f = io.Fonts->AddFontFromMemoryTTF(data, (int)SizeofResource(nullptr, rs), 16.f * scale, &ic);
+        (id == 101 ? g_iconFont : g_iconFillFont) = f;
+    }
 
     ImGui_ImplWin32_Init(hwnd);
     ImGui_ImplDX11_Init(g_dev.Get(), g_ctx.Get());

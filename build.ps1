@@ -80,8 +80,20 @@ if ($stale.Count) {
     }
 }
 
+# embedded resources (icon fonts)
+$rcSrc = Join-Path $root 'src\ui\Resources.rc'
+$res = Join-Path $obj 'Resources.res'
+$rcInputs = @(Get-Item $rcSrc) + @(Get-ChildItem "$root\third_party\phosphor" -Filter *.ttf)
+$resStale = -not (Test-Path $res) -or ($rcInputs | Where-Object { $_.LastWriteTime -gt (Get-Item $res).LastWriteTime })
+if ($resStale) {
+    Write-Host 'Compiling resources'
+    & rc.exe /nologo /fo $res $rcSrc
+    if ($LASTEXITCODE) { throw "rc failed ($LASTEXITCODE)" }
+}
+$objs += $res
+
 $exe = Join-Path $bin 'SOTModel.exe'
-$needLink = -not (Test-Path $exe) -or $stale.Count -gt 0
+$needLink = -not (Test-Path $exe) -or $stale.Count -gt 0 -or $resStale
 if ($needLink) {
     Write-Host 'Linking'
     $libs = @('d3d11.lib', 'dxgi.lib', 'd3dcompiler.lib', 'bcrypt.lib', 'user32.lib', 'gdi32.lib', 'shell32.lib', 'ole32.lib', 'comdlg32.lib', 'dwmapi.lib', 'imm32.lib', 'shlwapi.lib', 'winmm.lib')

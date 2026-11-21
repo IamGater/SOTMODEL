@@ -1,0 +1,3 @@
+// Embedded data (build.ps1 compiles this with rc.exe). IDs match ui/Icons.h.
+101 RCDATA "../../third_party/phosphor/Phosphor.ttf"
+102 RCDATA "../../third_party/phosphor/Phosphor-Fill.ttf"

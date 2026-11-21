@@ -3,6 +3,7 @@
 // Sizes and colours follow FModel's XAML; every icon is drawn here (no FModel artwork). The 3D preview is our own viewer.
 #include "ui/App.h"
 #include "ui/UiCommon.h"
+#include "ui/Icons.h"
 #include "render/ShaderTools.h"
 #include "imgui.h"
 #include "imgui_internal.h"
@@ -78,224 +79,80 @@ void TextCentered(ImDrawList* dl, float x0, float x1, float y, ImU32 c, const st
     else TextEllipsis(dl, ImVec2(x0, y), x1, c, s.c_str());
 }
 
-// ------------------------------------------------------------------ icons (own drawings)
+// ------------------------------------------------------------------ icons (Phosphor glyphs, ui/Icons.h)
 
-void IconSearch(ImDrawList* dl, ImVec2 c, float s, ImU32 col) {
-    float r = s * 0.28f, t = std::max(1.f, s * 0.1f);
-    ImVec2 o(c.x - s * 0.08f, c.y - s * 0.08f);
-    dl->AddCircle(o, r, col, 0, t);
-    dl->AddLine(ImVec2(o.x + r * 0.7f, o.y + r * 0.7f), ImVec2(c.x + s * 0.38f, c.y + s * 0.38f), col, t * 1.2f);
+// Draws one icon glyph centred on c (by the glyph's own bounds), s = font size in pixels.
+void Glyph(ImDrawList* dl, ImVec2 c, float s, ImU32 col, const char* utf8, bool fill = false) {
+    ImFont* f = fill ? g_iconFillFont : g_iconFont;
+    if (!f) return;
+    unsigned int cp = 0;
+    ImTextCharFromUtf8(&cp, utf8, nullptr);
+    const ImFontGlyph* g = f->GetFontBaked(s)->FindGlyph((ImWchar)cp);
+    if (!g) return;
+    ImVec2 p(IM_ROUND(c.x - (g->X0 + g->X1) * 0.5f), IM_ROUND(c.y - (g->Y0 + g->Y1) * 0.5f));
+    dl->AddText(f, s, p, col, utf8);
 }
-void IconBackspace(ImDrawList* dl, ImVec2 c, float s, ImU32 col) {   // key shape pointing left with an x
-    float w = s * 0.8f, h = s * 0.56f, x0 = c.x - w * 0.5f, t = std::max(1.f, s * 0.08f);
-    ImVec2 pts[5] = {{x0, c.y}, {x0 + w * 0.3f, c.y - h * 0.5f}, {x0 + w, c.y - h * 0.5f}, {x0 + w, c.y + h * 0.5f}, {x0 + w * 0.3f, c.y + h * 0.5f}};
-    dl->AddPolyline(pts, 5, col, ImDrawFlags_Closed, t);
-    float k = h * 0.2f, cx = x0 + w * 0.64f;
-    dl->AddLine(ImVec2(cx - k, c.y - k), ImVec2(cx + k, c.y + k), col, t);
-    dl->AddLine(ImVec2(cx - k, c.y + k), ImVec2(cx + k, c.y - k), col, t);
-}
-void IconClose(ImDrawList* dl, ImVec2 c, float s, ImU32 col) {
-    float k = s * 0.28f, t = std::max(1.f, s * 0.1f);
-    dl->AddLine(ImVec2(c.x - k, c.y - k), ImVec2(c.x + k, c.y + k), col, t);
-    dl->AddLine(ImVec2(c.x - k, c.y + k), ImVec2(c.x + k, c.y - k), col, t);
-}
-void IconPlus(ImDrawList* dl, ImVec2 c, float s, ImU32 col) {
-    float k = s * 0.32f, t = std::max(1.f, s * 0.11f);
-    dl->AddLine(ImVec2(c.x - k, c.y), ImVec2(c.x + k, c.y), col, t);
-    dl->AddLine(ImVec2(c.x, c.y - k), ImVec2(c.x, c.y + k), col, t);
-}
-// chevron pointing along angle (radians, 0 = right, y down)
+
+void IconSearch(ImDrawList* dl, ImVec2 c, float s, ImU32 col) { Glyph(dl, c, s, col, PH_MAGNIFYING_GLASS); }
+void IconBackspace(ImDrawList* dl, ImVec2 c, float s, ImU32 col) { Glyph(dl, c, s, col, PH_BACKSPACE); }
+void IconClose(ImDrawList* dl, ImVec2 c, float s, ImU32 col) { Glyph(dl, c, s * 1.2f, col, PH_X); }
+void IconPlus(ImDrawList* dl, ImVec2 c, float s, ImU32 col) { Glyph(dl, c, s, col, PH_PLUS); }
+// caret pointing along angle (radians, 0 = right, y down); diagonals (tree "open") point down
 void IconChevron(ImDrawList* dl, ImVec2 c, float s, float angle, ImU32 col) {
-    ImVec2 d(cosf(angle), sinf(angle)), n(-d.y, d.x);
-    float a = s * 0.18f;
-    ImVec2 tip(c.x + d.x * a, c.y + d.y * a), b(c.x - d.x * a, c.y - d.y * a);
-    ImVec2 pts[3] = {{b.x + n.x * a * 1.6f, b.y + n.y * a * 1.6f}, tip, {b.x - n.x * a * 1.6f, b.y - n.y * a * 1.6f}};
-    dl->AddPolyline(pts, 3, col, 0, std::max(1.2f, s * 0.11f));
+    float sy = sinf(angle);
+    const char* g = sy > 0.3f ? PH_CARET_DOWN : sy < -0.3f ? PH_CARET_UP : cosf(angle) > 0 ? PH_CARET_RIGHT : PH_CARET_LEFT;
+    Glyph(dl, c, s * 0.8f, col, g);
 }
-void IconGrid(ImDrawList* dl, ImVec2 c, float s, ImU32 col) {
-    float g = s * 0.1f, q = (s * 0.8f - g) * 0.5f, x0 = c.x - s * 0.4f, y0 = c.y - s * 0.4f;
-    for (int i = 0; i < 4; i++) {
-        float x = x0 + (i % 2) * (q + g), y = y0 + (i / 2) * (q + g);
-        dl->AddRectFilled(ImVec2(x, y), ImVec2(x + q, y + q), col, s * 0.05f);
-    }
+void IconGrid(ImDrawList* dl, ImVec2 c, float s, ImU32 col) { Glyph(dl, c, s * 1.15f, col, PH_SQUARES_FOUR); }
+void IconList(ImDrawList* dl, ImVec2 c, float s, ImU32 col) { Glyph(dl, c, s * 1.15f, col, PH_LIST); }
+void IconLocate(ImDrawList* dl, ImVec2 c, float s, ImU32 col) { Glyph(dl, c, s, col, PH_CROSSHAIR); }
+void IconFold(ImDrawList* dl, ImVec2 c, float s, ImU32 col) { Glyph(dl, c, s, col, PH_ARROWS_IN_LINE_VERTICAL); }
+void IconOpenExternal(ImDrawList* dl, ImVec2 c, float s, ImU32 col) { Glyph(dl, c, s, col, PH_ARROW_SQUARE_OUT); }
+void IconTrash(ImDrawList* dl, ImVec2 c, float s, ImU32 col) { Glyph(dl, c, s, col, PH_TRASH); }
+void IconExpandLog(ImDrawList* dl, ImVec2 c, float s, ImU32 col, bool expanded) {
+    Glyph(dl, c, s, col, expanded ? PH_CARET_DOWN : PH_CARET_UP);
 }
-void IconList(ImDrawList* dl, ImVec2 c, float s, ImU32 col) {
-    for (int i = 0; i < 3; i++) {
-        float y = c.y - s * 0.3f + i * s * 0.3f;
-        dl->AddRectFilled(ImVec2(c.x - s * 0.4f, y - s * 0.06f), ImVec2(c.x - s * 0.24f, y + s * 0.06f), col);
-        dl->AddRectFilled(ImVec2(c.x - s * 0.14f, y - s * 0.06f), ImVec2(c.x + s * 0.4f, y + s * 0.06f), col);
-    }
-}
-void IconLocate(ImDrawList* dl, ImVec2 c, float s, ImU32 col) {
-    float r = s * 0.24f, t = std::max(1.f, s * 0.09f);
-    dl->AddCircle(c, r, col, 0, t);
-    dl->AddCircleFilled(c, s * 0.08f, col);
-    for (int k = 0; k < 4; k++) {
-        ImVec2 d(k == 0 ? 1.f : k == 1 ? -1.f : 0.f, k == 2 ? 1.f : k == 3 ? -1.f : 0.f);
-        dl->AddLine(ImVec2(c.x + d.x * r, c.y + d.y * r), ImVec2(c.x + d.x * s * 0.42f, c.y + d.y * s * 0.42f), col, t);
-    }
-}
-void IconFold(ImDrawList* dl, ImVec2 c, float s, ImU32 col) {   // two chevrons pointing at each other
-    float a = s * 0.18f;
-    IconChevron(dl, ImVec2(c.x, c.y - a * 1.4f), s, kPi * 0.5f, col);
-    IconChevron(dl, ImVec2(c.x, c.y + a * 1.4f), s, -kPi * 0.5f, col);
-}
-void IconOpenExternal(ImDrawList* dl, ImVec2 c, float s, ImU32 col) {
-    float t = std::max(1.f, s * 0.08f), h = s * 0.36f;
-    ImVec2 pts[5] = {{c.x, c.y - h}, {c.x - h, c.y - h}, {c.x - h, c.y + h}, {c.x + h, c.y + h}, {c.x + h, c.y}};
-    dl->AddPolyline(pts, 5, col, 0, t);
-    dl->AddLine(ImVec2(c.x - h * 0.1f, c.y + h * 0.1f), ImVec2(c.x + h * 1.05f, c.y - h * 1.05f), col, t);
-    dl->AddLine(ImVec2(c.x + h * 0.35f, c.y - h * 1.05f), ImVec2(c.x + h * 1.05f, c.y - h * 1.05f), col, t);
-    dl->AddLine(ImVec2(c.x + h * 1.05f, c.y - h * 1.05f), ImVec2(c.x + h * 1.05f, c.y - h * 0.35f), col, t);
-}
-void IconTrash(ImDrawList* dl, ImVec2 c, float s, ImU32 col) {
-    float w = s * 0.42f, h = s * 0.5f;
-    dl->AddRectFilled(ImVec2(c.x - w * 0.62f, c.y - h * 0.62f), ImVec2(c.x + w * 0.62f, c.y - h * 0.48f), col, 1);
-    dl->AddRectFilled(ImVec2(c.x - w * 0.2f, c.y - h * 0.76f), ImVec2(c.x + w * 0.2f, c.y - h * 0.6f), col, 1);
-    dl->AddRectFilled(ImVec2(c.x - w * 0.48f, c.y - h * 0.38f), ImVec2(c.x + w * 0.48f, c.y + h * 0.6f), col, s * 0.06f);
-    for (int k = -1; k <= 1; k++) dl->AddLine(ImVec2(c.x + k * w * 0.2f, c.y - h * 0.2f), ImVec2(c.x + k * w * 0.2f, c.y + h * 0.42f), kPanel, std::max(1.f, s * 0.06f));
-}
-void IconExpandLog(ImDrawList* dl, ImVec2 c, float s, ImU32 col, bool expanded) {   // up + down arrows
-    float k = s * 0.16f, t = std::max(1.f, s * 0.08f);
-    ImVec2 a(c.x - k * 1.2f, c.y), b(c.x + k * 1.2f, c.y);
-    dl->AddLine(ImVec2(a.x, a.y - k * 2.2f), ImVec2(a.x, a.y + k * 2.2f), col, t);
-    dl->AddLine(ImVec2(b.x, b.y - k * 2.2f), ImVec2(b.x, b.y + k * 2.2f), col, t);
-    float da = expanded ? 1.f : -1.f;   // which way the heads point flips with the state
-    dl->AddTriangleFilled(ImVec2(a.x, a.y - da * k * 2.6f), ImVec2(a.x - k, a.y - da * k * 1.4f), ImVec2(a.x + k, a.y - da * k * 1.4f), col);
-    dl->AddTriangleFilled(ImVec2(b.x, b.y + da * k * 2.6f), ImVec2(b.x - k, b.y + da * k * 1.4f), ImVec2(b.x + k, b.y + da * k * 1.4f), col);
-}
-void IconRefresh(ImDrawList* dl, ImVec2 c, float s, ImU32 col) {
-    float r = s * 0.3f, t = std::max(1.f, s * 0.09f);
-    dl->PathArcTo(c, r, kPi * 0.15f, kPi * 1.75f, 16);
-    dl->PathStroke(col, 0, t);
-    ImVec2 e(c.x + r * cosf(kPi * 0.15f), c.y + r * sinf(kPi * 0.15f));
-    dl->AddTriangleFilled(ImVec2(e.x + s * 0.12f, e.y - s * 0.02f), ImVec2(e.x - s * 0.1f, e.y - s * 0.04f), ImVec2(e.x + s * 0.02f, e.y + s * 0.16f), col);
-}
-void IconInfo(ImDrawList* dl, ImVec2 c, float s, ImU32 col) {
-    dl->AddCircle(c, s * 0.38f, col, 0, std::max(1.f, s * 0.08f));
-    dl->AddCircleFilled(ImVec2(c.x, c.y - s * 0.16f), s * 0.05f, col);
-    dl->AddRectFilled(ImVec2(c.x - s * 0.04f, c.y - s * 0.04f), ImVec2(c.x + s * 0.04f, c.y + s * 0.2f), col);
-}
-void IconKey(ImDrawList* dl, ImVec2 c, float s, ImU32 col) {
-    float t = std::max(1.f, s * 0.09f);
-    dl->AddCircle(ImVec2(c.x - s * 0.18f, c.y), s * 0.17f, col, 0, t);
-    dl->AddLine(ImVec2(c.x - s * 0.01f, c.y), ImVec2(c.x + s * 0.38f, c.y), col, t);
-    dl->AddLine(ImVec2(c.x + s * 0.26f, c.y), ImVec2(c.x + s * 0.26f, c.y + s * 0.14f), col, t);
-    dl->AddLine(ImVec2(c.x + s * 0.36f, c.y), ImVec2(c.x + s * 0.36f, c.y + s * 0.1f), col, t);
-}
-void IconCube(ImDrawList* dl, ImVec2 c, float s, ImU32 col) {
-    float r = s * 0.38f, t = std::max(1.f, s * 0.08f);
-    ImVec2 top(c.x, c.y - r), ul(c.x - r * 0.87f, c.y - r * 0.5f), ur(c.x + r * 0.87f, c.y - r * 0.5f);
-    ImVec2 bl(c.x - r * 0.87f, c.y + r * 0.5f), br(c.x + r * 0.87f, c.y + r * 0.5f), bot(c.x, c.y + r);
-    ImVec2 hex[6] = {top, ur, br, bot, bl, ul};
-    dl->AddPolyline(hex, 6, col, ImDrawFlags_Closed, t);
-    dl->AddLine(ul, c, col, t);
-    dl->AddLine(ur, c, col, t);
-    dl->AddLine(c, bot, col, t);
-}
-void IconClock(ImDrawList* dl, ImVec2 c, float s, ImU32 col) {
-    float t = std::max(1.f, s * 0.08f);
-    dl->AddCircle(c, s * 0.36f, col, 0, t);
-    dl->AddLine(c, ImVec2(c.x, c.y - s * 0.22f), col, t);
-    dl->AddLine(c, ImVec2(c.x + s * 0.16f, c.y + s * 0.08f), col, t);
-}
-void IconNote(ImDrawList* dl, ImVec2 c, float s, ImU32 col) {
-    float t = std::max(1.f, s * 0.09f);
-    dl->AddCircleFilled(ImVec2(c.x - s * 0.16f, c.y + s * 0.22f), s * 0.12f, col);
-    dl->AddLine(ImVec2(c.x - s * 0.05f, c.y + s * 0.22f), ImVec2(c.x - s * 0.05f, c.y - s * 0.32f), col, t);
-    dl->AddLine(ImVec2(c.x - s * 0.05f, c.y - s * 0.32f), ImVec2(c.x + s * 0.25f, c.y - s * 0.2f), col, t);
-}
-void IconImages(ImDrawList* dl, ImVec2 c, float s, ImU32 col) {
-    float t = std::max(1.f, s * 0.08f), w = s * 0.34f;
-    dl->AddRect(ImVec2(c.x - w, c.y - w * 0.8f), ImVec2(c.x + w, c.y + w * 0.8f), col, 1, 0, t);
-    dl->AddTriangleFilled(ImVec2(c.x - w * 0.7f, c.y + w * 0.6f), ImVec2(c.x - w * 0.1f, c.y - w * 0.1f), ImVec2(c.x + w * 0.4f, c.y + w * 0.6f), col);
-    dl->AddCircleFilled(ImVec2(c.x + w * 0.45f, c.y - w * 0.35f), s * 0.06f, col);
-}
-void IconExportBox(ImDrawList* dl, ImVec2 c, float s, ImU32 col) {
-    float t = std::max(1.f, s * 0.08f), w = s * 0.3f;
-    dl->AddRect(ImVec2(c.x - w, c.y - w * 0.4f), ImVec2(c.x + w * 0.5f, c.y + w), col, 1, 0, t);
-    dl->AddLine(ImVec2(c.x - w * 0.2f, c.y + w * 0.2f), ImVec2(c.x + w * 1.2f, c.y - w * 1.2f), col, t);
-    dl->AddLine(ImVec2(c.x + w * 0.5f, c.y - w * 1.2f), ImVec2(c.x + w * 1.2f, c.y - w * 1.2f), col, t);
-    dl->AddLine(ImVec2(c.x + w * 1.2f, c.y - w * 1.2f), ImVec2(c.x + w * 1.2f, c.y - w * 0.5f), col, t);
-}
-void IconTag(ImDrawList* dl, ImVec2 c, float s, ImU32 col) {   // label: pointed tag with a hole
-    float w = s * 0.82f, h = s * 0.5f, x0 = c.x - w * 0.5f;
-    ImVec2 pts[5] = {{x0, c.y - h * 0.5f}, {x0 + w * 0.7f, c.y - h * 0.5f}, {x0 + w, c.y}, {x0 + w * 0.7f, c.y + h * 0.5f}, {x0, c.y + h * 0.5f}};
-    dl->AddConvexPolyFilled(pts, 5, col);
-    dl->AddCircleFilled(ImVec2(x0 + w * 0.68f, c.y), s * 0.06f, kPanel);
-}
-void IconArchive(ImDrawList* dl, ImVec2 c, float s, bool enabled) {   // pak: green sheet with a zip strip
-    ImU32 body = enabled ? IM_COL32(96, 186, 112, 255) : IM_COL32(120, 120, 130, 255);
-    float w = s * 0.7f, h = s * 0.88f, fold = w * 0.3f;
-    ImVec2 p(c.x - w * 0.5f, c.y - h * 0.5f);
-    dl->AddRectFilled(p, ImVec2(p.x + w - fold, p.y + h), body, s * 0.06f);
-    dl->AddRectFilled(ImVec2(p.x + w - fold - 1, p.y + fold), ImVec2(p.x + w, p.y + h), body, s * 0.06f);
-    dl->AddTriangleFilled(ImVec2(p.x + w - fold, p.y), ImVec2(p.x + w, p.y + fold), ImVec2(p.x + w - fold, p.y + fold), Shade(body, 0.7f));
-    for (int i = 0; i < 4; i++) {
-        float y = p.y + h * 0.18f + i * h * 0.17f;
-        dl->AddRectFilled(ImVec2(c.x - w * 0.12f + (i % 2) * w * 0.12f, y), ImVec2(c.x + (i % 2) * w * 0.12f, y + h * 0.09f), IM_COL32(235, 248, 236, 255));
-    }
+void IconRefresh(ImDrawList* dl, ImVec2 c, float s, ImU32 col) { Glyph(dl, c, s, col, PH_ARROWS_CLOCKWISE); }
+void IconInfo(ImDrawList* dl, ImVec2 c, float s, ImU32 col) { Glyph(dl, c, s, col, PH_INFO); }
+void IconKey(ImDrawList* dl, ImVec2 c, float s, ImU32 col) { Glyph(dl, c, s, col, PH_KEY); }
+void IconCube(ImDrawList* dl, ImVec2 c, float s, ImU32 col) { Glyph(dl, c, s, col, PH_CUBE); }
+void IconClock(ImDrawList* dl, ImVec2 c, float s, ImU32 col) { Glyph(dl, c, s, col, PH_CLOCK); }
+void IconNote(ImDrawList* dl, ImVec2 c, float s, ImU32 col) { Glyph(dl, c, s, col, PH_MUSIC_NOTE); }
+void IconImages(ImDrawList* dl, ImVec2 c, float s, ImU32 col) { Glyph(dl, c, s, col, PH_IMAGES); }
+void IconExportBox(ImDrawList* dl, ImVec2 c, float s, ImU32 col) { Glyph(dl, c, s, col, PH_EXPORT); }
+void IconTag(ImDrawList* dl, ImVec2 c, float s, ImU32 col) { Glyph(dl, c, s, col, PH_TAG, true); }
+void IconArchive(ImDrawList* dl, ImVec2 c, float s, bool enabled) {   // pak: green when mounted
+    Glyph(dl, c, s * 1.1f, enabled ? IM_COL32(96, 186, 112, 255) : IM_COL32(120, 120, 130, 255), PH_FILE_ZIP, true);
 }
 
-// Folder (closed / open) in FModel's warm two-tone palette; size = width of the icon box
+// Folder (closed / open) in FModel's warm colour; mn = top-left of a size x size box
 void IconFolder(ImDrawList* dl, ImVec2 mn, float size, bool open) {
-    float w = size, h = size * 0.82f, r = size * 0.08f;
-    ImVec2 p(mn.x, mn.y + (size - h) * 0.5f);
-    const ImU32 tabA = IM_COL32(232, 196, 128, 255), tabB = IM_COL32(217, 170, 99, 255);
-    const ImU32 bodyA = IM_COL32(243, 217, 164, 255), bodyB = IM_COL32(229, 189, 119, 255), line = IM_COL32(172, 120, 63, 255);
-    float t = std::max(1.f, size / 18.f);
-    // back panel with its tab
-    dl->AddRectFilled(p, ImVec2(p.x + w * 0.45f, p.y + h * 0.3f), tabA, r);
-    dl->AddRectFilledMultiColor(ImVec2(p.x, p.y + h * 0.14f), ImVec2(p.x + w, p.y + h), tabA, tabA, tabB, tabB);
-    dl->AddRect(ImVec2(p.x, p.y + h * 0.14f), ImVec2(p.x + w, p.y + h), line, 0, 0, t);
-    if (!open) {
-        dl->AddRectFilledMultiColor(ImVec2(p.x, p.y + h * 0.36f), ImVec2(p.x + w, p.y + h), bodyA, bodyA, bodyB, bodyB);
-        dl->AddRect(ImVec2(p.x, p.y + h * 0.36f), ImVec2(p.x + w, p.y + h), line, 0, 0, t);
-    } else {   // front panel tilted forward
-        ImVec2 q[4] = {{p.x + w * 0.2f, p.y + h * 0.42f}, {p.x + w * 1.06f, p.y + h * 0.42f}, {p.x + w * 0.86f, p.y + h}, {p.x, p.y + h}};
-        dl->AddConvexPolyFilled(q, 4, bodyA);
-        dl->AddPolyline(q, 4, line, ImDrawFlags_Closed, t);
-    }
+    Glyph(dl, ImVec2(mn.x + size * 0.5f, mn.y + size * 0.5f), size * 1.15f, IM_COL32(229, 189, 119, 255), open ? PH_FOLDER_OPEN : PH_FOLDER, true);
 }
 
 ImU32 FileTint(std::string_view name) {
     if (IEndsWith(name, ".umap")) return IM_COL32(255, 160, 40, 255);
     if (IEndsWith(name, ".uasset")) return IM_COL32(40, 150, 255, 255);
     if (IEndsWith(name, ".ubulk") || IEndsWith(name, ".uexp")) return IM_COL32(160, 120, 235, 255);
+    if (IEndsWith(name, ".wem") || IEndsWith(name, ".bnk")) return IM_COL32(94, 188, 144, 255);
     return IM_COL32(245, 215, 40, 255);
 }
 
-// Per type glyphs: folded map (.umap), cube (.uasset), sheet with lines (anything else)
+// Per type glyphs: map (.umap), cube (.uasset), audio, localisation, text / code, bulk data, any other file
 void FileGlyph(ImDrawList* dl, ImVec2 c, float s, std::string_view name, ImU32 bg) {
-    ImU32 col = FileTint(name);
-    if (IEndsWith(name, ".umap")) {
-        float w = s * 0.9f, h = s * 0.7f, x0 = c.x - w * 0.5f, y0 = c.y - h * 0.5f, pw = w / 3, k = h * 0.1f;
-        for (int i = 0; i < 3; i++) {
-            float xa = x0 + pw * i, xb = xa + pw, ya = (i % 2) ? k : 0, yb = (i % 2) ? 0 : k;
-            dl->AddQuadFilled(ImVec2(xa, y0 + ya), ImVec2(xb, y0 + yb), ImVec2(xb, y0 + h + yb - k), ImVec2(xa, y0 + h + ya - k), (i % 2) ? Shade(col, 0.8f) : col);
-        }
-        dl->AddCircleFilled(ImVec2(x0 + pw * 1.5f, y0 + h * 0.42f), s * 0.08f, bg);
-        return;
-    }
-    if (IEndsWith(name, ".uasset")) {
-        float r = s * 0.45f;
-        ImVec2 top(c.x, c.y - r), ul(c.x - r * 0.87f, c.y - r * 0.5f), ur(c.x + r * 0.87f, c.y - r * 0.5f);
-        ImVec2 bl(c.x - r * 0.87f, c.y + r * 0.5f), br(c.x + r * 0.87f, c.y + r * 0.5f), bot(c.x, c.y + r);
-        dl->AddQuadFilled(top, ur, c, ul, Shade(col, 1.15f));
-        dl->AddQuadFilled(ul, c, bot, bl, col);
-        dl->AddQuadFilled(c, ur, br, bot, Shade(col, 0.72f));
-        return;
-    }
-    float w = s * 0.62f, h = s * 0.8f, fold = w * 0.3f;
-    ImVec2 p(c.x - w * 0.5f, c.y - h * 0.5f);
-    dl->AddRectFilled(p, ImVec2(p.x + w - fold, p.y + h), col, s * 0.04f);
-    dl->AddRectFilled(ImVec2(p.x + w - fold - 1, p.y + fold), ImVec2(p.x + w, p.y + h), col, s * 0.04f);
-    dl->AddTriangleFilled(ImVec2(p.x + w - fold, p.y), ImVec2(p.x + w, p.y + fold), ImVec2(p.x + w - fold, p.y + fold), Shade(col, 0.7f));
-    for (int i = 0; i < 3; i++) {
-        float ly = p.y + h * (0.45f + i * 0.15f);
-        dl->AddRectFilled(ImVec2(p.x + w * 0.18f, ly), ImVec2(p.x + w * (i == 2 ? 0.55f : 0.82f), ly + s * 0.05f), bg);
-    }
+    (void)bg;
+    const char* g = IEndsWith(name, ".umap")                                                ? PH_MAP_TRIFOLD
+                    : IEndsWith(name, ".uasset")                                            ? PH_CUBE
+                    : IEndsWith(name, ".wem") || IEndsWith(name, ".bnk")                    ? PH_FILE_AUDIO
+                    : IEndsWith(name, ".locres") || IEndsWith(name, ".locmeta")             ? PH_TRANSLATE
+                    : IEndsWith(name, ".ubulk") || IEndsWith(name, ".uexp")                 ? PH_FILE_DASHED
+                    : IEndsWith(name, ".ushaderbytecode") || IEndsWith(name, ".usf") || IEndsWith(name, ".bin") ? PH_FILE_CODE
+                    : IEndsWith(name, ".ini") || IEndsWith(name, ".txt") || IEndsWith(name, ".json") || IEndsWith(name, ".xml") || IEndsWith(name, ".csv")
+                        ? PH_FILE_TEXT
+                        : PH_FILE;
+    Glyph(dl, c, s * 1.05f, FileTint(name), g, true);
 }
+
 
 using IconFn = void (*)(ImDrawList*, ImVec2, float, ImU32);
 
