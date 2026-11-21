@@ -5,10 +5,12 @@
 #include "ue/World.h"
 #include <map>
 
+struct CollisionData;
 struct MeshExportOptions {
     int lod = 0;
     bool embedTextures = true;
     int maxTextureSize = 0;   // 0 = full resolution
+    const CollisionData* collision = nullptr;   // simple collision as a separate "Collision" node (UCX_ mesh)
 };
 
 // Shared helper: resolves mesh material slots into glTF materials (with decoded textures), caching per material path.

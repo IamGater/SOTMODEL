@@ -10,6 +10,8 @@ struct PreviewRequest {
     DrawOptions draw;
     bool fixedBounds = false;   // frame the camera on these bounds instead of the mesh's
     Vec3 boundsMin, boundsMax;
+    std::vector<Vec3> lines;    // overlay segments (pairs of points, mesh space), drawn on top
+    u32 lineColor = 0xff40d0ffu;
 };
 
 bool RenderMeshPreview(PackageCache& cache, const MeshData& mesh, const PreviewRequest& req, Image& out, std::string* error);

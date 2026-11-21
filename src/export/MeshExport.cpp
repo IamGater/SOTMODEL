@@ -1,4 +1,5 @@
 #include "export/MeshExport.h"
+#include "ue/Collision.h"
 #include "export/Png.h"
 #include "ue/Texture.h"
 
@@ -72,6 +73,22 @@ bool ExportMeshGlb(PackageCache& cache, const MeshData& mesh, const MeshExportOp
     if (skinned) {
         int skin = g.AddSkin(mesh.skeleton, -1);
         g.SetNodeSkin(node, skin);
+    }
+    if (opt.collision && !opt.collision->shapes.empty()) {
+        MeshData cm;
+        cm.name = "UCX_" + mesh.name;
+        cm.lods.push_back(CollisionMesh(*opt.collision));
+        GltfBuilder::MaterialDesc mat;
+        mat.name = "Collision";
+        mat.baseColor[0] = 0.2f; mat.baseColor[1] = 0.9f; mat.baseColor[2] = 0.3f; mat.baseColor[3] = 0.35f;
+        mat.translucent = true;
+        mat.doubleSided = true;
+        int cmIdx = g.AddMesh(cm, 0, {g.AddMaterial(mat)}, false);
+        int cn = g.AddNode("Collision", -1);
+        int un = g.AddNode(cm.name, cmIdx, nullptr, cn);
+        g.SetNodeExtras(un, Fmt("{\"collision\":true,\"boxes\":%d,\"spheres\":%d,\"capsules\":%d,\"convex\":%d}",
+                                opt.collision->Count(CollisionShape::Box), opt.collision->Count(CollisionShape::Sphere),
+                                opt.collision->Count(CollisionShape::Capsule), opt.collision->Count(CollisionShape::Convex)));
     }
     out = g.Finish();
     return true;

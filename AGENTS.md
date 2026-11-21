@@ -71,8 +71,8 @@ or `/Game/Models/Props/Common/cmn_barrel_debris_02_a.cmn_barrel_debris_02_a`.
 | `get_package` | cheap overview: exports + classes, dependencies, decoded native summaries |
 | `get_properties` | full FModel-style JSON (optionally one export) |
 | `preview_texture` | decoded texture as a PNG image + format info |
-| `get_mesh_info` | LODs, sections, material slots, bounds (and bones for skeletal meshes) |
-| `preview_mesh` | renders a mesh with its textures to a PNG (`yaw`/`pitch` orbit, `wireframe`, `lod`) |
+| `get_mesh_info` | LODs, sections, material slots, bounds (and bones for skeletal meshes). Includes the simple collision: BodySetup (static) or PhysicsAsset (skeletal) box / sphere / capsule / convex counts |
+| `preview_mesh` | renders a mesh with its textures to a PNG (`yaw`/`pitch` orbit, `wireframe`, `lod`). `collision=true` overlays the simple collision as green wireframe |
 | `get_animation_info` | AnimSequence: frames, length, fps, compression, skeleton, animated bones (+ a mesh that can show it) |
 | `preview_animation` | contact sheet PNG of an animation posed on a skeletal mesh (found automatically or `mesh=`) |
 | `get_world_info` | a map (.umap) as a scene: sublevels, placed meshes with Blueprint templates resolved, landscape components, instance counts, unresolved components (`filter=rock,-small` narrows the meshes). `path=Athena/Content/Maps/World_Layout/sot_world_layout_2.umap` is the whole sea: every island placed by the world layout; `islands=wsp_,-fort` / `region=[minX,minY,maxX,maxY]` select islands, `proxies=true` loads each island's merged LOD proxy instead (whole sea in seconds). Also lists lights by type, decal materials, height fog and the water level |
@@ -94,7 +94,7 @@ or `/Game/Models/Props/Common/cmn_barrel_debris_02_a.cmn_barrel_debris_02_a`.
 | `find_references` | packages that import the given one (meshes using a material, maps placing a Blueprint, ...); index built once, then cached |
 | `search_content` | packages by main class, by what they use (`uses`), by property name / value (structs, arrays and DataTable rows searched) |
 | `get_material` | material instance chain with every texture / scalar / vector parameter resolved |
-| `export` | write files: textures (PNG/DDS), meshes (glTF/OBJ), animations (glTF with skeleton + skinned mesh), JSON; `raw=true` writes any file as stored |
+| `export` | write files: textures (PNG/DDS), meshes (glTF/OBJ), animations (glTF with skeleton + skinned mesh), JSON; `raw=true` writes any file as stored. Meshes as glb carry their simple collision as a separate `Collision` node (`UCX_<mesh>`, `collision=false` to skip) |
 | `get_audio_info` | Wwise audio: a `.wem` (codec, channels, rate, length) or a sound bank (`WwiseBank` package / `.bnk`) with its embedded media |
 | `export_audio` | decode Wwise audio to `.wav` (or `.ogg` for Wwise Vorbis); banks export every embedded sound |
 
@@ -116,6 +116,9 @@ Typical flow: `search` → `get_package` → `get_properties` / `preview_*` → 
   island level (`OriginatingLevelName`); matching each copy to the level's own volume (by name, else by brush extent) gives
   the level's yaw + translation. 95 islands; the Legendary Hideout and the Maiden Voyage island are not part of it.
   CLI arrays: `key=[1,2,3]`.
+- Collision: cooked 4.10 static meshes keep their BodySetup as an export under the mesh (not a tagged property).
+  Box X/Y/Z are full sizes; capsules (Sphyl) are along Z with Length = the cylinder part. Convex elements only store
+  their points (VertexData); SOTModel rebuilds the hull. Skeletal meshes: PhysicsAsset bodies at their bones' reference pose.
 - Lights / decals / fog: UE 4.10 decals are a unit box scaled by the component (no DecalSize yet). Point / spot lights with
   inverse-squared falloff are in lumens (glTF candela = lumens / 4pi). The open world's sun, sky light and the two
   ExponentialHeightFog components (above / under water) are in `wsp_common/wsp_lighting`, the FFT water in `wsp_water`;

@@ -1,4 +1,5 @@
 #include "export/Exporter.h"
+#include "ue/Collision.h"
 #include "ue/AssetJson.h"
 #include "ue/Texture.h"
 #include "export/Png.h"
@@ -102,6 +103,8 @@ bool ExportPackage(PackageCache& cache, const Package& pkg, const ExportOptions&
             MeshExportOptions mo;
             mo.maxTextureSize = opt.maxTextureSize;
             mo.embedTextures = opt.embedTextures;
+            CollisionData col;
+            if (opt.collision && ReadMeshCollision(cache, pkg, main - 1, mesh, col)) mo.collision = &col;
             Bytes glb;
             if (!ExportMeshGlb(cache, mesh, mo, glb, &err)) { ok = false; if (error) *error = err; }
             else ok &= WriteOut(ExportPathFor(opt, pkg, L".glb"), glb.data(), glb.size(), written);

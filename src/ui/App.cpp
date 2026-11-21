@@ -2,6 +2,7 @@
 #include "ui/UiCommon.h"
 #include "ue/AssetJson.h"
 #include "ue/Blueprint.h"
+#include "ue/Collision.h"
 #include "ue/WorldLayout.h"
 #include "imgui.h"
 #include "imgui_internal.h"
@@ -570,6 +571,7 @@ static void DrawViewport(Renderer& r, Document& d, ImVec2 size, bool allowFly) {
         Mat4 id = Mat4::Identity();
         r.DrawMesh(*d.gpuMesh, &id, 1);
         if (!d.boneLines.empty()) r.DrawLines(d.boneLines, 0xff40d0ffu);
+        if (d.showCollision && !d.collisionLines.empty()) r.DrawLines(d.collisionLines, 0xff60ff40u);
     });
 }
 
@@ -594,6 +596,17 @@ void App::DrawModel(Document& d) {
     FlowToggle("Wireframe", &d.draw.wireframe);
     FlowToggle("Grid", &d.draw.grid);
     FlowToggle("Cull", &d.draw.backfaceCulling);
+    if (FlowToggle("Collision", &d.showCollision) && d.showCollision && !d.collision) {
+        d.collision = std::make_shared<CollisionData>();
+        std::string err;
+        auto pkg = m_api->cache->LoadPath(d.gamePath, &err);
+        if (pkg && pkg->MainExport() && ReadMeshCollision(*m_api->cache, *pkg, pkg->MainExport() - 1, m, *d.collision, &err)) {
+            CollisionLines(*d.collision, d.collisionLines);
+            d.collisionNote = Fmt("%d boxes, %d spheres, %d capsules, %d convex", d.collision->Count(CollisionShape::Box), d.collision->Count(CollisionShape::Sphere),
+                                  d.collision->Count(CollisionShape::Capsule), d.collision->Count(CollisionShape::Convex));
+        } else d.collisionNote = "no simple collision: " + err;
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Simple collision (BodySetup / PhysicsAsset) as green wireframe%s%s", d.collisionNote.empty() ? "" : "\n", d.collisionNote.c_str());
     if (FlowButton("Frame")) d.camera.Frame(d.gpuMesh->boundsMin, d.gpuMesh->boundsMax);
     EndToolbar();
 

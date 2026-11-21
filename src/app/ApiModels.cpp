@@ -1,4 +1,5 @@
 #include "app/Api.h"
+#include "ue/Collision.h"
 #include "core/Json.h"
 #include "ue/Mesh.h"
 #include "ue/Material.h"
@@ -231,7 +232,7 @@ void RegisterMeshTools(Api& api) {
 
     api.Register({"get_mesh_info",
                   "Decoded static/skeletal mesh summary: LODs (vertices, triangles, UV sets, sections), material slots with paths, "
-                  "bounds in cm, and for skeletal meshes the bone hierarchy.",
+                  "bounds in cm, simple collision (BodySetup / PhysicsAsset shape counts), and for skeletal meshes the bone hierarchy.",
                   R"({"type":"object","properties":{"path":{"type":"string"},"bones":{"type":"boolean","default":true}},"required":["path"]})", "path",
                   [](Api& a, const JsonValue& args) {
                       std::string err;
@@ -279,6 +280,22 @@ void RegisterMeshTools(Api& api) {
                           w.EndObject();
                       }
                       w.EndArray();
+                      {
+                          CollisionData col;
+                          std::string cerr;
+                          w.Key("collision");
+                          w.BeginObject();
+                          if (ReadMeshCollision(*a.cache, *pkg, main - 1, m, col, &cerr)) {
+                              w.KV("source", col.source);
+                              w.KV("boxes", (i64)col.Count(CollisionShape::Box));
+                              w.KV("spheres", (i64)col.Count(CollisionShape::Sphere));
+                              w.KV("capsules", (i64)col.Count(CollisionShape::Capsule));
+                              w.KV("convex", (i64)col.Count(CollisionShape::Convex));
+                              if (col.bodies) w.KV("bodies", (i64)col.bodies);
+                          } else w.KV("none", cerr);
+                          if (!col.traceFlag.empty()) w.KV("traceFlag", col.traceFlag);
+                          w.EndObject();
+                      }
                       if (m.skeletal) {
                           if (!m.skeletonPath.empty()) w.KV("skeleton", m.skeletonPath);
                           w.KV("boneCount", (i64)m.skeleton.size());
@@ -305,7 +322,8 @@ void RegisterMeshTools(Api& api) {
                   "(yaw -135 pitch -20 is a 3/4 front view; yaw 0 looks along +X). Use 'save_to' to also write the PNG.",
                   R"({"type":"object","properties":{"path":{"type":"string"},"width":{"type":"integer","default":768},"height":{"type":"integer","default":768},)"
                   R"("yaw":{"type":"number","default":-135},"pitch":{"type":"number","default":-20},"lod":{"type":"integer","default":0},)"
-                  R"("textures":{"type":"boolean","default":true},"wireframe":{"type":"boolean","default":false},"grid":{"type":"boolean","default":true},"save_to":{"type":"string"}},"required":["path"]})",
+                  R"("textures":{"type":"boolean","default":true},"wireframe":{"type":"boolean","default":false},"grid":{"type":"boolean","default":true},)"
+                  R"("collision":{"type":"boolean","default":false,"description":"overlay the simple collision (boxes, spheres, capsules, convex hulls) as green wireframe"},"save_to":{"type":"string"}},"required":["path"]})",
                   "path",
                   [](Api& a, const JsonValue& args) {
                       std::string err;
@@ -323,6 +341,11 @@ void RegisterMeshTools(Api& api) {
                       req.draw.textures = args.GetBool("textures", true);
                       req.draw.wireframe = args.GetBool("wireframe", false);
                       req.draw.grid = args.GetBool("grid", true);
+                      CollisionData col;
+                      if (args.GetBool("collision", false) && ReadMeshCollision(*a.cache, *pkg, main - 1, m, col)) {
+                          CollisionLines(col, req.lines);
+                          req.lineColor = 0xff60ff40u;
+                      }
                       Image img;
                       if (!RenderMeshPreview(*a.cache, m, req, img, &err)) return ApiResult::Error(err);
                       ApiResult r;

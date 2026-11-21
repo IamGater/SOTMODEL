@@ -40,6 +40,7 @@ private:
 
 enum class DocView { Properties, Texture, Model, Material, Animation, World };
 
+struct CollisionData;
 struct Document {
     u64 id = 0;
     u32 entry = 0;
@@ -86,6 +87,10 @@ struct Document {
     float animTime = 0, animSpeed = 1;
     bool animPlaying = true, animLoop = true, showBones = false;
     std::vector<Vec3> boneLines;   // bone segments for the viewport (world space)
+    std::shared_ptr<CollisionData> collision;   // loaded when "Collision" is first switched on
+    std::string collisionNote;
+    bool showCollision = false;
+    std::vector<Vec3> collisionLines;
 
     // world (.umap)
     bool isWorld = false;

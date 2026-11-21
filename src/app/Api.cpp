@@ -390,7 +390,7 @@ void Api::RegisterAssetTools() {
     Register({"export",
               "Export a package to disk: textures -> PNG (or DDS), meshes -> glTF .glb (or OBJ), animations -> .glb, plus the JSON. "
               "Returns the written file paths. 'output_dir' defaults to the configured output directory.",
-              R"({"type":"object","properties":{"path":{"type":"string"},"output_dir":{"type":"string"},"texture_format":{"type":"string","enum":["png","dds"]},"mesh_format":{"type":"string","enum":["glb","obj"]},"json":{"type":"boolean","default":true},"raw":{"type":"boolean","default":false}},"required":["path"]})",
+              R"({"type":"object","properties":{"path":{"type":"string"},"output_dir":{"type":"string"},"texture_format":{"type":"string","enum":["png","dds"]},"mesh_format":{"type":"string","enum":["glb","obj"]},"json":{"type":"boolean","default":true},"raw":{"type":"boolean","default":false},"collision":{"type":"boolean","default":true,"description":"meshes as glb: simple collision as a separate Collision node"}},"required":["path"]})",
               "path",
               [](Api& a, const JsonValue& args) {
                   std::string err;
@@ -426,6 +426,7 @@ void Api::RegisterAssetTools() {
                   opt.meshFormat = args.GetStr("mesh_format", a.settings.meshFormat ? "obj" : "glb") == "obj" ? 1 : 0;
                   opt.json = args.GetBool("json", true);
                   opt.raw = args.GetBool("raw", false);
+                  opt.collision = args.GetBool("collision", true);
                   opt.keepDirectories = a.settings.exportKeepDirectories;
                   std::vector<std::string> written;
                   bool ok = ExportPackage(*a.cache, *pkg, opt, written, &err);

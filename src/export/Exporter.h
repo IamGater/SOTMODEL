@@ -12,6 +12,7 @@ struct ExportOptions {
     int maxTextureSize = 0;      // embedded textures: 0 = full resolution
     bool animationMesh = true;   // animations: include a skinned mesh using the same skeleton
     bool worlds = false;         // maps (.umap): export the whole scene as .glb (slow for big maps)
+    bool collision = true;       // meshes (glb): simple collision as a separate "Collision" node
 };
 
 std::wstring ExportPathFor(const ExportOptions& opt, const Package& pkg, const std::wstring& ext);
