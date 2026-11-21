@@ -223,6 +223,7 @@ void App::StartMount() {
                 else LOGW("not found: %s", p.c_str());
             }
             openOnStart.clear();
+            if (popoutOnStart && m_activeDoc) m_popoutDoc = m_activeDoc;   // --popout: the last opened tab's 3D view in its own window
         });
     });
 }
@@ -645,6 +646,62 @@ static void DrawViewport(Renderer& r, Document& d, ImVec2 size, bool allowFly) {
     });
 }
 
+// "Separate window" moves the tab's 3D viewer (toolbar, viewport, side list) into its own OS window (Gui.cpp hosts it);
+// drawn there the same button brings it back into the tab.
+void App::PopoutButton(Document& d, bool flow) {
+    const char* label = m_inPopout ? "Back to tab" : "Separate window";
+    if (flow ? FlowButton(label) : ImGui::Button(label)) {
+        if (m_inPopout) m_popoutDoc = 0;
+        else {
+            m_popoutDoc = d.id;
+            m_popoutFocus = true;
+        }
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip(m_inPopout ? "Show the 3D view in its tab again" : "Open the 3D view in its own window (e.g. on a second monitor)");
+}
+
+std::string App::PopoutTitle() const {
+    for (auto& d : m_docs)
+        if (d->id == m_popoutDoc) return "SOTModel - " + d->name;
+    return "SOTModel - 3D view";
+}
+
+// One frame of the separate viewer window (its own ImGui context, set current by Gui.cpp).
+void App::FramePopout() {
+    ImGuiIO& io = ImGui::GetIO();
+    if (io.MouseDelta.x != 0 || io.MouseDelta.y != 0 || io.MouseWheel != 0 || ImGui::IsAnyItemActive() || ImGui::IsAnyMouseDown() ||
+        io.InputQueueCharacters.Size)
+        m_busyFrames = 3;
+    Document* d = nullptr;
+    for (auto& x : m_docs)
+        if (x->id == m_popoutDoc) d = x.get();
+    float u = ImGui::GetFontSize() / 16.f;
+    const ImGuiViewport* vp = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(vp->WorkPos);
+    ImGui::SetNextWindowSize(vp->WorkSize);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6 * u, 6 * u));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(5 * u, 5 * u));
+    ImGui::Begin("##popout", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus);
+    bool has3d = d && !d->loading && ((d->hasMesh && (!d->hasMaterial || d->materialSphere)) || d->anim || d->isWorld);
+    if (has3d) {
+        m_inPopout = true;
+        if (d->isWorld) DrawWorld(*d);
+        else if (d->anim) DrawAnimation(*d);
+        else DrawModel(*d);
+        m_inPopout = false;
+    } else {
+        ImGui::TextDisabled(d && d->loading ? "Loading %s..." : "%s has no 3D view.", d ? d->name.c_str() : "The tab");
+        if (d && !d->loading) {
+            m_inPopout = true;
+            PopoutButton(*d, false);
+            m_inPopout = false;
+        }
+    }
+    ImGui::End();
+    ImGui::PopStyleVar(2);
+}
+
 void App::DrawModel(Document& d) {
     auto& m = *d.mesh;
     if (!d.meshExtrasLoaded) {
@@ -715,6 +772,7 @@ void App::DrawModel(Document& d) {
     }
     if (d.hasMaterial && FlowButton("Texture pages")) d.materialSphere = false;
     if (FlowButton("Frame")) d.camera.Frame(d.gpuMesh->boundsMin, d.gpuMesh->boundsMax);
+    PopoutButton(d, true);
     EndToolbar();
 
     const MeshLod& l = m.lods[std::clamp(d.lod, 0, (int)m.lods.size() - 1)];
@@ -789,7 +847,7 @@ void App::DrawAnimation(Document& d) {
     if (ImGui::Button(d.animPlaying ? "Pause" : "Play")) d.animPlaying = !d.animPlaying;
     ImGui::SameLine();
     float frame = d.animTime * fps;
-    ImGui::SetNextItemWidth(std::max(120.f, ImGui::GetContentRegionAvail().x - 520));
+    ImGui::SetNextItemWidth(std::max(120.f, ImGui::GetContentRegionAvail().x - 520 - ImGui::CalcTextSize("Separate window").x - ImGui::GetStyle().FramePadding.x * 2));
     if (ImGui::SliderFloat("##frame", &frame, 0, (float)std::max(0, a.numFrames - 1), "frame %.1f")) {
         d.animTime = frame / fps;
         d.animPlaying = false;
@@ -805,6 +863,8 @@ void App::DrawAnimation(Document& d) {
     ImGui::Checkbox("Textures", &d.draw.textures);
     ImGui::SameLine();
     ImGui::Checkbox("Grid", &d.draw.grid);
+    ImGui::SameLine();
+    PopoutButton(d, false);
     if (d.montage || d.blendSpace) DrawAnimAssetHeader(d);
     else
         ImGui::TextDisabled("%d frames, %.2f s, %.1f fps | %s | %zu tracks%s | skeleton %s", a.numFrames, a.length, fps, a.encoding.c_str(), a.tracks.size(),
@@ -917,6 +977,7 @@ void App::DrawWorld(Document& d) {
         d.camera.flySpeed = 3000;
     };
     if (FlowButton("Frame")) frameWorld();
+    PopoutButton(d, true);
     EndToolbar();
     seaOptions();
     const auto& st = sc.Stats();

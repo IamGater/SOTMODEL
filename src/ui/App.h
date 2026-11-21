@@ -183,12 +183,19 @@ public:
     bool WantsQuit() const { return m_quit; }
     bool Busy() const;
     bool Loading() const;   // archives mounting, jobs queued or documents loading   // something animating / loading: keep rendering frames
+    // separate 3D viewer window (Gui.cpp creates / destroys it to match PopoutDoc)
+    u64 PopoutDoc() const { return m_popoutDoc; }
+    void ClosePopout() { m_popoutDoc = 0; }
+    bool TakePopoutFocus() { bool f = m_popoutFocus; m_popoutFocus = false; return f; }
+    std::string PopoutTitle() const;
+    void FramePopout();   // builds the separate window's UI (its ImGui context is current)
 
     ImFont* monoFont = nullptr;
     ImFont* boldFont = nullptr;
     int startTab = -1;   // --tab: initial left tab
     std::string startFolder;   // --folder: initial explorer folder (game path)
     std::vector<std::string> openOnStart;   // asset paths from the command line
+    bool popoutOnStart = false;             // --popout: show the opened tab's 3D view in the separate window
 
 private:
     void StartMount();
@@ -252,6 +259,7 @@ private:
     void DrawParticlePanel(Document& d);   // ParticlePanel.cpp
     void RequestGraphShaders(Document& d);   // compiles the graph shaders of the shown mesh's materials in the background
     void DrawWorld(Document& d);
+    void PopoutButton(Document& d, bool flow);
     void LoadWorld(std::shared_ptr<Document> d);
     void LoadAnimationMesh(std::shared_ptr<Document> d, std::string meshPath);
     bool LoadAnimationMeshNow(Document& d, const std::string& meshPath);
@@ -340,6 +348,8 @@ private:
 
     std::vector<std::shared_ptr<Document>> m_docs;
     u64 m_nextDocId = 1, m_activeDoc = 0;
+    u64 m_popoutDoc = 0;   // tab whose 3D viewer is shown in the separate window (0 = none)
+    bool m_popoutFocus = false, m_inPopout = false;
 
     int m_busyFrames = 3;
     bool m_showSettings = false, m_quit = false;

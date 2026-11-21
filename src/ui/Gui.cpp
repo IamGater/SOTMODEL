@@ -36,12 +36,7 @@ void ResizeBuffers() {
     CreateRtv();
 }
 
-bool CreateDevice(HWND hwnd) {
-    UINT flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
-    D3D_FEATURE_LEVEL fl[] = {D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0};
-    HRESULT hr = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, flags, fl, 2, D3D11_SDK_VERSION, &g_dev, nullptr, &g_ctx);
-    if (FAILED(hr)) hr = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, flags, fl, 2, D3D11_SDK_VERSION, &g_dev, nullptr, &g_ctx);
-    if (FAILED(hr)) return false;
+bool CreateSwapChain(HWND hwnd, ComPtr<IDXGISwapChain1>& swap) {
     ComPtr<IDXGIDevice> dxgiDev;
     ComPtr<IDXGIAdapter> adapter;
     ComPtr<IDXGIFactory2> factory;
@@ -54,14 +49,159 @@ bool CreateDevice(HWND hwnd) {
     sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
     sd.BufferCount = 2;
     sd.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
-    if (FAILED(factory->CreateSwapChainForHwnd(g_dev.Get(), hwnd, &sd, nullptr, nullptr, &g_swap))) {
+    if (FAILED(factory->CreateSwapChainForHwnd(g_dev.Get(), hwnd, &sd, nullptr, nullptr, &swap))) {
         sd.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
         sd.BufferCount = 1;
-        if (FAILED(factory->CreateSwapChainForHwnd(g_dev.Get(), hwnd, &sd, nullptr, nullptr, &g_swap))) return false;
+        if (FAILED(factory->CreateSwapChainForHwnd(g_dev.Get(), hwnd, &sd, nullptr, nullptr, &swap))) return false;
     }
     factory->MakeWindowAssociation(hwnd, DXGI_MWA_NO_ALT_ENTER);
+    return true;
+}
+
+bool CreateDevice(HWND hwnd) {
+    UINT flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
+    D3D_FEATURE_LEVEL fl[] = {D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0};
+    HRESULT hr = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, flags, fl, 2, D3D11_SDK_VERSION, &g_dev, nullptr, &g_ctx);
+    if (FAILED(hr)) hr = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, flags, fl, 2, D3D11_SDK_VERSION, &g_dev, nullptr, &g_ctx);
+    if (FAILED(hr)) return false;
+    if (!CreateSwapChain(hwnd, g_swap)) return false;
     CreateRtv();
     return true;
+}
+
+// Separate 3D viewer window (App::PopoutDoc): own swap chain and ImGui context sharing the main font atlas, rendered after the
+// main window each frame on the same device.
+struct Popout {
+    HWND hwnd = nullptr;
+    ComPtr<IDXGISwapChain1> swap;
+    ComPtr<ID3D11RenderTargetView> rtv;
+    ImGuiContext* ctx = nullptr;
+    UINT resizeW = 0, resizeH = 0;
+    bool minimized = false, closed = false;
+    std::string title;
+    RECT rect = {};   // last placement, reused when the window is opened again
+} g_pop;
+ImGuiContext* g_mainCtx = nullptr;
+
+void PopoutResize() {
+    if (!g_pop.swap || !g_pop.resizeW || !g_pop.resizeH) return;
+    g_pop.rtv.Reset();
+    g_pop.swap->ResizeBuffers(0, g_pop.resizeW, g_pop.resizeH, DXGI_FORMAT_UNKNOWN, 0);
+    g_pop.resizeW = g_pop.resizeH = 0;
+    ComPtr<ID3D11Texture2D> back;
+    g_pop.swap->GetBuffer(0, IID_PPV_ARGS(&back));
+    g_dev->CreateRenderTargetView(back.Get(), nullptr, &g_pop.rtv);
+}
+
+LRESULT WINAPI PopoutProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    if (g_pop.ctx) {
+        ImGuiContext* prev = ImGui::GetCurrentContext();
+        ImGui::SetCurrentContext(g_pop.ctx);
+        LRESULT r = ImGui_ImplWin32_WndProcHandler(hWnd, msg, wParam, lParam);
+        ImGui::SetCurrentContext(prev);
+        if (r) return r;
+    }
+    switch (msg) {
+    case WM_SIZE:
+        g_pop.minimized = wParam == SIZE_MINIMIZED;
+        if (!g_pop.minimized) {
+            g_pop.resizeW = LOWORD(lParam);
+            g_pop.resizeH = HIWORD(lParam);
+            if (g_frame && !g_inFrame && g_pop.ctx) g_frame(true);
+        }
+        return 0;
+    case WM_ERASEBKGND:
+        return 1;
+    case WM_GETMINMAXINFO:
+        ((MINMAXINFO*)lParam)->ptMinTrackSize = {360, 260};
+        return 0;
+    case WM_SYSCOMMAND:
+        if ((wParam & 0xfff0) == SC_KEYMENU) return 0;
+        break;
+    case WM_CLOSE:
+        g_pop.closed = true;   // the main loop tells the App and destroys the window
+        return 0;
+    }
+    return DefWindowProcW(hWnd, msg, wParam, lParam);
+}
+
+void ApplyTheme(float scale);
+
+void DestroyPopout() {
+    if (!g_pop.hwnd) return;
+    WINDOWPLACEMENT wp = {sizeof(wp)};
+    if (GetWindowPlacement(g_pop.hwnd, &wp)) g_pop.rect = wp.rcNormalPosition;
+    ImGui::SetCurrentContext(g_pop.ctx);
+    ImGui_ImplDX11_Shutdown();
+    ImGui_ImplWin32_Shutdown();
+    ImGui::DestroyContext(g_pop.ctx);
+    ImGui::SetCurrentContext(g_mainCtx);
+    g_pop.ctx = nullptr;
+    g_pop.rtv.Reset();
+    g_pop.swap.Reset();
+    DestroyWindow(g_pop.hwnd);
+    g_pop.hwnd = nullptr;
+    g_pop.minimized = g_pop.closed = false;
+}
+
+bool CreatePopout(HINSTANCE inst, HICON icon, float scale, const std::string& title) {
+    static bool registered = false;
+    if (!registered) {
+        WNDCLASSEXW wc = {sizeof(wc), CS_CLASSDC, PopoutProc, 0, 0, inst, icon, LoadCursorW(nullptr, IDC_ARROW), nullptr, nullptr, L"SOTModelViewer", icon};
+        registered = RegisterClassExW(&wc) != 0;
+    }
+    RECT r = g_pop.rect;
+    bool placed = r.right > r.left && r.bottom > r.top;
+    g_pop.hwnd = CreateWindowExW(0, L"SOTModelViewer", Widen(title).c_str(), WS_OVERLAPPEDWINDOW, placed ? r.left : CW_USEDEFAULT, placed ? r.top : CW_USEDEFAULT,
+                                 placed ? r.right - r.left : (int)(1280 * scale), placed ? r.bottom - r.top : (int)(820 * scale), nullptr, nullptr, inst, nullptr);
+    if (!g_pop.hwnd) return false;
+    g_pop.title = title;
+    BOOL dark = TRUE;
+    DwmSetWindowAttribute(g_pop.hwnd, 20 /*DWMWA_USE_IMMERSIVE_DARK_MODE*/, &dark, sizeof(dark));
+    if (!CreateSwapChain(g_pop.hwnd, g_pop.swap)) {
+        DestroyWindow(g_pop.hwnd);
+        g_pop.hwnd = nullptr;
+        return false;
+    }
+    RECT cr;
+    GetClientRect(g_pop.hwnd, &cr);
+    g_pop.resizeW = cr.right;
+    g_pop.resizeH = cr.bottom;
+    PopoutResize();
+    g_pop.ctx = ImGui::CreateContext(ImGui::GetIO().Fonts);
+    ImGui::SetCurrentContext(g_pop.ctx);
+    ImGui::GetIO().IniFilename = nullptr;
+    ApplyTheme(scale);
+    ImGui_ImplWin32_Init(g_pop.hwnd);
+    ImGui_ImplDX11_Init(g_dev.Get(), g_ctx.Get());
+    ImGui::SetCurrentContext(g_mainCtx);
+    ShowWindow(g_pop.hwnd, SW_SHOWNORMAL);
+    return true;
+}
+
+// Opens / closes / retitles the separate viewer window to match the App.
+void SyncPopout(App& app, HINSTANCE inst, HICON icon, float scale) {
+    if (g_pop.closed) {
+        app.ClosePopout();
+        g_pop.closed = false;
+    }
+    if (!app.PopoutDoc()) {
+        DestroyPopout();
+        return;
+    }
+    std::string title = app.PopoutTitle();
+    if (!g_pop.hwnd && !CreatePopout(inst, icon, scale, title)) {
+        app.ClosePopout();
+        return;
+    }
+    if (title != g_pop.title) {
+        g_pop.title = title;
+        SetWindowTextW(g_pop.hwnd, Widen(title).c_str());
+    }
+    if (app.TakePopoutFocus()) {
+        if (IsIconic(g_pop.hwnd)) ShowWindow(g_pop.hwnd, SW_RESTORE);
+        SetForegroundWindow(g_pop.hwnd);
+    }
 }
 
 LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
@@ -160,9 +300,9 @@ void ApplyTheme(float scale) {
 }
 
 // Saves the current back buffer (after ImGui rendered) as PNG: used by --screenshot for automated UI checks.
-static bool SaveBackBuffer(const std::wstring& path) {
+static bool SaveBackBuffer(IDXGISwapChain1* swap, const std::wstring& path) {
     ComPtr<ID3D11Texture2D> back, staging;
-    if (FAILED(g_swap->GetBuffer(0, IID_PPV_ARGS(&back)))) return false;
+    if (FAILED(swap->GetBuffer(0, IID_PPV_ARGS(&back)))) return false;
     D3D11_TEXTURE2D_DESC td;
     back->GetDesc(&td);
     td.Usage = D3D11_USAGE_STAGING;
@@ -188,12 +328,14 @@ int RunGui(const std::vector<std::string>& args) {
     double delay = 4;
     int forceW = 0, forceH = 0, startTab = -1;
     std::string startFolder;
+    bool popout = false;
     for (size_t i = 0; i < args.size(); i++) {
         if (args[i] == "--screenshot" && i + 1 < args.size()) screenshot = Widen(args[++i]);
         else if (args[i] == "--size" && i + 1 < args.size()) sscanf(args[++i].c_str(), "%dx%d", &forceW, &forceH);
         else if (args[i] == "--tab" && i + 1 < args.size()) startTab = atoi(args[++i].c_str());
         else if (args[i] == "--folder" && i + 1 < args.size()) startFolder = args[++i];
         else if (args[i] == "--delay" && i + 1 < args.size()) delay = atof(args[++i].c_str());
+        else if (args[i] == "--popout") popout = true;
         else if (args[i] == "--shaders" && i + 1 < args.size()) open.push_back("shaders:" + args[++i]);
         else if (args[i] == "--material-hlsl" && i + 1 < args.size()) open.push_back("hlsl:" + args[++i]);
         else if (args[i] == "--references" && i + 1 < args.size()) open.push_back("refs:" + args[++i]);
@@ -223,7 +365,7 @@ int RunGui(const std::vector<std::string>& args) {
     UpdateWindow(hwnd);
 
     IMGUI_CHECKVERSION();
-    ImGui::CreateContext();
+    g_mainCtx = ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     static std::string iniPath = Narrow(Settings::Path().substr(0, Settings::Path().find_last_of(L'\\'))) + "\\imgui.ini";
@@ -255,6 +397,7 @@ int RunGui(const std::vector<std::string>& args) {
         app.monoFont = mono ? mono : io.Fonts->Fonts[0];
         app.boldFont = bold ? bold : io.Fonts->Fonts[0];
         app.openOnStart = open;
+        app.popoutOnStart = popout;
         app.startTab = startTab;
         app.startFolder = startFolder;
         if (!app.Init(hwnd, g_dev.Get(), g_ctx.Get())) {
@@ -265,6 +408,7 @@ int RunGui(const std::vector<std::string>& args) {
         g_frame =[&](bool present) {
             if (g_inFrame) return;
             g_inFrame = true;
+            ImGui::SetCurrentContext(g_mainCtx);
             ResizeBuffers();
             ImGui_ImplDX11_NewFrame();
             ImGui_ImplWin32_NewFrame();
@@ -277,6 +421,22 @@ int RunGui(const std::vector<std::string>& args) {
             g_ctx->ClearRenderTargetView(rtv, clear);
             ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
             if (present) g_swap->Present(0, 0);
+            // the separate viewer window: after the main window, so the viewer's offscreen target is free to reuse
+            if (g_pop.ctx && !g_pop.minimized) {
+                PopoutResize();
+                ImGui::SetCurrentContext(g_pop.ctx);
+                ImGui_ImplDX11_NewFrame();
+                ImGui_ImplWin32_NewFrame();
+                ImGui::NewFrame();
+                app.FramePopout();
+                ImGui::Render();
+                rtv = g_pop.rtv.Get();
+                g_ctx->OMSetRenderTargets(1, &rtv, nullptr);
+                g_ctx->ClearRenderTargetView(rtv, clear);
+                ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+                ImGui::SetCurrentContext(g_mainCtx);
+                g_pop.swap->Present(g_minimized ? 1 : 0, 0);   // the main window's present paces frames unless it is minimized
+            }
             g_inFrame = false;
         };
         while (!done) {
@@ -287,20 +447,27 @@ int RunGui(const std::vector<std::string>& args) {
                 if (msg.message == WM_QUIT) done = true;
             }
             if (done || app.WantsQuit()) break;
-            if (g_minimized) { Sleep(50); continue; }
+            SyncPopout(app, inst, wc.hIcon, scale);
+            if (g_minimized && !g_pop.hwnd) { Sleep(50); continue; }
             // idle: sleep until input or a worker posts a result (keeps CPU/GPU use near zero)
             if (!app.Busy() && screenshot.empty()) MsgWaitForMultipleObjects(0, nullptr, FALSE, 500, QS_ALLINPUT);
             g_frame(false);
             // a few settled frames first: tab bars lay out their tabs one frame after they appear
             settled = app.Loading() ? 0 : settled + 1;
             if (!screenshot.empty() && (GetTickCount64() - start) / 1000.0 >= delay && settled >= 3) {
-                SaveBackBuffer(screenshot);
+                SaveBackBuffer(g_swap.Get(), screenshot);
+                if (g_pop.swap) {   // the separate viewer window next to it: <name>.viewer.png
+                    size_t dot = screenshot.find_last_of(L'.');
+                    SaveBackBuffer(g_pop.swap.Get(), (dot == std::wstring::npos ? screenshot : screenshot.substr(0, dot)) + L".viewer.png");
+                }
                 break;
             }
+            if (g_minimized) continue;
             HRESULT hr = g_swap->Present(1, 0);
-            if (hr == DXGI_STATUS_OCCLUDED) Sleep(16);
+            if (hr == DXGI_STATUS_OCCLUDED && !g_pop.hwnd) Sleep(16);
         }
         g_frame = nullptr;   // it references `app`: WM_SIZE during shutdown must not render with a destroyed App
+        DestroyPopout();
     }
 
     ImGui_ImplDX11_Shutdown();

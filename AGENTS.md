@@ -41,7 +41,8 @@ renders the window off-screen-safe (from the app's own back buffer), saves it on
 handy for checking what the viewer shows without screen capture. `--shaders <path>` opens the compiled shaders
 of a material package or of `Engine/Content/GlobalShaderCache-PCD3D_SM5.bin` instead; `--material-hlsl <path>`
 opens a material's graph translated to HLSL next to its node graph; `--references <path>` opens the References tab
-on the package's dependency graph.
+on the package's dependency graph; `--popout` shows the opened tab's 3D viewer in its separate window ("Separate window"
+in the viewer toolbar), whose back buffer `--screenshot` saves next to the main one as `<file>.viewer.png`.
 
 ## Configuration
 

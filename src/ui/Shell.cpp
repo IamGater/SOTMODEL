@@ -489,6 +489,7 @@ void App::Frame() {
         m_player.Stop();
         m_playDoc = 0;
     }
+    if (m_popoutDoc && std::none_of(m_docs.begin(), m_docs.end(), [&](auto& dp) { return dp->id == m_popoutDoc; })) m_popoutDoc = 0;   // tab closed
     g_animating = false;
 
     const ImGuiViewport* vp = ImGui::GetMainViewport();
@@ -1621,7 +1622,12 @@ void App::DrawDocContent(Document& d) {
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(Dip(6), Dip(6)));
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(Dip(5), Dip(5)));
     ImGui::BeginChild("##viewer", ImVec2(sideW, avail.y), ImGuiChildFlags_AlwaysUseWindowPadding);
-    if (d.isWorld) DrawWorld(d);
+    if (d.id == m_popoutDoc) {   // drawn in the separate window instead
+        ImGui::TextDisabled("The 3D view is open in a separate window.");
+        if (ImGui::Button("Show window")) m_popoutFocus = true;
+        ImGui::SameLine();
+        if (ImGui::Button("Back to tab")) m_popoutDoc = 0;
+    } else if (d.isWorld) DrawWorld(d);
     else if (d.anim) DrawAnimation(d);
     else DrawModel(d);
     ImGui::EndChild();
