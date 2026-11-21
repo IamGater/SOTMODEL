@@ -45,6 +45,14 @@ opens a material's graph translated to HLSL next to its node graph; `--reference
 on the package's dependency graph; 3D views open in a separate viewer window that follows the active tab
 (`ViewerWindow=0` in Settings.ini / "Back to tab" keeps them inside the tabs; `--popout` forces the window for one run);
 `--screenshot` saves that window's back buffer next to the main one as `<file>.viewer.png`.
+More automation for the 3D views: `--pick u,v` clicks a map's viewport once at that fraction of its size (the pick is
+logged), `--attach <mesh or particle system>@<socket>` (repeatable) attaches assets to the opened mesh / animation's
+sockets, `--graph` opens model tabs with Graph shader on and the material parameters expanded.
+
+The viewer also opens `BlueprintGeneratedClass` packages as one assembled actor (component templates attached by the
+construction script tree, child actors included), draws particle systems with the 3D renderer (also on sockets and the
+`ParticleSystemComponent`s of maps near the camera), edits material scalar / vector parameters live (Graph shader), and
+opens `WwiseEvent` assets as the list of sounds the event plays (a bank's Events tab opens its events by name).
 
 ## Configuration
 
@@ -84,7 +92,7 @@ or `/Game/Models/Props/Common/cmn_barrel_debris_02_a.cmn_barrel_debris_02_a`.
 | `get_particle_system` | Cascade ParticleSystem: emitters (sprite / mesh / GPU / beam / ribbon, material + blend mode, mesh, alignment, duration / loops, subUV grid, spawn rate, bursts) and each module's baked distributions (`curves=true` adds sampled values) |
 | `preview_particles` | contact sheet PNG of the CPU-simulated sprites (`time`, `frames`, `size`, `yaw`, `pitch`) |
 | `preview_blend_space` | PNG of the blended pose of a blend space at `x`/`y` (`time` 0..1 of each sample, played in sync) |
-| `get_world_info` | a map (.umap) as a scene: sublevels, placed meshes with Blueprint templates resolved, landscape components, instance counts, unresolved components (`filter=rock,-small` narrows the meshes). `path=Athena/Content/Maps/World_Layout/sot_world_layout_2.umap` is the whole sea: every island placed by the world layout; `islands=wsp_,-fort` / `region=[minX,minY,maxX,maxY]` select islands, `proxies=true` loads each island's merged LOD proxy instead (whole sea in seconds). Also lists lights by type, decal materials, height fog and the water level |
+| `get_world_info` | a map (.umap) as a scene: sublevels, placed meshes with Blueprint templates resolved, landscape components, instance counts, unresolved components (`filter=rock,-small` narrows the meshes). `path=Athena/Content/Maps/World_Layout/sot_world_layout_2.umap` is the whole sea: every island placed by the world layout; `islands=wsp_,-fort` / `region=[minX,minY,maxX,maxY]` select islands, `proxies=true` loads each island's merged LOD proxy instead (whole sea in seconds). Also lists lights by type, decal materials, particle emitters (systems with counts), height fog and the water level |
 | `preview_world` | renders a whole map (meshes, Blueprint components, landscape terrain coloured by paint layers) to a PNG; orbit with `yaw`/`pitch`/`zoom` or place the camera with `eye`/`target`. Lit by the map's sun / sky light / nearest 32 point and spot lights with its exponential height fog and the sea plane at the water level (`lights`, `fog`, `water`); `gizmos=true` outlines light ranges, spot cones and decal boxes |
 | `decompile_blueprint` | a Blueprint (`BlueprintGeneratedClass` package) as C++-like code: variables, functions with parameters and locals, Kismet bytecode as statements with labelled jumps |
 | `export_world` | a whole map (.umap with sublevels) as one glTF scene for Blender: level nodes, every placed mesh with materials and textures, landscape. For `sot_world_layout_2` pick islands with `islands` / `region` or use `proxies`. Lights go out as KHR_lights_punctual, decals as empties scaled to their box (extras: material, half extents), fog and water level as scene extras |
@@ -106,7 +114,8 @@ or `/Game/Models/Props/Common/cmn_barrel_debris_02_a.cmn_barrel_debris_02_a`.
 | `search_content` | packages by main class, by what they use (`uses`), by property name / value (structs, arrays and DataTable rows searched) |
 | `get_material` | material instance chain with every texture / scalar / vector parameter resolved |
 | `export` | write files: textures (PNG/DDS), meshes (glTF/OBJ), animations (glTF with skeleton + skinned mesh), JSON; `raw=true` writes any file as stored. Meshes as glb carry their simple collision as a separate `Collision` node (`UCX_<mesh>`, `collision=false` to skip) |
-| `get_audio_info` | Wwise audio: a `.wem` (codec, channels, rate, length) or a sound bank (`WwiseBank` package / `.bnk`) with its embedded media |
+| `get_audio_info` | Wwise audio: a `.wem` (codec, channels, rate, length) or a sound bank (`WwiseBank` package / `.bnk`) with its embedded media and its events (ids, names from the WwiseEvent assets) |
+| `get_wwise_event` | a Wwise event (WwiseEvent asset path or name `Play_sfx_...`) resolved through its bank's HIRC: Play actions → containers → sounds / music tracks; each media embedded in the bank or streamed (`WwiseAudio/Streams/<id>.wem`); `output_dir` decodes them to .wav |
 | `export_audio` | decode Wwise audio to `.wav` (or `.ogg` for Wwise Vorbis); banks export every embedded sound |
 
 Typical flow: `search` → `get_package` → `get_properties` / `preview_*` → `export`.
