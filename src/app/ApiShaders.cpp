@@ -209,7 +209,8 @@ void RegisterShaderTools(Api& api) {
 
     api.Register({"get_material_graph",
                   "The expression nodes of a material or material function as a graph: name, type, caption (parameter / function / "
-                  "constant), editor position and input links (input pin -> source node and output index).",
+                  "constant), editor position and input links (input pin -> source node and output index). A material instance "
+                  "has no nodes of its own: its base material's graph is returned and named in 'graphOf'.",
                   R"({"type":"object","properties":{"path":{"type":"string"}},"required":["path"]})",
                   "path",
                   [](Api& a, const JsonValue& args) {
@@ -217,8 +218,14 @@ void RegisterShaderTools(Api& api) {
                       std::vector<MaterialGraphNode> nodes;
                       if (!a.EnsureMounted(&err)) return ApiResult::Error(err);
                       if (!ReadMaterialGraph(*a.cache, args.GetStr("path"), nodes, &err)) return ApiResult::Error(err);
+                      std::string graphOf;   // an instance has no nodes of its own: show its base material's graph
+                      MaterialInfo mi;
+                      if (nodes.empty() && ReadMaterial(*a.cache, args.GetStr("path"), mi) && !mi.baseMaterial.empty() &&
+                          ReadMaterialGraph(*a.cache, mi.baseMaterial, nodes, &err))
+                          graphOf = mi.baseMaterial;
                       JsonWriter w;
                       w.BeginObject();
+                      if (!graphOf.empty()) w.KV("graphOf", graphOf);
                       w.KV("count", (i64)nodes.size());
                       w.Key("nodes");
                       w.BeginArray();
