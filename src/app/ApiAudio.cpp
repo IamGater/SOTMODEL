@@ -94,26 +94,76 @@ void RegisterAudioTools(Api& api) {
     api.Register({"get_wwise_event",
                   "Resolve a Wwise event to the sounds it plays: 'event' is a WwiseEvent asset path or an event name (Play_sfx_...). The event is "
                   "looked up in its RequiredBank's HIRC hierarchy (event -> Play actions -> containers -> sounds / music tracks); each media is "
-                  "embedded in the bank or streamed (WwiseAudio/Streams/<id>.wem). 'output_dir' also decodes them to .wav files there.",
-                  R"({"type":"object","properties":{"event":{"type":"string"},"output_dir":{"type":"string"}},"required":["event"]})", "event",
+                  "embedded in the bank or streamed (WwiseAudio/Streams/<id>.wem). 'switches' lists the switch / state groups of the event's switch "
+                  "containers (names guessed from event name words, else hex ids) and each media's 'when' conditions; 'switch' "
+                  "(\"group=value,group=value\", names or 0x ids) keeps only the media that play with those values. 'output_dir' also decodes "
+                  "them to .wav files there.",
+                  R"({"type":"object","properties":{"event":{"type":"string"},"switch":{"type":"string"},"output_dir":{"type":"string"}},"required":["event"]})", "event",
                   [](Api& a, const JsonValue& args) {
                       std::string err;
                       WwiseEventInfo ev;
                       if (!LoadWwiseEvent(a, args.GetStr("event"), ev, &err)) return ApiResult::Error(err);
                       std::string outDir = args.GetStr("output_dir");
+                      // switch choice: names hash to the ids, "0x..." are ids
+                      std::unordered_map<u32, u32> choice;
+                      auto idOf = [](std::string s) {
+                          while (!s.empty() && s.back() == ' ') s.pop_back();
+                          while (!s.empty() && s[0] == ' ') s.erase(0, 1);
+                          if (s.size() > 2 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) return (u32)strtoul(s.c_str() + 2, nullptr, 16);
+                          return WwiseShortId(s);
+                      };
+                      std::string sw = args.GetStr("switch");
+                      for (size_t s = 0; s < sw.size();) {
+                          size_t e = sw.find(',', s);
+                          if (e == std::string::npos) e = sw.size();
+                          std::string part = sw.substr(s, e - s);
+                          s = e + 1;
+                          size_t eq = part.find('=');
+                          if (eq == std::string::npos) continue;
+                          choice[idOf(part.substr(0, eq))] = idOf(part.substr(eq + 1));
+                      }
                       JsonWriter w;
                       w.BeginObject();
                       w.KV("event", ev.name);
                       w.KV("id", (i64)ev.id);
                       w.KV("bank", ev.bankPath);
                       w.KV("bankVersion", (i64)ev.bankInfo.version);
+                      if (!ev.switches.empty()) {
+                          w.Key("switches");
+                          w.BeginArray();
+                          for (auto& g : ev.switches) {
+                              w.BeginObject();
+                              w.KV("group", WwiseNameOrId(a, g.group));
+                              w.KV("kind", g.state ? "state" : "switch");
+                              w.KV("default", WwiseNameOrId(a, g.defaultValue));
+                              w.Key("values");
+                              w.BeginArray();
+                              for (u32 v : g.values) w.Str(WwiseNameOrId(a, v));
+                              w.EndArray();
+                              w.EndObject();
+                          }
+                          w.EndArray();
+                      }
                       w.Key("media");
                       w.BeginArray();
                       static const char* where[] = {"missing (another bank)", "bank", "stream"};
-                      for (auto& m : ev.media) {
+                      for (size_t mi = 0; mi < ev.media.size(); mi++) {
+                          auto& m = ev.media[mi];
+                          if (!ev.Plays(mi, choice)) continue;
                           w.BeginObject();
                           w.KV("id", (i64)m.id);
                           w.KV("location", where[m.where]);
+                          if (!m.conditions.empty()) {
+                              w.Key("when");
+                              w.BeginObject();
+                              for (auto& c : m.conditions) {
+                                  w.Key(WwiseNameOrId(a, c.group));
+                                  w.BeginArray();
+                                  for (u32 v : c.values) w.Str(WwiseNameOrId(a, v));
+                                  w.EndArray();
+                              }
+                              w.EndObject();
+                          }
                           Bytes data;
                           if (m.where != WwiseEventMedia::Missing && ReadEventMedia(a, ev, m, data)) {
                               WriteWemInfo(w, data.data(), data.size(), false);

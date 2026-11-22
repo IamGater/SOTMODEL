@@ -698,8 +698,24 @@ u32 WwiseShortId(std::string_view name) {
     return h;
 }
 
+bool WwiseEventTree::Plays(size_t i, const std::unordered_map<u32, u32>& choice) const {
+    if (i >= conditions.size()) return true;
+    for (auto& c : conditions[i]) {
+        auto it = choice.find(c.group);
+        if (it != choice.end() && std::find(c.values.begin(), c.values.end(), it->second) == c.values.end()) return false;
+    }
+    return true;
+}
+
 bool ResolveWwiseEvent(const u8* data, const BankInfo& bank, u32 eventId, std::vector<u32>& media, std::string* error) {
-    media.clear();
+    WwiseEventTree tree;
+    bool ok = ResolveWwiseEvent(data, bank, eventId, tree, error);
+    media = std::move(tree.media);
+    return ok;
+}
+
+bool ResolveWwiseEvent(const u8* data, const BankInfo& bank, u32 eventId, WwiseEventTree& tree, std::string* error) {
+    tree = WwiseEventTree{};
     const HircObject* ev = bank.Find(eventId);
     if (!ev || ev->type != 4) {
         if (error) *error = Fmt("event %u is not in bank %u", eventId, bank.bankId);
@@ -736,24 +752,110 @@ bool ResolveWwiseEvent(const u8* data, const BankInfo& bank, u32 eventId, std::v
         u8 t = it->second->type;
         return t == 2 || t == 5 || t == 6 || t == 9 || t == 10 || t == 11 || t == 12 || t == 13;
     };
-    std::unordered_set<u32> seen, mediaSeen;
-    auto addMedia = [&](u32 id) {
-        if (id && mediaSeen.insert(id).second) media.push_back(id);
+    using Conds = std::vector<WwiseMediaCondition>;
+    std::unordered_set<u32> seen;
+    std::unordered_map<u32, size_t> mediaIndex;
+    auto addMedia = [&](u32 id, const Conds& conds) {
+        if (!id) return;
+        auto [it, fresh] = mediaIndex.try_emplace(id, tree.media.size());
+        if (fresh) {
+            tree.media.push_back(id);
+            tree.conditions.push_back(conds);
+            return;
+        }
+        // reached again on another path: a group stays a condition only if both paths have it (values merged)
+        Conds& old = tree.conditions[it->second];
+        Conds merged;
+        for (auto& c : old)
+            for (auto& n : conds)
+                if (n.group == c.group) {
+                    WwiseMediaCondition m = c;
+                    for (u32 v : n.values)
+                        if (std::find(m.values.begin(), m.values.end(), v) == m.values.end()) m.values.push_back(v);
+                    merged.push_back(std::move(m));
+                }
+        old = std::move(merged);
     };
-    std::function<void(u32, int)> walk = [&](u32 id, int depth) {
+    // children list at q of a node: the first run of "count + node ids"
+    auto childList = [&](u32 id, const u8* d, size_t size, size_t& at) {
+        for (size_t q = 0; q + 8 <= size; q++) {
+            u32 n = Rd32(d + q);
+            bool run = n >= 1 && n <= 512 && q + 4 + (size_t)n * 4 <= size;
+            for (u32 k = 0; run && k < n; k++) {
+                u32 c = Rd32(d + q + 4 + k * 4);
+                run = c != id && isNode(c);
+            }
+            if (run) { at = q; return true; }
+        }
+        return false;
+    };
+    std::function<void(u32, int, const Conds&)> walk = [&](u32 id, int depth, const Conds& conds) {
         auto it = byId.find(id);
         if (depth > 24 || it == byId.end() || !seen.insert(id).second) return;
         const HircObject& o = *it->second;
         const u8* d = data + o.offset;
         if (o.type == 2) {   // CAkSound: AkBankSourceData = u32 plugin, u8 stream type, u32 source id, ...
-            if (o.size >= 9) addMedia(Rd32(d + 5));
+            if (o.size >= 9) addMedia(Rd32(d + 5), conds);
             return;
         }
         if (o.type == 11) {   // CAkMusicTrack: u8 flags, u32 source count, sources of 14 bytes (as above + u32 size, u8 bits)
             if (o.size < 5) return;
             u32 n = Rd32(d + 1);
-            for (u32 k = 0; k < n && k < 256 && 5 + (size_t)(k + 1) * 14 <= o.size; k++) addMedia(Rd32(d + 5 + k * 14 + 5));
+            for (u32 k = 0; k < n && k < 256 && 5 + (size_t)(k + 1) * 14 <= o.size; k++) addMedia(Rd32(d + 5 + k * 14 + 5), conds);
             return;
+        }
+        if (o.type == 6) {
+            // CAkSwitchCntr after the node params: u8 group type (1 state), u32 group, u32 default value, u8 continuous validation,
+            // children (u32 count + ids), u32 switch package count, packages (u32 value, u32 count, node ids), switch params
+            size_t q = 0;
+            if (childList(id, d, o.size, q) && q >= 10) {
+                u32 n = Rd32(d + q);
+                std::vector<u32> children(n);
+                for (u32 k = 0; k < n; k++) children[k] = Rd32(d + q + 4 + k * 4);
+                size_t r = q + 4 + (size_t)n * 4;
+                WwiseSwitchGroup g;
+                g.state = d[q - 10] == 1;
+                g.group = Rd32(d + q - 9);
+                g.defaultValue = Rd32(d + q - 5);
+                std::unordered_map<u32, std::vector<u32>> valuesOf;   // child -> the values it is assigned to
+                bool ok = r + 4 <= o.size;
+                u32 packages = ok ? Rd32(d + r) : 0;
+                ok = ok && packages <= 4096;
+                r += 4;
+                for (u32 k = 0; ok && k < packages; k++) {
+                    if (r + 8 > o.size) { ok = false; break; }
+                    u32 value = Rd32(d + r), items = Rd32(d + r + 4);
+                    r += 8;
+                    if (items > n || r + (size_t)items * 4 > o.size) { ok = false; break; }
+                    for (u32 j = 0; j < items; j++) {
+                        u32 c = Rd32(d + r + j * 4);
+                        if (std::find(children.begin(), children.end(), c) == children.end()) { ok = false; break; }
+                        valuesOf[c].push_back(value);
+                    }
+                    r += (size_t)items * 4;
+                    if (items && std::find(g.values.begin(), g.values.end(), value) == g.values.end()) g.values.push_back(value);
+                }
+                if (ok && g.group) {
+                    auto known = std::find_if(tree.switches.begin(), tree.switches.end(), [&](const WwiseSwitchGroup& s) { return s.group == g.group; });
+                    if (known == tree.switches.end()) tree.switches.push_back(g);
+                    else
+                        for (u32 v : g.values)
+                            if (std::find(known->values.begin(), known->values.end(), v) == known->values.end()) known->values.push_back(v);
+                    for (u32 c : children) {
+                        Conds sub = conds;
+                        auto same = std::find_if(sub.begin(), sub.end(), [&](const WwiseMediaCondition& m) { return m.group == g.group; });
+                        if (same != sub.end()) {   // nested on the same group: only the values both allow
+                            std::vector<u32> both;
+                            for (u32 v : valuesOf[c])
+                                if (std::find(same->values.begin(), same->values.end(), v) != same->values.end()) both.push_back(v);
+                            same->values = both;
+                        } else
+                            sub.push_back({g.group, valuesOf[c]});
+                        walk(c, depth + 1, sub);
+                    }
+                    return;
+                }
+            }
         }
         for (size_t q = 0; q + 8 <= o.size;) {
             u32 n = Rd32(d + q);
@@ -766,15 +868,14 @@ bool ResolveWwiseEvent(const u8* data, const BankInfo& bank, u32 eventId, std::v
                 q++;
                 continue;
             }
-            for (u32 k = 0; k < n; k++) walk(Rd32(d + q + 4 + k * 4), depth + 1);
+            for (u32 k = 0; k < n; k++) walk(Rd32(d + q + 4 + k * 4), depth + 1, conds);
             q += 4 + (size_t)n * 4;
         }
     };
-    for (u32 t : targets) walk(t, 0);
+    for (u32 t : targets) walk(t, 0, {});
     if (targets.empty() && error) *error = "the event has no Play action";
     return !targets.empty();
 }
-
 bool ParseBank(const u8* data, size_t size, BankInfo& out, size_t* bankStart, std::string* error) {
     // the bank starts with its BKHD chunk; packages carry it after their own header
     size_t start = SIZE_MAX;

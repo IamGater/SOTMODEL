@@ -1,5 +1,6 @@
 #pragma once
 #include "core/Common.h"
+#include <unordered_map>
 
 // Wwise audio as Sea of Thieves ships it: .wem streams (RIFF WAVE with Wwise codecs) and .bnk sound banks
 // (WwiseBank packages carry the bank bytes) that embed further .wem files.
@@ -52,3 +53,23 @@ u32 WwiseShortId(std::string_view name);
 // music switch / playlist / segment) to sounds and music tracks. Returns their media (.wem) ids, in hierarchy order,
 // without duplicates. The media are embedded in some bank (DIDX) or streamed (WwiseAudio/Streams/<id>.wem).
 bool ResolveWwiseEvent(const u8* data, const BankInfo& bank, u32 eventId, std::vector<u32>& media, std::string* error = nullptr);
+
+// Switch / state containers on the way from an event to its media: which switch value plays what.
+struct WwiseSwitchGroup {
+    u32 group = 0;
+    bool state = false;          // a state group (else a switch group)
+    u32 defaultValue = 0;
+    std::vector<u32> values;     // values with something assigned, in bank order
+};
+struct WwiseMediaCondition {     // the media plays only while `group` is one of `values` (empty: under no value)
+    u32 group = 0;
+    std::vector<u32> values;
+};
+struct WwiseEventTree {
+    std::vector<u32> media;
+    std::vector<std::vector<WwiseMediaCondition>> conditions;   // per media
+    std::vector<WwiseSwitchGroup> switches;
+    // the media playable with the given choice (group -> value; groups not in the map: any value)
+    bool Plays(size_t mediaIndex, const std::unordered_map<u32, u32>& choice) const;
+};
+bool ResolveWwiseEvent(const u8* data, const BankInfo& bank, u32 eventId, WwiseEventTree& tree, std::string* error = nullptr);

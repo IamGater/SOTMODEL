@@ -2240,6 +2240,71 @@ void App::DrawAudioPanel(Document& d) {
             y = ImGui::GetCursorScreenPos().y + Dip(4);
             listH -= ImGui::GetFrameHeightWithSpacing();
         } else d.bankTab = 0;
+        // media rows; an event shows those that play with the chosen switch / state values
+        std::vector<int> shown;
+        if (d.isEvent && d.bankTab == 0) {
+            std::unordered_map<u32, u32> choice;
+            for (auto& s : d.eventSwitches)
+                if (s.sel >= 0 && s.sel < (int)s.values.size()) choice[s.group] = s.values[s.sel].first;
+            for (int i = 0; i < (int)d.bank.wems.size(); i++) {
+                bool ok = true;
+                if (i < (int)d.eventConds.size())
+                    for (auto& c : d.eventConds[i]) {
+                        auto it = choice.find(c.group);
+                        if (it != choice.end() && std::find(c.values.begin(), c.values.end(), it->second) == c.values.end()) { ok = false; break; }
+                    }
+                if (ok) shown.push_back(i);
+            }
+            if (!shown.empty() && std::find(shown.begin(), shown.end(), d.bankSel) == shown.end()) d.bankSel = shown[0];
+            float y0 = y;
+            ImGui::SetCursorScreenPos(ImVec2(p.x + m, y));
+            if (ImGui::Button(Fmt("Play random (%zu)", shown.size()).c_str())) {
+                std::vector<int> playable;
+                for (int i : shown)
+                    if (d.bank.wems[i].size) playable.push_back(i);
+                if (!playable.empty()) {
+                    d.bankSel = playable[rand() % playable.size()];
+                    m_playRequest = d.id;
+                    m_busyFrames = 3;
+                }
+            }
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Play one of the listed sounds, like the game does%s", d.eventSwitches.empty() ? "" : " with the switch values chosen here");
+            for (size_t g = 0; g < d.eventSwitches.size(); g++) {
+                auto& s = d.eventSwitches[g];
+                ImGui::PushID((int)g);
+                std::string label = s.name + ":";
+                float comboW = Dip(120);
+                float need = ImGui::GetStyle().ItemSpacing.x * 2 + ImGui::CalcTextSize(label.c_str()).x + comboW;
+                ImGui::SameLine();
+                if (ImGui::GetCursorScreenPos().x + need > p.x + w - m) {
+                    ImGui::NewLine();
+                    ImGui::SetCursorScreenPos(ImVec2(p.x + m, ImGui::GetCursorScreenPos().y));
+                }
+                ImGui::AlignTextToFramePadding();
+                ImGui::TextColored(s.sel >= 0 ? ImGui::ColorConvertU32ToFloat4(kText) : ImGui::ColorConvertU32ToFloat4(kTextDim), "%s", label.c_str());
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("%s group %s (0x%08X), %zu values\nNames are guessed from the words of event and audio asset names; "
+                                      "hex ids had no match.", s.state ? "State" : "Switch", s.name.c_str(), s.group, s.values.size());
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(comboW);
+                if (ImGui::BeginCombo("##sw", s.sel < 0 ? "any" : s.values[s.sel].second.c_str(), ImGuiComboFlags_HeightLarge)) {
+                    if (ImGui::Selectable("any", s.sel < 0)) s.sel = -1;
+                    for (int k = 0; k < (int)s.values.size(); k++)
+                        if (ImGui::Selectable(Fmt("%s##%d", s.values[k].second.c_str(), k).c_str(), s.sel == k)) s.sel = k;
+                    ImGui::EndCombo();
+                }
+                ImGui::PopID();
+            }
+            if (!d.eventSwitches.empty()) {
+                ImGui::SameLine();
+                if (ImGui::Button("Any")) for (auto& s : d.eventSwitches) s.sel = -1;
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Reset every switch to any value");
+            }
+            y = ImGui::GetCursorScreenPos().y + Dip(4);
+            listH -= y - y0;
+        } else
+            for (int i = 0; i < (int)d.bank.wems.size(); i++) shown.push_back(i);
         if (pcm)   // leave room for the waveform and the transport below
             listH = std::max(Dip(66), std::min(listH, p.y + h - y - Dip(8) - minWaveH - transportH));
         else   // nothing to play yet: the list takes the room, the hint line goes under it
@@ -2268,10 +2333,13 @@ void App::DrawAudioPanel(Document& d) {
             if (d.bank.wems.empty())
                 ImGui::TextDisabled(d.isEvent ? "The event plays no sounds (only actions such as Stop or Set State)"
                                               : "This bank has no embedded media (its sounds are streamed .wem files)");
+            else if (shown.empty())
+                ImGui::TextDisabled("No sound plays with these switch values");
             ImGuiListClipper clip;
-            clip.Begin((int)d.bank.wems.size(), RowPitch(rowH));
+            clip.Begin((int)shown.size(), RowPitch(rowH));
             while (clip.Step())
-                for (int i = clip.DisplayStart; i < clip.DisplayEnd; i++) {
+                for (int row = clip.DisplayStart; row < clip.DisplayEnd; row++) {
+                    int i = shown[row];
                     const BankWem& bw = d.bank.wems[i];
                     ImGui::PushID(i);
                     ImVec2 rp = ImGui::GetCursorScreenPos();
@@ -2284,10 +2352,17 @@ void App::DrawAudioPanel(Document& d) {
                     }
                     float cy = rp.y + rowH * 0.5f, ty = cy - ImGui::GetFontSize() * 0.5f;
                     IconNote(ldl, ImVec2(rp.x + Dip(10), cy), Dip(14), d.bankSel == i ? kText : kTextDim);
-                    Text(ldl, ImVec2(rp.x + Dip(22), ty), kText, Fmt("%d   %u", i + 1, bw.id).c_str());
+                    std::string idText = Fmt("%d   %u", i + 1, bw.id);
+                    Text(ldl, ImVec2(rp.x + Dip(22), ty), kText, idText.c_str());
                     u8 where = d.isEvent && i < (int)d.mediaWhere.size() ? d.mediaWhere[i] : 1;
                     std::string sz = where == 0 ? "other bank" : d.isEvent ? HumanSize(bw.size) + (where == 2 ? "  stream" : "  bank") : HumanSize(bw.size);
-                    Text(ldl, ImVec2(rp.x + rw - Dip(6) - ImGui::CalcTextSize(sz.c_str()).x, ty), where == 0 ? kError : kTextDim, sz.c_str());
+                    float szX = rp.x + rw - Dip(6) - ImGui::CalcTextSize(sz.c_str()).x;
+                    Text(ldl, ImVec2(szX, ty), where == 0 ? kError : kTextDim, sz.c_str());
+                    if (d.isEvent && i < (int)d.eventWhen.size() && !d.eventWhen[i].empty()) {
+                        float wx = rp.x + Dip(22) + std::max(Dip(110), ImGui::CalcTextSize(idText.c_str()).x + Dip(16));
+                        TextEllipsis(ldl, ImVec2(wx, ty), szX - Dip(12), kTextDim, d.eventWhen[i].c_str());
+                        if (rs.hovered) ImGui::SetTooltip("Plays when %s", d.eventWhen[i].c_str());
+                    }
                     ImGui::PopID();
                 }
         }

@@ -215,6 +215,17 @@ struct Document {
     u32 eventId = 0;
     Bytes mediaBytes;
     std::vector<u8> mediaWhere;   // WwiseEventMedia::Where per bank.wems entry
+    // the event's switch / state groups (names guessed) and the chosen value (-1 any); the media list shows what plays with it
+    struct EventSwitch {
+        u32 group = 0;
+        bool state = false;
+        std::string name;
+        std::vector<std::pair<u32, std::string>> values;
+        int sel = -1;
+    };
+    std::vector<EventSwitch> eventSwitches;
+    std::vector<std::vector<WwiseMediaCondition>> eventConds;   // per bank.wems entry
+    std::vector<std::string> eventWhen;                          // per bank.wems entry: "FootwearType = Boots, surface = Sand | Dirt"
     // bank: its events (HIRC), named from the WwiseEvent assets
     int bankTab = 0;   // 0 media, 1 events
     std::vector<std::pair<u32, std::string>> bankEvents;

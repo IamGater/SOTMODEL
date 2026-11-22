@@ -608,6 +608,18 @@ void App::FillEventDocument(Document& d, const WwiseEventInfo& ev) {
     d.bank.version = ev.bankInfo.version;
     d.mediaBytes.clear();
     d.mediaWhere.clear();
+    d.eventConds.clear();
+    d.eventWhen.clear();
+    d.eventSwitches.clear();
+    for (auto& g : ev.switches) {
+        Document::EventSwitch s;
+        s.group = g.group;
+        s.state = g.state;
+        s.name = WwiseNameOrId(*m_api, g.group);
+        for (u32 v : g.values) s.values.push_back({v, WwiseNameOrId(*m_api, v)});
+        std::sort(s.values.begin(), s.values.end(), [](auto& a, auto& b) { return a.second < b.second; });
+        d.eventSwitches.push_back(std::move(s));
+    }
     JsonWriter w;
     w.BeginObject();
     w.KV("Event", d.eventName);
@@ -627,9 +639,18 @@ void App::FillEventDocument(Document& d, const WwiseEventInfo& ev) {
         }
         d.bank.wems.push_back(bw);
         d.mediaWhere.push_back((u8)m.where);
+        d.eventConds.push_back(m.conditions);
+        std::string when;
+        for (auto& c : m.conditions) {
+            when += (when.empty() ? "" : ",  ") + WwiseNameOrId(*m_api, c.group) + " = ";
+            for (size_t k = 0; k < c.values.size(); k++) when += (k ? " | " : "") + WwiseNameOrId(*m_api, c.values[k]);
+            if (c.values.empty()) when += "(none)";
+        }
+        d.eventWhen.push_back(when);
         w.BeginObject();
         w.KV("Media", (i64)m.id);
         w.KV("Location", where[m.where]);
+        if (!when.empty()) w.KV("When", when);
         if (m.where == WwiseEventMedia::Stream) w.KV("File", std::string(m_api->vfs.Path(m.entry)));
         w.EndObject();
     }

@@ -54,7 +54,7 @@ assets to the opened mesh / animation's sockets, `--tab` takes `archives` / `fol
 The viewer also opens `BlueprintGeneratedClass` packages as one assembled actor (component templates attached by the
 construction script tree, child actors included), draws particle systems with the 3D renderer (also on sockets and the
 `ParticleSystemComponent`s of maps near the camera), edits material scalar / vector parameters live (Graph shader), and
-opens `WwiseEvent` assets as the list of sounds the event plays (a bank's Events tab opens its events by name).
+opens `WwiseEvent` assets as the list of sounds the event plays (a bank's Events tab opens its events by name); events with switch containers get a value picker per switch / state group (FootwearType, surface, ...) that narrows the list, and "Play random" plays one of the listed sounds.
 Maps get the sea's day cycle ("Day cycle" in the map toolbar, `time_of_day` in `preview_world`): island levels have no
 sun or sky light, so the lighting curves of the region (`Curves/Lighting/<WSP|Wilds|Volcanic|Standard|...>`: sun colour
 and intensity, sky light, sky dome horizon / zenith, fog) are evaluated for the hour (`ue/TimeOfDay`).
@@ -132,7 +132,7 @@ or `/Game/Models/Props/Common/cmn_barrel_debris_02_a.cmn_barrel_debris_02_a`.
 | `get_material` | material instance chain with every texture / scalar / vector parameter resolved |
 | `export` | write files: textures (PNG/DDS), meshes (glTF/OBJ), animations (glTF with skeleton + skinned mesh), JSON; `raw=true` writes any file as stored. Meshes as glb carry their simple collision as a separate `Collision` node (`UCX_<mesh>`, `collision=false` to skip) |
 | `get_audio_info` | Wwise audio: a `.wem` (codec, channels, rate, length) or a sound bank (`WwiseBank` package / `.bnk`) with its embedded media and its events (ids, names from the WwiseEvent assets) |
-| `get_wwise_event` | a Wwise event (WwiseEvent asset path or name `Play_sfx_...`) resolved through its bank's HIRC: Play actions → containers → sounds / music tracks; each media embedded in the bank or streamed (`WwiseAudio/Streams/<id>.wem`); `output_dir` decodes them to .wav |
+| `get_wwise_event` | a Wwise event (WwiseEvent asset path or name `Play_sfx_...`) resolved through its bank's HIRC: Play actions → containers → sounds / music tracks; each media embedded in the bank or streamed (`WwiseAudio/Streams/<id>.wem`); `output_dir` decodes them to .wav; `switches` lists the switch / state groups and each media's `when`, `switch="surface=WoodDeck,FootwearType=Pegleg"` keeps only what plays with those values (names are guessed by hashing words of event / audio asset names, unknown ones are hex ids; RTPCs are not evaluated) |
 | `export_audio` | decode Wwise audio to `.wav` (or `.ogg` for Wwise Vorbis); banks export every embedded sound |
 
 Typical flow: `search` → `get_package` → `get_properties` / `preview_*` → `export`.
