@@ -3,6 +3,7 @@
 #include "ui/App.h"
 #include "ui/UiCommon.h"
 #include "app/WwiseEvents.h"
+#include "ue/World.h"
 #include "imgui.h"
 #include <random>
 
@@ -77,6 +78,32 @@ void App::LoadNotifies(Document& d) {
                 m_notifySounds[path] = std::move(s);
             });
         }
+        if (!n.itemClass.empty() && !m_itemTemplates.count(n.itemClass)) {   // the item Blueprint assembled from its components
+            m_itemTemplates[n.itemClass];
+            m_jobs->Push([this, path = n.itemClass] {
+                WorldLoader loader(*m_api->cache);
+                WorldOptions opt;
+                opt.landscape = opt.lights = false;
+                WorldData w;
+                std::string err;
+                auto parts = std::make_shared<std::vector<Document::ItemPart>>();
+                if (loader.AddBlueprint(path, Mat4::Identity(), opt, w, &err))
+                    for (auto& g : w.groups) {
+                        auto base = m_assets->MeshByPath(g.mesh, 0);
+                        if (!base) continue;
+                        auto mesh = base;
+                        if (!g.materials.empty()) {   // per-component material overrides on a copy
+                            mesh = std::make_shared<GpuMesh>(*base);
+                            for (size_t k = 0; k < g.materials.size() && k < mesh->materials.size(); k++)
+                                if (!g.materials[k].empty()) mesh->materials[k] = m_assets->Material(g.materials[k]);
+                        }
+                        for (auto& in : g.instances) parts->push_back({mesh, in.transform});
+                    }
+                if (parts->empty()) LOGW("notify item %s: %s", path.c_str(), err.empty() ? "no mesh components" : err.c_str());
+                std::lock_guard lk2(m_notifyMutex);
+                m_itemTemplates[path] = {parts->empty() ? 2 : 1, parts};
+            });
+        }
         if (!n.particle.empty() && !m_notifyFxTemplates.count(n.particle)) {
             m_notifyFxTemplates[n.particle];
             m_jobs->Push([this, path = n.particle] {
@@ -93,12 +120,43 @@ void App::LoadNotifies(Document& d) {
     }
 }
 
-void App::FireNotifies(Document& d, float from, float to) {
+void App::FireNotifies(Document& d, float from, float to, bool itemsOnly) {
     if (!d.playNotifies) return;
     static std::mt19937 rng{std::random_device{}()};
     for (auto& n : d.notifies) {
         if (n.time <= from || n.time > to) continue;
         std::lock_guard lk(m_notifyMutex);
+        auto held = [&](int hand) {
+            for (size_t k = d.heldItems.size(); k-- > 0;)
+                if (d.heldItems[k].hand == hand) return (int)k;
+            return -1;
+        };
+        switch (n.itemAction) {   // cosmetic items in the hands
+        case AnimNotifyInfo::SpawnItem: {
+            auto it = m_itemTemplates.find(n.itemClass);
+            if (it == m_itemTemplates.end() || it->second.state == 2) break;   // still loading: the parts are filled in later
+            if (int k = held(n.itemHand); k >= 0) d.heldItems.erase(d.heldItems.begin() + k);
+            Document::HeldItem h;
+            h.cls = n.itemClass;
+            h.parts = it->second.parts;
+            h.hand = n.itemHand;
+            h.visible = n.itemVisible;
+            d.heldItems.push_back(std::move(h));
+            break;
+        }
+        case AnimNotifyInfo::DestroyItem:
+            if (int k = held(n.itemHand); k >= 0) d.heldItems.erase(d.heldItems.begin() + k);
+            break;
+        case AnimNotifyInfo::SwitchItem:
+            if (int k = held(n.itemHand); k >= 0) d.heldItems[k].hand = n.itemHand2;
+            break;
+        case AnimNotifyInfo::ShowItem:
+            if (int k = held(n.itemHand); k >= 0) d.heldItems[k].visible = n.itemVisible;
+            break;
+        default:
+            break;
+        }
+        if (itemsOnly) continue;
         if (!n.sound.empty()) {   // a random one of the event's sounds on a free device
             auto it = m_notifySounds.find(n.sound);
             if (it != m_notifySounds.end() && it->second.state == 1) {
@@ -152,25 +210,40 @@ void App::UpdateNotifyFx(Document& d, const std::vector<Mat4>* boneWorld) {
         i++;
     }
     if (!d.notifyFx.empty()) m_busyFrames = 3;
+    for (auto& h : d.heldItems) {   // the hand prop sockets
+        if (!h.parts) {
+            std::lock_guard lk(m_notifyMutex);
+            if (auto it = m_itemTemplates.find(h.cls); it != m_itemTemplates.end()) h.parts = it->second.parts;
+        }
+        Mat4 s = Mat4::Identity();
+        h.placed = NotifySocket(d, h.hand ? "LeftHandProp" : "RightHandProp", boneWorld, s) ||
+                   NotifySocket(d, h.hand ? "LeftHandSocket" : "RightHandSocket", boneWorld, s);
+        h.world = s;
+    }
 }
 
 void App::DrawNotifyToggle(Document& d) {
-    size_t sounds = 0, effects = 0;
+    size_t sounds = 0, effects = 0, items = 0;
     for (auto& n : d.notifies) {
         sounds += !n.sound.empty();
         effects += !n.particle.empty();
+        items += n.itemAction != AnimNotifyInfo::NoItem;
     }
-    if (!sounds && !effects) return;
+    if (!sounds && !effects && !items) return;
     ImGui::SameLine();
-    ImGui::Checkbox(Fmt("Notifies (%zu)", sounds + effects).c_str(), &d.playNotifies);
-    if (!d.playNotifies) d.notifyFx.clear();
+    ImGui::Checkbox(Fmt("Notifies (%zu)", sounds + effects + items).c_str(), &d.playNotifies);
+    if (!d.playNotifies) {
+        d.notifyFx.clear();
+        d.heldItems.clear();
+    }
     if (ImGui::IsItemHovered()) {
-        std::string tip = Fmt("Plays the animation's %zu sound and %zu particle notifies at their frames:\n", sounds, effects);
+        std::string tip = Fmt("Plays the animation's %zu sound, %zu particle and %zu held item notifies at their frames:\n", sounds, effects, items);
         int shown = 0;
         for (auto& n : d.notifies) {
-            if (n.sound.empty() && n.particle.empty()) continue;
+            if (n.sound.empty() && n.particle.empty() && n.itemAction == AnimNotifyInfo::NoItem) continue;
             if (++shown > 24) { tip += "...\n"; break; }
-            const std::string& what = n.sound.empty() ? n.particle : n.sound;
+            static const char* actions[] = {"", "spawn item", "destroy item", "switch hands", "show / hide item"};
+            std::string what = !n.sound.empty() ? n.sound : !n.particle.empty() ? n.particle : !n.itemClass.empty() ? n.itemClass : actions[n.itemAction];
             tip += Fmt("\n%6.2f s  %s", n.time, what.substr(what.rfind('.') + 1).c_str());
             if (!n.particle.empty() && !n.socket.empty()) tip += " @ " + n.socket + (n.attached ? "" : " (detached)");
         }

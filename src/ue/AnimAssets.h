@@ -16,6 +16,11 @@ struct AnimNotifyInfo {
     std::string sound, particle, socket;
     bool attached = true;
     Vec3 locationOffset, rotationOffset;   // rotation: pitch, yaw, roll (degrees)
+    // cosmetic items held by the character (AnimNotify_SpawnCosmeticItem / Destroy / SwitchAttachment / SetVisibility)
+    enum ItemAction : u8 { NoItem, SpawnItem, DestroyItem, SwitchItem, ShowItem } itemAction = NoItem;
+    std::string itemClass;        // Blueprint class spawned
+    int itemHand = 0, itemHand2 = 0;   // EWieldAnimationLocation: 0 right, 1 left (itemHand2: SwitchItem's new hand)
+    bool itemVisible = true;      // ShowItem: visible; SpawnItem: !SpawnHidden
 };
 bool ReadAnimNotifies(const Package& pkg, const PropertyList& props, std::vector<AnimNotifyInfo>& out);
 

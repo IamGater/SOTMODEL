@@ -41,6 +41,12 @@ bool ReadAnimNotifies(const Package& pkg, const PropertyList& props, std::vector
                     else if (p.name == "PSTemplate") a.particle = Obj(pkg, &p.value);
                     else if (p.name == "SocketName") a.socket = p.value.str == "None" ? "" : p.value.str;
                     else if (p.name == "Attached") a.attached = p.value.b;
+                    else if (p.name == "ItemSpawnClass") a.itemClass = Obj(pkg, &p.value);
+                    else if (p.name == "SpawnLocation" || p.name == "DestroyLocation" || p.name == "ItemLocation" || p.name == "PreviousLocation")
+                        a.itemHand = p.value.str.find("Left") != std::string::npos;
+                    else if (p.name == "NewLocation") a.itemHand2 = p.value.str.find("Left") != std::string::npos;
+                    else if (p.name == "Visible") a.itemVisible = p.value.b;
+                    else if (p.name == "SpawnHidden") a.itemVisible = !p.value.b;
                     else if ((p.name == "LocationOffset" || p.name == "RotationOffset") && p.value.Fields()) {
                         const PropValue& s = p.value;
                         Vec3 v = p.name == "LocationOffset" ? Vec3{F(s, "X"), F(s, "Y"), F(s, "Z")} : Vec3{F(s, "Pitch"), F(s, "Yaw"), F(s, "Roll")};
@@ -54,6 +60,10 @@ bool ReadAnimNotifies(const Package& pkg, const PropertyList& props, std::vector
                 }
             }
         }
+        if (a.cls.find("SpawnCosmeticItem") != std::string::npos) a.itemAction = AnimNotifyInfo::SpawnItem;
+        else if (a.cls.find("DestroyCosmeticItem") != std::string::npos) a.itemAction = AnimNotifyInfo::DestroyItem;
+        else if (a.cls.find("SwitchCosmeticItemAttachment") != std::string::npos) a.itemAction = AnimNotifyInfo::SwitchItem;
+        else if (a.cls.find("SetCosmeticItemVisibility") != std::string::npos) a.itemAction = AnimNotifyInfo::ShowItem;
         if (a.name.empty()) a.name = a.cls;
         out.push_back(std::move(a));
     }

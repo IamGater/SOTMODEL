@@ -148,6 +148,15 @@ struct Document {
     std::unordered_map<std::string, std::string> notifyParents;   // skeleton asset bone -> parent (lower case): sockets missing on the mesh
     float notifyPrevTime = -1;   // -1: notifies at 0 s fire on the first frame
     std::vector<Attachment> notifyFx;   // spawned effects, dropped once their particles are gone
+    struct ItemPart { std::shared_ptr<GpuMesh> mesh; Mat4 local; };   // a cosmetic item: its Blueprint's meshes relative to the actor
+    struct HeldItem {
+        std::string cls;
+        std::shared_ptr<const std::vector<ItemPart>> parts;
+        int hand = 0;           // 0 right, 1 left
+        bool visible = true, placed = false;
+        Mat4 world = Mat4::Identity();
+    };
+    std::vector<HeldItem> heldItems;   // AnimNotify_SpawnCosmeticItem results, reset when the clip loops
     char attachEdit[512] = {};
     int attachSocket = -1;   // -1: pick a hand socket
     bool attachLoading = false;
@@ -347,9 +356,11 @@ private:
     std::mutex m_notifyMutex;
     std::unordered_map<std::string, NotifySound> m_notifySounds;          // by event path
     std::unordered_map<std::string, NotifyFxTemplate> m_notifyFxTemplates; // by particle system path
+    struct ItemTemplate { int state = 0; std::shared_ptr<const std::vector<Document::ItemPart>> parts; };
+    std::unordered_map<std::string, ItemTemplate> m_itemTemplates;       // by Blueprint class path
     AudioPlayer m_notifyPlayers[6];                                       // overlapping notify sounds (WinMM mixes the devices)
     void LoadNotifies(Document& d);
-    void FireNotifies(Document& d, float from, float to);   // notifies with from < time <= to
+    void FireNotifies(Document& d, float from, float to, bool itemsOnly = false);   // notifies with from < time <= to (itemsOnly: held items, silently)
     void UpdateNotifyFx(Document& d, const std::vector<Mat4>* boneWorld);
     void DrawNotifyToggle(Document& d);
     void DrawWorldExport(Document& d);                      // toolbar button + options popup

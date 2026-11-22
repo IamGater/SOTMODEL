@@ -474,6 +474,14 @@ void RegisterMeshTools(Api& api) {
                               w.KV("track", n.track);
                               if (!n.detail.empty()) w.KV("detail", n.detail);
                               if (!n.sound.empty()) w.KV("sound", n.sound);
+                              if (n.itemAction != AnimNotifyInfo::NoItem) {
+                                  static const char* actions[] = {"", "spawn", "destroy", "switch", "visibility"};
+                                  w.KV("itemAction", actions[n.itemAction]);
+                                  if (!n.itemClass.empty()) w.KV("itemClass", n.itemClass);
+                                  w.KV("hand", n.itemHand ? "left" : "right");
+                                  if (n.itemAction == AnimNotifyInfo::SwitchItem) w.KV("newHand", n.itemHand2 ? "left" : "right");
+                                  if (n.itemAction == AnimNotifyInfo::ShowItem || n.itemAction == AnimNotifyInfo::SpawnItem) w.KV("visible", n.itemVisible);
+                              }
                               if (!n.particle.empty()) {
                                   w.KV("particle", n.particle);
                                   if (!n.socket.empty()) w.KV("socket", n.socket);
