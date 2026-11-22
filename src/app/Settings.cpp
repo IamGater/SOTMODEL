@@ -42,6 +42,7 @@ void Settings::Load() {
             else if (k == "PreviewMaxTexture") previewMaxTexture = std::clamp(atoi(v.c_str()), 256, 16384);
             else if (k == "KeepDirectories") exportKeepDirectories = v == "1";
         else if (k == "AnimationSounds") exportAnimSounds = v == "1";
+        else if (k == "UiAnimations") uiAnimations = v == "1";
             else if (k == "MeshFormat") meshFormat = atoi(v.c_str());
             else if (k == "TextureFormat") textureFormat = atoi(v.c_str());
             else if (k == "WorldDrawDistance") worldDrawDistance = (float)atof(v.c_str());
@@ -71,6 +72,7 @@ bool Settings::Save() const {
     s += "PreviewMaxTexture=" + std::to_string(previewMaxTexture) + "\n";
     s += std::string("KeepDirectories=") + (exportKeepDirectories ? "1" : "0") + "\n";
     s += std::string("AnimationSounds=") + (exportAnimSounds ? "1" : "0") + "\n";
+    s += std::string("UiAnimations=") + (uiAnimations ? "1" : "0") + "\n";
     s += "MeshFormat=" + std::to_string(meshFormat) + "\n";
     s += "TextureFormat=" + std::to_string(textureFormat) + "\n";
     s += Fmt("WorldDrawDistance=%.0f\n", worldDrawDistance);

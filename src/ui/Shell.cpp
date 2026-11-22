@@ -48,7 +48,12 @@ ImU32 Shade(ImU32 c, float k) {
 // the app keeps rendering frames (see App::Frame).
 std::unordered_map<ImGuiID, float> g_anim;
 bool g_animating = false;
+bool g_uiAnim = true;   // Settings::uiAnimations (set every frame): off = every transition jumps to its end
 float Anim(ImGuiID id, bool on, float seconds = 0.12f) {
+    if (!g_uiAnim) {
+        g_anim.erase(id);
+        return on ? 1.f : 0.f;
+    }
     auto it = g_anim.find(id);
     if (it == g_anim.end()) {
         if (!on) return 0.f;
@@ -65,6 +70,75 @@ float Anim(ImGuiID id, bool on, float seconds = 0.12f) {
 float HoverAnim() { return Anim(ImGui::GetItemID(), ImGui::IsItemHovered()); }
 ImU32 Mix(ImU32 a, ImU32 b, float t) {
     return ImGui::ColorConvertFloat4ToU32(ImLerp(ImGui::ColorConvertU32ToFloat4(a), ImGui::ColorConvertU32ToFloat4(b), t));
+}
+
+// A value gliding to `target` (exponential approach, settled after ~`seconds`): sliding tab marks, moving highlights.
+// The first call for an id starts at the target; `eps` = the distance that counts as there (pixels by default).
+std::unordered_map<ImGuiID, float> g_glide;
+float Glide(ImGuiID id, float target, float seconds = 0.2f, float eps = 0.3f) {
+    auto [it, fresh] = g_glide.try_emplace(id, target);
+    float& v = it->second;
+    if (fresh || !g_uiAnim) return v = target;
+    float k = 1.f - expf(-std::min(ImGui::GetIO().DeltaTime, 0.05f) * 5.f / seconds);   // ~99 % of the way in `seconds`
+    v += (target - v) * k;
+    if (fabsf(target - v) <= eps) v = target;
+    else g_animating = true;
+    return v;
+}
+
+// True when a window drawn above the current one (popup, tooltip, floating window) covers part of [a, b]: a fade cover
+// goes to the foreground list and would hide it.
+bool CoveredAbove(ImVec2 a, ImVec2 b) {
+    ImGuiContext& g = *GImGui;
+    ImGuiWindow* root = ImGui::GetCurrentWindow()->RootWindow;
+    bool above = false;
+    for (ImGuiWindow* w : g.Windows) {
+        if (w == root) { above = true; continue; }
+        if (!above || !w->WasActive || w->Hidden || (w->Flags & ImGuiWindowFlags_ChildWindow) || w->Viewport != root->Viewport) continue;
+        if (w->Pos.x < b.x && w->Pos.x + w->Size.x > a.x && w->Pos.y < b.y && w->Pos.y + w->Size.y > a.y) return true;
+    }
+    return false;
+}
+
+// Content that changed (`key` differs from the last one seen for `id`) fades in from `bg`: a cover over [a, b] whose
+// opacity drops to 0 over `seconds`. Call after drawing the content.
+std::unordered_map<ImGuiID, std::pair<u64, double>> g_fades;
+void FadeIn(ImGuiID id, u64 key, ImVec2 a, ImVec2 b, ImU32 bg, float seconds = 0.18f) {
+    auto [it, fresh] = g_fades.try_emplace(id, key, -1e9);
+    if (it->second.first != key) it->second = {key, ImGui::GetTime()};
+    if (!g_uiAnim) return;
+    float t = (float)((ImGui::GetTime() - it->second.second) / seconds);
+    if (t >= 1.f) return;
+    g_animating = true;
+    if (CoveredAbove(a, b)) return;
+    float e = t * t * (3 - 2 * t);
+    ImGui::GetForegroundDrawList(ImGui::GetWindowViewport())->AddRectFilled(a, b, Alpha(bg, 1.f - e));
+}
+
+// Busy indicator: an arc chasing round a circle (a still arc with animations off)
+void Spinner(ImDrawList* dl, ImVec2 c, float r, ImU32 col, float thickness) {
+    float t = g_uiAnim ? (float)ImGui::GetTime() : 0.f;
+    float start = t * 5.5f, len = 3.14159f * (0.55f + 0.4f * sinf(t * 2.3f));
+    dl->PathArcTo(c, r, start, start + len, 24);
+    dl->PathStroke(col, 0, thickness);
+    if (g_uiAnim) g_animating = true;
+}
+
+// Rotates the vertices added to dl since `start` about c (for glyphs turned by an animated angle)
+void RotateSince(ImDrawList* dl, int start, ImVec2 c, float angle) {
+    float s = sinf(angle), co = cosf(angle);
+    for (int i = start; i < dl->VtxBuffer.Size; i++) {
+        ImVec2& p = dl->VtxBuffer[i].pos;
+        ImVec2 d(p.x - c.x, p.y - c.y);
+        p = ImVec2(c.x + d.x * co - d.y * s, c.y + d.x * s + d.y * co);
+    }
+}
+
+// Accent mark under the selected tab sliding to a newly selected one; x / y / w relative to `origin` (moving windows
+// carry it along)
+void TabMark(ImDrawList* dl, ImGuiID id, ImVec2 origin, float x, float y, float w, float h) {
+    float gx = Glide(id, x), gy = Glide(id ^ 0x9e3779b9, y), gw = Glide(id ^ 0x7f4a7c15, w);
+    dl->AddRectFilled(ImVec2(origin.x + gx, origin.y + gy), ImVec2(origin.x + gx + gw, origin.y + gy + h), kAccent, h * 0.5f);
 }
 
 void Text(ImDrawList* dl, ImVec2 p, ImU32 c, const char* s, const char* e = nullptr) { dl->AddText(ImGui::GetFont(), ImGui::GetFontSize(), p, c, s, e); }
@@ -98,11 +172,19 @@ void IconSearch(ImDrawList* dl, ImVec2 c, float s, ImU32 col) { Glyph(dl, c, s, 
 void IconBackspace(ImDrawList* dl, ImVec2 c, float s, ImU32 col) { Glyph(dl, c, s, col, PH_BACKSPACE); }
 void IconClose(ImDrawList* dl, ImVec2 c, float s, ImU32 col) { Glyph(dl, c, s * 1.2f, col, PH_X); }
 void IconPlus(ImDrawList* dl, ImVec2 c, float s, ImU32 col) { Glyph(dl, c, s, col, PH_PLUS); }
-// caret pointing along angle (radians, 0 = right, y down); diagonals (tree "open") point down
+// caret pointing along angle (radians, 0 = right, y down): right angles use their own glyph (crisp), others turn the
+// right caret (an expander turning while it animates)
 void IconChevron(ImDrawList* dl, ImVec2 c, float s, float angle, ImU32 col) {
-    float sy = sinf(angle);
-    const char* g = sy > 0.3f ? PH_CARET_DOWN : sy < -0.3f ? PH_CARET_UP : cosf(angle) > 0 ? PH_CARET_RIGHT : PH_CARET_LEFT;
-    Glyph(dl, c, s * 0.8f, col, g);
+    float q = angle / (3.14159265f * 0.5f);
+    if (fabsf(q - roundf(q)) < 0.01f) {
+        float sy = sinf(angle);
+        const char* g = sy > 0.5f ? PH_CARET_DOWN : sy < -0.5f ? PH_CARET_UP : cosf(angle) > 0 ? PH_CARET_RIGHT : PH_CARET_LEFT;
+        Glyph(dl, c, s * 0.8f, col, g);
+        return;
+    }
+    int start = dl->VtxBuffer.Size;
+    Glyph(dl, c, s * 0.8f, col, PH_CARET_RIGHT);
+    RotateSince(dl, start, c, angle);
 }
 void IconGrid(ImDrawList* dl, ImVec2 c, float s, ImU32 col) { Glyph(dl, c, s * 1.15f, col, PH_SQUARES_FOUR); }
 void IconList(ImDrawList* dl, ImVec2 c, float s, ImU32 col) { Glyph(dl, c, s * 1.15f, col, PH_LIST); }
@@ -110,8 +192,8 @@ void IconLocate(ImDrawList* dl, ImVec2 c, float s, ImU32 col) { Glyph(dl, c, s, 
 void IconFold(ImDrawList* dl, ImVec2 c, float s, ImU32 col) { Glyph(dl, c, s, col, PH_ARROWS_IN_LINE_VERTICAL); }
 void IconOpenExternal(ImDrawList* dl, ImVec2 c, float s, ImU32 col) { Glyph(dl, c, s, col, PH_ARROW_SQUARE_OUT); }
 void IconTrash(ImDrawList* dl, ImVec2 c, float s, ImU32 col) { Glyph(dl, c, s, col, PH_TRASH); }
-void IconExpandLog(ImDrawList* dl, ImVec2 c, float s, ImU32 col, bool expanded) {
-    Glyph(dl, c, s, col, expanded ? PH_CARET_DOWN : PH_CARET_UP);
+void IconExpandLog(ImDrawList* dl, ImVec2 c, float s, ImU32 col, float open) {   // open 0 (up) .. 1 (down), turning
+    IconChevron(dl, c, s / 0.8f, -3.14159265f * 0.5f + open * 3.14159265f, col);
 }
 void IconRefresh(ImDrawList* dl, ImVec2 c, float s, ImU32 col) { Glyph(dl, c, s, col, PH_ARROWS_CLOCKWISE); }
 void IconInfo(ImDrawList* dl, ImVec2 c, float s, ImU32 col) { Glyph(dl, c, s, col, PH_INFO); }
@@ -479,6 +561,7 @@ void App::Frame() {
     }
     SyncPopoutDoc();
     g_animating = false;
+    g_uiAnim = m_settings.uiAnimations;
 
     const ImGuiViewport* vp = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(vp->WorkPos);
@@ -638,6 +721,7 @@ void App::DrawLeftPanel(float width, float height) {
         Text(dl, ImVec2(a.x + (tw - ts.x) * 0.5f, a.y + (tabH - ts.y) * 0.5f), kText, labels[i].c_str());
     }
     dl->AddRectFilled(ImVec2(p.x + 1, p.y + 1 + tabH), ImVec2(p.x + width - 1, p.y + 1 + tabH + strip), kTabSel);
+    TabMark(dl, ImGui::GetID("##ltabmark"), p, 1 + tw * m_leftTab + Dip(10), 1 + tabH - Dip(2), tw - Dip(20), Dip(3));
 
     float top = 1 + tabH + strip;
     ImGui::SetCursorScreenPos(ImVec2(p.x + 1, p.y + top));
@@ -662,6 +746,7 @@ void App::DrawLeftPanel(float width, float height) {
     ImGui::EndChild();
     ImGui::PopStyleColor();
     ImGui::PopStyleVar(2);
+    FadeIn(ImGui::GetID("##leftfade"), (u64)m_leftTab, ImVec2(p.x + 1, p.y + top), ImVec2(p.x + width - 1, p.y + height - 1), kPanel);
 }
 
 void App::DrawArchivesTab() {
@@ -815,18 +900,26 @@ void App::DrawFoldersTab() {
     SeparatorTag(nullptr, Dip(2));
 
     // visible rows of the tree (depth-first over expanded folders)
-    struct Row { u32 f; int depth; };
+    struct Row { u32 f; int depth, parentRow; };
     std::vector<Row> rows;
     rows.reserve(256);
     std::vector<Row> stack;
-    for (auto it = folders[0].folders.rbegin(); it != folders[0].folders.rend(); ++it) stack.push_back({*it, 0});
+    for (auto it = folders[0].folders.rbegin(); it != folders[0].folders.rend(); ++it) stack.push_back({*it, 0, -1});
     while (!stack.empty()) {
         Row r = stack.back();
         stack.pop_back();
         rows.push_back(r);
+        int me = (int)rows.size() - 1;
         if (m_expanded.count(r.f))
-            for (auto it = folders[r.f].folders.rbegin(); it != folders[r.f].folders.rend(); ++it) stack.push_back({*it, r.depth + 1});
+            for (auto it = folders[r.f].folders.rbegin(); it != folders[r.f].folders.rend(); ++it) stack.push_back({*it, r.depth + 1, me});
     }
+    auto expand = [&](u32 f, bool on) {
+        if (on) {
+            m_expanded.insert(f);
+            m_expandedAt[f] = ImGui::GetTime();
+        } else
+            m_expanded.erase(f);
+    };
 
     float infoH = (ImGui::GetTextLineHeight() * 1.25f) * 5 + FontDip(11) + Dip(16) + Dip(6);
     ImGui::BeginChild("##tree", ImVec2(0, ImGui::GetContentRegionAvail().y - infoH), ImGuiChildFlags_None, ImGuiWindowFlags_HorizontalScrollbar);
@@ -859,8 +952,7 @@ void App::DrawFoldersTab() {
             RowState rs = ListRow("##row", ImVec2(std::max(rw, x - p.x + Dip(250)), rowH), sel);
             if (rs.pressed) {
                 if (arrowHover) {
-                    if (open) m_expanded.erase(r.f);
-                    else m_expanded.insert(r.f);
+                    expand(r.f, !open);
                 } else {
                     m_folder = r.f;
                     m_explorerVisible = true;
@@ -868,8 +960,7 @@ void App::DrawFoldersTab() {
             }
             if (rs.doubleClicked && !arrowHover) {
                 if (hasKids) {
-                    if (open) m_expanded.erase(r.f);
-                    else m_expanded.insert(r.f);
+                    expand(r.f, !open);
                 } else if (!f.files.empty()) {
                     m_leftTab = 2;
                 }
@@ -880,7 +971,7 @@ void App::DrawFoldersTab() {
                 ImGui::EndPopup();
             }
             float cy = p.y + rowH * 0.5f;
-            if (hasKids) IconChevron(dl, ImVec2(x + Dip(10), cy), Dip(16), open ? kPi * 0.25f : 0.f, kText);
+            if (hasKids) IconChevron(dl, ImVec2(x + Dip(10), cy), Dip(16), Glide(ImGui::GetID("##chev"), open ? kPi * 0.5f : 0.f, 0.15f, 0.01f), kText);
             float ix = x + Dip(20);
             IconFolder(dl, ImVec2(ix, cy - Dip(8)), Dip(16), open || sel, f.name);
             float tx = ix + Dip(16) + Dip(6);   // names line up whatever the icon
@@ -892,6 +983,20 @@ void App::DrawFoldersTab() {
                 ImGui::PopFont();
             }
             if (sel) selIndex = i;
+            // rows of a folder just opened fade in one after another from under it
+            if (r.parentRow >= 0 && g_uiAnim) {
+                auto ex = m_expandedAt.find(rows[r.parentRow].f);
+                if (ex != m_expandedAt.end()) {
+                    float t = (float)((ImGui::GetTime() - ex->second - std::min(i - r.parentRow - 1, 12) * 0.018) / 0.16);
+                    if (t < 1.f) {
+                        t = std::max(0.f, t);
+                        float e = t * t * (3 - 2 * t);
+                        dl->AddRectFilled(p, ImVec2(p.x + std::max(rw, x - p.x + Dip(250)), p.y + rowH), Alpha(kPanel, 1.f - e));
+                        g_animating = true;
+                    } else if (t > 4.f)
+                        m_expandedAt.erase(ex);
+                }
+            }
             ImGui::PopID();
         }
     if (selIndex < 0)
@@ -1077,7 +1182,8 @@ void App::DrawPackagesTab() {
 void App::DrawRightPanel(float width, float height) {
     ImVec2 p = ImGui::GetCursorScreenPos();
     ImDrawList* dl = ImGui::GetWindowDrawList();
-    float logBlock = Dip(26) + Dip(10) + (m_settings.loggerExpanded ? Dip(175) : 0);   // expander header + margins + log
+    float logOpen = Anim(ImGui::GetID("##logopen"), m_settings.loggerExpanded, 0.2f);   // the log slides open / shut
+    float logBlock = Dip(26) + Dip(10) + Dip(175) * logOpen;   // expander header + margins + log
     float contentH = height - logBlock;
     bool explorer = m_explorerVisible && m_mountState == MountState::Ready;
 
@@ -1095,6 +1201,13 @@ void App::DrawRightPanel(float width, float height) {
         ImGui::PopStyleVar(2);
     } else {
         DrawDocTabs(contentH);
+    }
+    {   // switching tabs / explorer folders, or a document finishing loading: the new content fades in
+        u64 key = 0;
+        if (explorer) key = 1ull << 63 | m_folder;
+        else if (Document* d = ActiveDoc()) key = d->id << 2 | (d->loading ? 1 : 0);
+        // below the document tab row (it stays put)
+        FadeIn(ImGui::GetID("##contentfade"), key, ImVec2(p.x, p.y + (explorer ? 0.f : m_docHeaderH)), ImVec2(p.x + width - Dip(3), p.y + contentH), kPanel);
     }
 
     // floating switch, bottom right of the content area (FModel's Assets Explorer toggle)
@@ -1136,7 +1249,7 @@ void App::DrawRightPanel(float width, float height) {
     // log expander
     float ly = p.y + contentH + Dip(5);
     ImGui::SetCursorScreenPos(ImVec2(p.x, ly));
-    DrawLog(width - Dip(3));
+    DrawLog(width - Dip(3), logOpen);
 }
 
 void App::DrawExplorer() {
@@ -1561,6 +1674,11 @@ void App::DrawDocTabs(float height) {
     }
     float stripY = p.y + headerH;
     dl->AddRectFilled(ImVec2(p.x, stripY), ImVec2(p.x + width, stripY + Dip(4)), kTabSel);
+    for (size_t i = 0; i < m_docs.size(); i++)
+        if (m_docs[i]->id == m_activeDoc) {
+            int r = (int)i / perRow, c = (int)i % perRow;
+            TabMark(dl, ImGui::GetID("##doctabmark"), p, c * tabW + Dip(6), r * tabH + tabH - Dip(3), tabW - Dip(12), Dip(3));
+        }
 
     if (close) CloseDocument(close);
     if (closeOthers) CloseOtherDocuments(closeOthers);
@@ -1568,6 +1686,7 @@ void App::DrawDocTabs(float height) {
     if (m_docs.empty()) AddTab();
 
     float top = headerH + Dip(4);
+    m_docHeaderH = top;
     ImGui::SetCursorScreenPos(ImVec2(p.x, p.y + top));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
     ImGui::PushStyleColor(ImGuiCol_ChildBg, kPanel);
@@ -2738,8 +2857,13 @@ void App::DrawJsonEditor(Document& d, ImVec2 size) {
             ImGui::SetKeyboardFocusHere(-1);
         }
     }
-    if (d.loading && !d.newTab) {
-        // the status bar shows "Loading"; keep the editor empty like FModel
+    if (d.loading && !d.newTab) {   // the editor stays empty like FModel's; a spinner in its middle says it is coming
+        ImGuiWindow* win = ImGui::GetCurrentWindow();
+        ImVec2 c((win->InnerRect.Min.x + win->InnerRect.Max.x) * 0.5f, (win->InnerRect.Min.y + win->InnerRect.Max.y) * 0.5f);
+        float appear = Anim(ImGui::GetID("##loadspin"), true, 0.25f);   // fades in (quick loads never show it fully)
+        Spinner(win->DrawList, ImVec2(c.x, c.y - Dip(12)), Dip(14), Alpha(kAccent, appear), Dip(3));
+        const char* msg = "Loading";
+        Text(win->DrawList, ImVec2(c.x - ImGui::CalcTextSize(msg).x * 0.5f, c.y + Dip(10)), Alpha(kTextDim, appear), msg);
     }
     ImGui::EndChild();
     ImGui::PopStyleVar();
@@ -2749,7 +2873,7 @@ void App::DrawJsonEditor(Document& d, ImVec2 size) {
 
 // ================================================================== log + status bar
 
-void App::DrawLog(float width) {
+void App::DrawLog(float width, float open) {
     LogSnapshot(m_log, m_logSeen);
     if (m_log.size() > 5000) m_log.erase(m_log.begin(), m_log.begin() + (m_log.size() - 4000));
     ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -2762,10 +2886,10 @@ void App::DrawLog(float width) {
     dl->AddRectFilled(p, ImVec2(p.x + width, p.y + hh), Mix(kLayer0, kHover, HoverAnim()));
     dl->AddLine(ImVec2(p.x, p.y), ImVec2(p.x + width, p.y), kBorder);
     dl->AddLine(ImVec2(p.x, p.y + hh - 1), ImVec2(p.x + width, p.y + hh - 1), kBorder);
-    IconExpandLog(dl, ImVec2(p.x + width * 0.5f, p.y + hh * 0.5f), Dip(16), kText, m_settings.loggerExpanded);
-    if (!m_settings.loggerExpanded) return;
+    IconExpandLog(dl, ImVec2(p.x + width * 0.5f, p.y + hh * 0.5f), Dip(16), kText, open);
+    if (open <= 0.f) return;
 
-    float h = Dip(175);
+    float h = std::max(1.f, Dip(175) * open);
     ImGui::SetCursorScreenPos(ImVec2(p.x, p.y + hh));
     ImGui::PushStyleColor(ImGuiCol_ChildBg, kPanel);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(Dip(5), Dip(5)));
@@ -2810,9 +2934,21 @@ void App::DrawStatusBar() {
     bool docLoading = false;
     for (auto& d : m_docs) docLoading |= d->loading || d->worldLoading;
     bool busy = m_mountState == MountState::Mounting || m_exporting || docLoading || m_refBuilding;
-    ImU32 col = m_mountState == MountState::Failed ? kError : busy ? kAlert : kAccent;
+    // the colour eases between states; while busy a light band sweeps across and a spinner turns before the label
+    float busyT = Anim(ImGui::GetID("##sbbusy"), busy, 0.3f), failT = Anim(ImGui::GetID("##sbfail"), m_mountState == MountState::Failed, 0.3f);
+    ImU32 col = Mix(Mix(kAccent, kAlert, busyT), kError, failT);
     ImDrawList* dl = ImGui::GetWindowDrawList();
     dl->AddRectFilled(p, ImVec2(p.x + w, p.y + h), col);
+    if (busyT > 0 && g_uiAnim) {
+        float band = std::max(Dip(160), w * 0.18f), cycle = 1.6f;
+        float x = p.x - band + (w + band) * (float)fmod(ImGui::GetTime() / cycle, 1.0);
+        ImU32 clear = IM_COL32(255, 255, 255, 0), lit = IM_COL32(255, 255, 255, (int)(40 * busyT));
+        dl->PushClipRect(p, ImVec2(p.x + w, p.y + h), true);
+        dl->AddRectFilledMultiColor(ImVec2(x, p.y), ImVec2(x + band * 0.5f, p.y + h), clear, lit, lit, clear);
+        dl->AddRectFilledMultiColor(ImVec2(x + band * 0.5f, p.y), ImVec2(x + band, p.y + h), lit, clear, clear, lit);
+        dl->PopClipRect();
+        g_animating = true;
+    }
     dl->AddLine(p, ImVec2(p.x + w, p.y), kBorder);
     std::string label = m_mountState == MountState::Mounting ? "Loading archives \xE2\x80\xA6"
                         : m_mountState == MountState::Failed  ? "Failed: " + m_mountError
@@ -2831,7 +2967,12 @@ void App::DrawStatusBar() {
     }
     float rw = right.empty() ? 0 : ImGui::CalcTextSize(right.c_str()).x + Dip(16) + Dip(10);
     dl->PushClipRect(p, ImVec2(p.x + w - rw - Dip(10), p.y + h), true);
-    Text(dl, ImVec2(p.x + Dip(5) + Dip(4), ty), IM_COL32_WHITE, label.c_str());
+    float lx = p.x + Dip(9);
+    if (busy) {
+        Spinner(dl, ImVec2(lx + Dip(6), p.y + h * 0.5f), Dip(5.5f), Alpha(IM_COL32_WHITE, 0.4f + 0.6f * busyT), Dip(2));
+        lx += Dip(6) * 2 + Dip(8);
+    }
+    Text(dl, ImVec2(lx, ty), IM_COL32_WHITE, label.c_str());
     dl->PopClipRect();
     if (!right.empty()) {
         float rx = p.x + w - Dip(5) - ImGui::CalcTextSize(right.c_str()).x;
@@ -2883,7 +3024,11 @@ void App::DrawSearchWindow() {
         }
         float w = ImGui::GetContentRegionAvail().x;
         dl->AddRectFilled(ImVec2(p.x, p.y + th), ImVec2(p.x + w, p.y + th + Dip(4)), kTabSel);
+        TabMark(dl, ImGui::GetID("##stabmark"), p, tw * m_searchTab + Dip(10), th - Dip(2), tw - Dip(20) - 1, Dip(3));
         ImGui::SetCursorScreenPos(ImVec2(p.x, p.y + th + Dip(10)));
+        // the chosen tab's page fades in (drawn over the window's inner area below the tabs at the end of the frame's window)
+        ImGuiWindow* win = ImGui::GetCurrentWindow();
+        FadeIn(ImGui::GetID("##stabfade"), (u64)m_searchTab, ImVec2(p.x, p.y + th + Dip(4)), win->InnerRect.Max, kPanel);
     }
     if (m_searchTab >= 1 && m_searchTab <= 3) {
         if (m_searchTab == 1) DrawReferencesTab();

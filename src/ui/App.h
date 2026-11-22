@@ -312,7 +312,8 @@ private:
     void OpenBankEvent(Document& bankDoc, u32 eventId);                     // an event of an open bank in a new tab
     bool ExportAudioEntry(u32 entry, const ExportOptions& opt, std::vector<std::string>& written, std::string* error);
     void PlayAudio(Document& d, std::shared_ptr<AudioPcm> pcm, double from = 0);
-    void DrawLog(float width);
+    void DrawLog(float width, float open);   // open: 0 shut .. 1 open (slides)
+    float m_docHeaderH = 0;   // height of the document tab row (+ strip), for the content fade
     void DrawSearchWindow();
     void DrawFolderMenu(u32 folder);
     void Breadcrumb(u32 folder);
@@ -422,6 +423,7 @@ private:
 
     u32 m_folder = 0;                       // selected folder (0 = root)
     std::unordered_set<u32> m_expanded;     // open folders in the tree
+    std::unordered_map<u32, double> m_expandedAt;   // when a folder was opened (its rows fade in)
     u32 m_scrollTreeTo = UINT32_MAX;        // tree row to bring into view next frame
     int m_leftTab = 0;   // 0 archives, 1 folders, 2 packages
     int m_selPak = -1;

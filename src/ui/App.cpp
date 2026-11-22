@@ -2130,6 +2130,8 @@ void App::DrawSettings() {
     ImGui::Checkbox("Keep folder structure when exporting", &m_settings.exportKeepDirectories);
     ImGui::Checkbox("Animations: also export notify sounds (.wav) and their timeline (.notifies.json)", &m_settings.exportAnimSounds);
     row("");
+    ImGui::Checkbox("Interface animations (sliding tab marks, fades, spinners)", &m_settings.uiAnimations);
+    row("");
     ImGui::Checkbox("Show grid in model viewer", &m_settings.showGrid);
     row("Game language");
     ImGui::SetNextItemWidth(200);

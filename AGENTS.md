@@ -83,6 +83,9 @@ OodlePath=C:\...\oodle-data-shared.dll
 OutputDir=C:\...\SOTModel\Output
 ```
 
+`UiAnimations=0` turns the interface transitions off (sliding tab marks, content fades, turning tree expanders, the
+sliding log, spinners); a `--screenshot` may otherwise catch one mid-way.
+
 ## Paths
 
 Files are addressed by game path: `Athena/Content/Models/Props/Common/cmn_barrel_debris_02_a.uasset`.

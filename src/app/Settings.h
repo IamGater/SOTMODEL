@@ -9,6 +9,7 @@ struct Settings {
     std::vector<std::string> aesKeys;
     int previewMaxTexture = 2048;
     bool exportKeepDirectories = true;
+    bool uiAnimations = true;       // interface transitions (sliding tab marks, fades, spinners)
     bool exportAnimSounds = true;   // animations: their notify sounds (.wav) + a .notifies.json timeline
     int meshFormat = 0;        // 0 = glTF (.glb), 1 = OBJ
     int textureFormat = 0;     // 0 = PNG, 1 = DDS (raw blocks)
