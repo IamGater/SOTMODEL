@@ -268,7 +268,12 @@ PropValue ReadSimple(const Package& pkg, Reader& r, std::string_view type, size_
     if (type == "UInt32Property") { v.type = PropType::UInt32; v.u = r.U32(); return v; }
     if (type == "UInt64Property") { v.type = PropType::UInt64; v.u = r.U64(); return v; }
     if (type == "DoubleProperty") { v.type = PropType::Double; v.f = r.Read<double>(); return v; }
-    if (type == "LazyObjectProperty") { v.type = PropType::Raw; v.raw = r.ReadBytes(16); return v; }
+    if (type == "LazyObjectProperty") {   // FUniqueObjectGuid
+        v.type = PropType::Str;
+        u32 a = r.U32(), b = r.U32(), c = r.U32(), d = r.U32();
+        v.str = Fmt("%08X%08X%08X%08X", a, b, c, d);
+        return v;
+    }
     if (type == "DelegateProperty") {
         v.type = PropType::Delegate;
         v.i = r.I32();
@@ -313,9 +318,25 @@ PropValue ReadArray(const Package& pkg, Reader& r, const TagInfo& tag, size_t en
                 e.type = PropType::Struct;
                 e.fields = std::make_shared<PropertyList>();
                 ReadTaggedProperties(pkg, r, end, *e.fields);
+                for (auto& f : *e.fields)   // a tag whose type is not a property type: these were not tagged bags
+                    if (!IEndsWith(f.typeName, "Property")) throw ParseError("not a tagged struct");
                 v.items.push_back(std::move(e));
             }
             if (r.Pos() == end) return v;
+        } catch (...) {}
+        v.items.clear();
+        r.Seek(save);
+        // StringAssetReference / StringClassReference elements: one FString each
+        try {
+            for (i32 i = 0; i < n; i++) {
+                i32 len = r.Peek<i32>();
+                if (len < 0 || len > 1024) throw ParseError("not a path");
+                PropValue e;
+                e.type = PropType::SoftObject;
+                e.str = r.FString();
+                v.items.push_back(std::move(e));
+            }
+            if (r.Pos() == end) { v.str = "StructProperty(StringAssetReference?)"; return v; }
         } catch (...) {}
         v.items.clear();
         r.Seek(save);
