@@ -143,10 +143,11 @@ bool ReadMaterial(PackageCache& cache, const std::string& path, MaterialInfo& m,
         static const char* layers[] = {"decal", "damage", "livery", "detail", "overlay", "blend", "dirt", "colour map", "color map", "mask"};
         for (const char* l : layers)
             if (n.find(l) != std::string::npos) return 1;
-        if (path.find("livery") != std::string::npos || path.find("/default/") != std::string::npos) return 1;
+        int s = 3;   // a named layer loses to any other name; the texture's folder only breaks ties ("Sail Diffuse" in Livery/)
         for (const char* p : plain)
-            if (n == p) return 3;
-        return 2;
+            if (n == p) s = 4;
+        if (path.find("livery") != std::string::npos || path.find("/default/") != std::string::npos) s--;
+        return s;
     };
     int best[4] = {-1, -1, -1, -1};
     for (auto& t : m.textures) {
