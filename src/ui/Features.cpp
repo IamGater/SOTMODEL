@@ -9,6 +9,9 @@
 #include "render/ShaderTools.h"
 #include "ue/Material.h"
 #include "ue/Mesh.h"
+#include "ue/Particles.h"
+#include "ue/World.h"
+#include "audio/Wwise.h"
 #include "render/Offscreen.h"
 #include "app/WwiseEvents.h"
 #include "imgui.h"
@@ -381,7 +384,35 @@ std::shared_ptr<GpuTexture> App::Thumbnail(u32 entry) {
     m_jobs->Push([this, entry] {
         std::shared_ptr<GpuTexture> tex;
         std::string err;
-        if (auto pkg = m_api->cache->Load(entry, &err)) {
+        std::string_view path = m_api->vfs.Path(entry);
+        if (IEndsWith(path, ".wem")) {   // sounds: the waveform (peak per column over all channels)
+            Bytes data;
+            AudioPcm pcm;
+            if (m_api->vfs.Read(entry, data, &err) && DecodeWem(data.data(), data.size(), pcm, &err) && pcm.Frames() > 0) {
+                Image img;
+                img.width = 192;
+                img.height = 96;
+                img.rgba.assign((size_t)img.width * img.height * 4, 0);
+                size_t frames = pcm.Frames();
+                float peak = 1;
+                for (i16 s : pcm.samples) peak = std::max(peak, fabsf((float)s));
+                for (int x = 0; x < img.width; x++) {
+                    size_t a = frames * x / img.width, b = std::max(a + 1, frames * (x + 1) / img.width);
+                    float lo = 0, hi = 0;
+                    for (size_t f = a; f < b && f < frames; f++)
+                        for (int c = 0; c < pcm.channels; c++) {
+                            float v = pcm.samples[f * pcm.channels + c] / peak;
+                            lo = std::min(lo, v), hi = std::max(hi, v);
+                        }
+                    int mid = img.height / 2, y0 = mid - (int)(hi * (mid - 2)), y1 = mid - (int)(lo * (mid - 2));
+                    for (int y = std::max(0, y0); y <= std::min(img.height - 1, std::max(y1, y0 + 1)); y++) {
+                        u8* p = &img.rgba[((size_t)y * img.width + x) * 4];
+                        p[0] = 120, p[1] = 200, p[2] = 255, p[3] = 255;
+                    }
+                }
+                tex = m_renderer->CreateTexture(img, true, false);
+            }
+        } else if (auto pkg = m_api->cache->Load(entry, &err)) {
             i32 main = pkg->MainExport();
             TextureInfo info;
             Image img;
@@ -406,6 +437,52 @@ std::shared_ptr<GpuTexture> App::Thumbnail(u32 entry) {
                         if (tm && ReadTextureInfo(*tp, tm - 1, info, &err) && DecodeTexture(*tp, info, -1, 160, img, &err))
                             tex = m_renderer->CreateTexture(img, info.srgb, false);
                     }
+                }
+            } else if (cls == "ParticleSystem") {   // effects: the simulation a moment in, drawn by the software sprite renderer
+                ParticleSystemInfo ps;
+                if (ReadParticleSystem(*m_api->cache, *pkg, main - 1, ps, &err) && !ps.emitters.empty()) {
+                    float longest = 0.5f;
+                    for (auto& e : ps.emitters) longest = std::max(longest, e.delay + e.duration);
+                    float t = std::min(longest, 2.f);
+                    std::vector<Image> textures(ps.emitters.size());
+                    std::vector<ParticleRenderEmitter> re(ps.emitters.size());
+                    for (size_t i = 0; i < ps.emitters.size(); i++) {
+                        auto& e = ps.emitters[i];
+                        if (LoadParticleTexture(*m_api->cache, e.material, 256, textures[i])) re[i].texture = &textures[i];
+                        re[i].subH = e.subH;
+                        re[i].subV = e.subV;
+                        re[i].additive = e.blendMode.find("Additive") != std::string::npos;
+                        re[i].alignment = e.screenAlignment;
+                        re[i].pivot = ParticlePivot(e);
+                        re[i].frameBlend = e.subUVMethod.find("Blend") != std::string::npos;
+                    }
+                    Vec3 centre;
+                    float dist;
+                    ParticleFrame(ps, t, centre, dist);
+                    ParticleSim sim;
+                    sim.Init(ps);
+                    sim.AdvanceTo(t);
+                    std::vector<ParticleSprite> sp;
+                    sim.Sprites(sp);
+                    if (!sp.empty()) {
+                        RenderParticleSprites(sp, re, centre, dist, -135, -15, 160, 160, img);
+                        tex = m_renderer->CreateTexture(img, true, false);
+                    }
+                }
+            } else if (cls == "BlueprintGeneratedClass") {   // actor classes: the assembled components (skipped when logic only)
+                WorldLoader loader(*m_api->cache);
+                WorldOptions opt;
+                opt.lights = false;
+                opt.landscape = false;
+                WorldData world;
+                if (loader.AddBlueprint(GamePathToPackage(path), Mat4::Identity(), opt, world, &err) && world.InstanceCount() > 0) {
+                    WorldPreviewRequest req;
+                    req.width = req.height = 160;
+                    req.draw.grid = false;
+                    req.world.water = false;   // just the actor, close up
+                    req.world.fog = false;
+                    req.zoom = 0.55f;
+                    if (RenderWorldPreview(*m_api->cache, world, req, img, &err)) tex = m_renderer->CreateTexture(img, true, false);
                 }
             }
         }

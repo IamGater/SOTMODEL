@@ -1536,7 +1536,7 @@ void App::DrawExplorer() {
                     size_t dot = fn.rfind('.');
                     std::string base(dot == std::string_view::npos ? fn : fn.substr(0, dot)), ext(dot == std::string_view::npos ? "" : fn.substr(dot + 1));
                     std::string cls = IsPackageFile(fn) ? m_classes.Get(id) : std::string();
-                    std::shared_ptr<GpuTexture> thumb = m_settings.previewTextures && IEndsWith(fn, ".uasset") ? Thumbnail(id) : nullptr;
+                    std::shared_ptr<GpuTexture> thumb = m_settings.previewTextures && (IEndsWith(fn, ".uasset") || IEndsWith(fn, ".wem")) ? Thumbnail(id) : nullptr;
                     if (thumb) {
                         float s = std::min(Dip(20) / thumb->width, Dip(20) / thumb->height);
                         ImVec2 isz(thumb->width * s, thumb->height * s), ia(x + (Dip(20) - isz.x) * 0.5f, cy - isz.y * 0.5f);
@@ -1616,7 +1616,7 @@ void App::DrawExplorer() {
                     ImU32 tint = AssetTint(fn, cls);
                     dl->AddRectFilled(mn, mxp, Mix(kCardFile, Shade(kCardFile, 1.2f), ht));
                     dl->AddRectFilled(mn, ImVec2(mxp.x, mn.y + topH), kBorder);
-                    std::shared_ptr<GpuTexture> thumb = m_settings.previewTextures && IEndsWith(fn, ".uasset") ? Thumbnail(id) : nullptr;
+                    std::shared_ptr<GpuTexture> thumb = m_settings.previewTextures && (IEndsWith(fn, ".uasset") || IEndsWith(fn, ".wem")) ? Thumbnail(id) : nullptr;
                     if (thumb) {   // fitted into the preview square
                         float s = std::min(topH / thumb->width, topH / thumb->height);
                         ImVec2 isz(thumb->width * s, thumb->height * s), ia(mn.x + (tw - isz.x) * 0.5f, mn.y + (topH - isz.y) * 0.5f);
