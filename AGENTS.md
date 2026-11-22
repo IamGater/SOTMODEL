@@ -159,7 +159,14 @@ Typical flow: `search` → `get_package` → `get_properties` / `preview_*` → 
   int / object / float, Vector, Guid, byte) and keep the first that ends exactly at the property's end; they come out
   as `[{"Key": ..., "Value": ...}]`. Lazy object pointers are their GUID string.
 - Dev reports: `--cli scan <substring>` ends with `undecoded <type> <count> e.g. <package> <class>.<property>` for
-  values still shown as hex; `--cli materials [substring]` lists material node types the HLSL translator leaves at 0.
+  values still shown as hex (a full scan of all 105k packages leaves none) and prints the first BC6H textures;
+  `--cli materials [substring]` lists material node types the HLSL translator leaves at 0 and compiles each material's
+  preview shader with fxc, grouping the errors (568 of 569 compile; mt_unq_simple_flare's Custom code returns a
+  float2 from a float3 function). `SOTMODEL_DUMP_SHADER=<file>` makes the viewer write a preview shader fxc rejected.
+- Texture formats in the game: BC7, DXT1/5, BC5, BC4, B8G8R8A8, G8, FloatRGBA, and BC6H (the skydome stars, unsigned)
+  / PF_BC6H_SF16 (signed, the ships' deck-water height maps). BC6H decodes with third_party/bcdec (MIT / Unlicense)
+  and is tone mapped like the float formats; DDS export writes DXGI 95 / 96.
+- Material parameter collection parameters are `float` when the collection lists them under ScalarParameters.
 - Shader code in shader maps is LZ4-compressed (Sea of Thieves addition, uncompressed size after the resource).
   Reflection names are stripped: constant buffers, textures and samplers keep their register numbers (`cb1_cb[42]`,
   `t3`, `s5`); inputs / outputs keep their semantics. The decompiled HLSL recompiles with fxc for almost every
