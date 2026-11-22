@@ -248,7 +248,10 @@ std::string ParticleCurve::Describe() const {
         s += mn == mx ? Fmt("%g", mn) : Fmt("%g..%g", mn, mx);
     }
     if (dims > 1) s = "(" + s + ")";
-    if (count > 1) s = Fmt("curve %d: ", count) + s;
+    if (count > 1 && timeScale > 0) {
+        float t0 = timeBias, t1 = timeBias + (count - 1) / timeScale;   // key range, when it is not the usual 0..1
+        s = (fabsf(t0) > 1e-3f || fabsf(t1 - 1) > 1e-3f ? Fmt("curve %d over %g..%g: ", count, t0, t1) : Fmt("curve %d: ", count)) + s;
+    } else if (count > 1) s = Fmt("curve %d: ", count) + s;
     else if (op == 2) s = "random " + s;
     else if (op == 3) s = "min or max " + s;
     return s;
