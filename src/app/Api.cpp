@@ -76,14 +76,27 @@ bool Api::EnsureMounted(std::string* error) {
     return true;
 }
 
-ReferenceIndex* Api::EnsureReferences(bool build, std::string* error) {
-    if (references && references->Ready()) return references.get();
+std::unordered_set<u32> Api::TextKeyHashes() const {
+    std::unordered_set<u32> keys;
+    if (auto loc = localization)
+        for (auto& e : loc->Entries()) keys.insert(ReferenceIndex::TextKeyHash(e.key));
+    return keys;
+}
+
+ReferenceIndex* Api::EnsureReferences(bool build, std::string* error, bool needTextKeys) {
+    if (references && references->Ready() && (!needTextKeys || references->HasTextKeys() || !build)) return references.get();
     auto idx = std::make_shared<ReferenceIndex>();
-    if (!idx->LoadCache(vfs)) {
+    bool cached = idx->LoadCache(vfs);
+    if (cached && needTextKeys && !idx->HasTextKeys() && build) cached = false;   // from an older version: index again
+    if (!cached) {
         if (!build) { if (error) *error = "the reference index is not built yet"; return nullptr; }
         std::atomic<bool> cancel{false};
         LOGI("references: indexing the imports of every package (once, then cached)...");
-        if (!idx->Build(vfs, std::max(2u, std::thread::hardware_concurrency() / 2), cancel)) { if (error) *error = "indexing failed"; return nullptr; }
+        auto keys = TextKeyHashes();
+        if (!idx->Build(vfs, std::max(2u, std::thread::hardware_concurrency() / 2), cancel, nullptr, nullptr, keys.empty() ? nullptr : &keys)) {
+            if (error) *error = "indexing failed";
+            return nullptr;
+        }
         idx->SaveCache(vfs);
     }
     references = idx;

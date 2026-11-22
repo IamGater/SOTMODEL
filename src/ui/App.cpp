@@ -225,8 +225,8 @@ void App::StartMount() {
                         if (eq < e) {
                             std::string k = q.substr(s, eq - s), v = q.substr(eq + 1, e - eq - 1);
                             char* dst = k == "class" ? m_csClass : k == "uses" ? m_csUses : k == "property" ? m_csProp : k == "value" ? m_csValue
-                                        : k == "name" ? m_csName : k == "folder" ? m_csFolder : nullptr;
-                            size_t cap = k == "class" || k == "property" ? 128 : k == "value" || k == "name" ? 256 : 512;
+                                        : k == "name" ? m_csName : k == "folder" ? m_csFolder : k == "textkey" ? m_csTextKey : nullptr;
+                            size_t cap = k == "class" || k == "property" ? 128 : k == "textkey" ? 160 : k == "value" || k == "name" ? 256 : 512;
                             if (dst) snprintf(dst, cap, "%s", v.c_str());
                         }
                         s = e + 1;

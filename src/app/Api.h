@@ -66,7 +66,9 @@ public:
     bool SetLanguage(const std::string& culture, std::string* error = nullptr);
     // package imports index (find references); null until loaded from cache or built
     std::shared_ptr<ReferenceIndex> references;
-    ReferenceIndex* EnsureReferences(bool buildIfMissing, std::string* error = nullptr);
+    // needTextKeys: an index (cached by an older version) without text keys is rebuilt when buildIfMissing
+    ReferenceIndex* EnsureReferences(bool buildIfMissing, std::string* error = nullptr, bool needTextKeys = false);
+    std::unordered_set<u32> TextKeyHashes() const;   // ReferenceIndex::TextKeyHash of every localisation key (empty: none loaded)
 
     // helpers for tools
     i64 ResolveFile(const std::string& path) const;   // game path, /Game path or object path
@@ -88,6 +90,7 @@ private:
 // Content search (search_content tool and the UI's Content tab): every given filter must match.
 struct ContentQuery {
     std::string cls, uses, prop, value, name, folder;   // class / imported asset / property path / value / path substring / folder
+    std::string textKey;   // localisation key: packages holding an FText with it (reference index text keys)
     bool exact = false;
     int limit = 100, scanLimit = 20000;
 };

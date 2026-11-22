@@ -333,7 +333,7 @@ private:
     void ShowMetadata(u32 entry, bool newTab = false);
     void ShowArchivesInfo();
     void FindReferences(u32 entry);
-    void StartReferenceIndex();
+    void StartReferenceIndex(bool rebuild = false);   // rebuild: an index without text keys is replaced (kept usable meanwhile)
     void DrawReferencesTab();
     void DrawDependencyGraph();   // DepGraphView.cpp
     void NavigateReferences(u32 entry);   // re-centre the References tab on a package (keeps a back history)
@@ -448,7 +448,7 @@ private:
         bool ok = false;
     };
     std::shared_ptr<ContentJob> m_contentJob;
-    char m_csClass[128] = {}, m_csUses[512] = {}, m_csProp[128] = {}, m_csValue[256] = {}, m_csName[256] = {}, m_csFolder[512] = {};
+    char m_csClass[128] = {}, m_csUses[512] = {}, m_csProp[128] = {}, m_csValue[256] = {}, m_csName[256] = {}, m_csFolder[512] = {}, m_csTextKey[160] = {};
     bool m_csExact = false, m_csPendingIndex = false;
     int m_csSelected = -1;
     void DrawContentTab();
@@ -477,6 +477,7 @@ private:
     std::mutex m_thumbMutex;
     int m_thumbPending = 0;
     std::vector<std::thread> m_refThreads;
+    std::vector<std::shared_ptr<ReferenceIndex>> m_retiredRefs;   // replaced indexes: a running search may still read them
     std::atomic<bool> m_shutdown{false};
     AudioPlayer m_player;
     u64 m_playDoc = 0, m_playRequest = 0;

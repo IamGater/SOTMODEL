@@ -255,24 +255,30 @@ static std::wstring DataDir() {
     return p.substr(0, p.find_last_of(L'\\'));
 }
 
-void App::StartReferenceIndex() {
-    if (m_refReady || m_refBuilding || m_mountState != MountState::Ready) return;
-    if (m_api->references && m_api->references->Ready()) { m_refReady = true; return; }
+void App::StartReferenceIndex(bool rebuild) {
+    if (m_refBuilding || m_mountState != MountState::Ready) return;
     auto idx = std::make_shared<ReferenceIndex>();
-    if (idx->LoadCache(m_api->vfs)) {
-        m_api->references = idx;
-        m_refReady = true;
-        LOGI("references: loaded the index of %zu packages from cache", idx->Size());
-        return;
+    if (!rebuild) {
+        if (m_refReady) return;
+        if (m_api->references && m_api->references->Ready()) { m_refReady = true; return; }
+        if (idx->LoadCache(m_api->vfs)) {
+            m_api->references = idx;
+            m_refReady = true;
+            LOGI("references: loaded the index of %zu packages from cache", idx->Size());
+            return;
+        }
     }
     m_refBuilding = true;
     m_refDone = 0;
     m_refTotal = 0;
-    LOGI("references: indexing the imports of every package (once, then cached)...");
+    LOGI(rebuild ? "references: re-indexing every package to record the localised texts they use..."
+                 : "references: indexing the imports of every package (once, then cached)...");
     m_refThreads.emplace_back([this, idx] {   // 2 workers: the job pool stays free for documents
-        if (!idx->Build(m_api->vfs, 2, m_shutdown, &m_refDone, &m_refTotal)) return;
+        auto keys = m_api->TextKeyHashes();   // also which packages use each localised text
+        if (!idx->Build(m_api->vfs, 2, m_shutdown, &m_refDone, &m_refTotal, keys.empty() ? nullptr : &keys)) return;
         idx->SaveCache(m_api->vfs);
         Post([this, idx] {
+            if (m_api->references) m_retiredRefs.push_back(m_api->references);
             m_api->references = idx;
             m_refBuilding = false;
             m_refReady = true;

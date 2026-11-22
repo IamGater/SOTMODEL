@@ -1,5 +1,6 @@
 // Content search: packages by class, by what they import ("uses this texture / material / mesh"), by property values,
 // and the reverse reference index (who imports this package).
+#include <iterator>
 #include "app/Api.h"
 #include "core/Json.h"
 #include "ue/DataTable.h"
@@ -11,24 +12,25 @@ namespace {
 // property path match: "Speed", "Settings.Speed" or "Items[2].Name"; value: case-insensitive substring of the cell text
 // (or exact with value_exact). Walks structs and arrays; records "Path=Value" of the hits.
 void MatchProps(const PropertyList& props, const std::string& prefix, const std::string& want, const std::string& value, bool exact,
-                std::vector<std::string>& hits, int depth = 0) {
+                std::vector<std::string>& hits, int depth = 0, const std::string& textKey = {}) {
     if (depth > 8 || hits.size() > 20) return;
     for (auto& p : props) {
         std::string path = prefix + (prefix.empty() ? "" : ".") + p.name + (p.arrayIndex ? Fmt("[%d]", p.arrayIndex) : "");
         auto check = [&](const std::string& pth, const PropValue& v) {
             bool nameOk = want.empty() || IEquals(pth, want) || IEndsWith(pth, "." + want) || IEquals(pth.substr(pth.rfind('.') + 1), want);
             if (!nameOk) return;
+            if (!textKey.empty() && !(v.type == PropType::Text && v.items.size() == 2 && IEquals(v.items[1].str, textKey))) return;
             std::string text = TableCell(v);
             bool valueOk = value.empty() || (exact ? IEquals(text, value) : ToLower(text).find(ToLower(value)) != std::string::npos);
             if (valueOk) hits.push_back(pth + " = " + (text.size() > 160 ? text.substr(0, 160) + "..." : text));
         };
         check(path, p.value);
-        if (p.value.type == PropType::Struct && p.value.Fields()) MatchProps(*p.value.Fields(), path, want, value, exact, hits, depth + 1);
+        if (p.value.type == PropType::Struct && p.value.Fields()) MatchProps(*p.value.Fields(), path, want, value, exact, hits, depth + 1, textKey);
         if (p.value.type == PropType::Array)
             for (size_t i = 0; i < p.value.items.size() && i < 256; i++) {
                 const PropValue& it = p.value.items[i];
                 std::string ip = path + Fmt("[%zu]", i);
-                if (it.type == PropType::Struct && it.Fields()) MatchProps(*it.Fields(), ip, want, value, exact, hits, depth + 1);
+                if (it.type == PropType::Struct && it.Fields()) MatchProps(*it.Fields(), ip, want, value, exact, hits, depth + 1, textKey);
                 else check(ip, it);
             }
     }
@@ -117,9 +119,10 @@ void RegisterSearchTools(Api& api) {
                   "Search inside packages. Filters (all given ones must match): 'class' = main asset class (StaticMesh, MaterialInstanceConstant, "
                   "BlueprintGeneratedClass, DataTable, ...); 'uses' = the package imports this asset (a texture, material, mesh, Blueprint: path "
                   "or /Game path); 'property' + optional 'value' = some export has this property (name or dotted path, searched in structs and "
-                  "arrays) whose value contains 'value' (value_exact for equality); 'name' = substring of the path. With 'uses' the candidates come "
+                  "arrays) whose value contains 'value' (value_exact for equality); 'name' = substring of the path; 'text_key' = a localisation key "
+                  "(search_localization lists them): packages with an FText of that key, from the reference index (whole game). With 'uses' the candidates come "
                   "from the reference index (fast, whole game); otherwise restrict 'folder' (packages are read, scan_limit caps how many).",
-                  R"({"type":"object","properties":{"folder":{"type":"string"},"class":{"type":"string"},"uses":{"type":"string"},"property":{"type":"string"},"value":{"type":"string"},"value_exact":{"type":"boolean","default":false},"name":{"type":"string"},"limit":{"type":"integer","default":100},"scan_limit":{"type":"integer","default":20000}}})",
+                  R"({"type":"object","properties":{"folder":{"type":"string"},"class":{"type":"string"},"uses":{"type":"string"},"property":{"type":"string"},"value":{"type":"string"},"value_exact":{"type":"boolean","default":false},"name":{"type":"string"},"text_key":{"type":"string"},"limit":{"type":"integer","default":100},"scan_limit":{"type":"integer","default":20000}}})",
                   "folder",
                   [](Api& a, const JsonValue& args) {
                       ContentQuery q;
@@ -129,6 +132,7 @@ void RegisterSearchTools(Api& api) {
                       q.value = args.GetStr("value");
                       q.name = args.GetStr("name");
                       q.folder = args.GetStr("folder");
+                      q.textKey = args.GetStr("text_key");
                       q.exact = args.GetBool("value_exact", false);
                       q.limit = (int)args.GetNum("limit", 100);
                       q.scanLimit = (int)args.GetNum("scan_limit", 20000);
@@ -167,7 +171,7 @@ bool SearchContent(Api& a, const ContentQuery& q, ContentSearchResult& out, std:
                    std::atomic<int>* progress, std::atomic<int>* total, bool buildIndex) {
     auto fail = [&](const std::string& m) { if (error) *error = m; return false; };
     std::string name = ToLower(q.name), folder = ToLower(Vfs::NormalizePath(q.folder));
-    if (q.cls.empty() && q.uses.empty() && q.prop.empty() && q.value.empty() && name.empty()) return fail("give at least one filter");
+    if (q.cls.empty() && q.uses.empty() && q.prop.empty() && q.value.empty() && name.empty() && q.textKey.empty()) return fail("give at least one filter");
     if (!folder.empty() && folder.back() != '/') folder += '/';
     // candidates
     std::vector<u32> cand;
@@ -178,7 +182,21 @@ bool SearchContent(Api& a, const ContentQuery& q, ContentSearchResult& out, std:
         ReferenceIndex* idx = a.EnsureReferences(buildIndex, &err);
         if (!idx) return fail(err.empty() ? "the reference index is not ready" : err);
         if (auto* r = idx->Referencers((u32)t)) cand = *r;
-    } else {
+    }
+    if (!q.textKey.empty()) {   // packages whose bytes hold the key (then checked: which FText properties have it)
+        ReferenceIndex* idx = a.EnsureReferences(buildIndex, &err, true);
+        if (!idx) return fail(err.empty() ? "the reference index is not ready" : err);
+        if (!idx->HasTextKeys()) return fail("the reference index was built without text keys: rebuild it (delete References.bin)");
+        std::vector<u32> users;
+        if (auto* r = idx->TextUsers(q.textKey)) users = *r;
+        if (!q.uses.empty()) {
+            std::sort(cand.begin(), cand.end());
+            std::vector<u32> both;
+            std::set_intersection(cand.begin(), cand.end(), users.begin(), users.end(), std::back_inserter(both));
+            cand = std::move(both);
+        } else
+            cand = std::move(users);
+    } else if (q.uses.empty()) {
         if (folder.empty() && (!q.prop.empty() || !q.value.empty() || !q.cls.empty()))
             return fail("restrict 'folder' (or use 'uses') - reading every package of the game takes long");
         for (u32 i = 0; i < a.vfs.FileCount(); i++) {
@@ -200,7 +218,7 @@ bool SearchContent(Api& a, const ContentQuery& q, ContentSearchResult& out, std:
         if (!name.empty() && low.find(name) == std::string::npos) continue;
         ContentHit hit;
         hit.entry = e;
-        if (!q.cls.empty() || !q.prop.empty() || !q.value.empty()) {   // path-only filters don't need to read the package
+        if (!q.cls.empty() || !q.prop.empty() || !q.value.empty() || !q.textKey.empty()) {   // path-only filters don't need to read the package
             if (++out.scanned > q.scanLimit) { out.truncated = true; break; }
             auto pkg = a.cache->Load(e, &err);
             if (!pkg) continue;
@@ -208,23 +226,25 @@ bool SearchContent(Api& a, const ContentQuery& q, ContentSearchResult& out, std:
             hit.cls = main ? pkg->ExportClass(main - 1) : "";
             if (!q.cls.empty() && !IEquals(hit.cls, q.cls)) continue;
             auto& hits = hit.matches;
-            if (!q.prop.empty() || !q.value.empty()) {
+            if (!q.prop.empty() || !q.value.empty() || !q.textKey.empty()) {
                 for (size_t x = 0; x < pkg->Exports().size() && hits.size() < 20; x++) {
                     std::string perr;
                     PropertyList props = pkg->ReadProperties(x, nullptr, &perr);
                     std::vector<std::string> h;
-                    MatchProps(props, "", q.prop, q.value, q.exact, h);
+                    MatchProps(props, "", q.prop, q.value, q.exact, h, 0, q.textKey);
                     for (auto& s : h) hits.push_back(pkg->Exports()[x].objectName + ": " + s);
                     if (IsTableClass(pkg->ExportClass(x))) {   // DataTable rows count as properties too
                         TableData t;
                         if (ReadTable(*pkg, x, t))
                             for (auto& row : t.rows) {
                                 std::vector<std::string> rh;
-                                MatchProps(row.fields, "", q.prop, q.value, q.exact, rh);
+                                MatchProps(row.fields, "", q.prop, q.value, q.exact, rh, 0, q.textKey);
                                 for (auto& s : rh) hits.push_back("Rows." + row.name + ": " + s);
                             }
                     }
                 }
+                // a text key outside properties (Blueprint bytecode, native data) still counts
+                if (hits.empty() && !q.textKey.empty() && q.prop.empty() && q.value.empty()) hits.push_back("text key in the package data (not a property)");
                 if (hits.empty()) continue;
             }
         }

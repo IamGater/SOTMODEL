@@ -3002,9 +3002,20 @@ void App::DrawLocalizationTab() {
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
                 ImGui::PushID(i);
-                ImGui::Selectable(e->text.c_str(), false, ImGuiSelectableFlags_SpanAllColumns);
-                if (ImGui::IsItemHovered() && e->text.size() > 60) ImGui::SetTooltip("%s", e->text.c_str());
+                // double-click / menu: the assets using this text (Content tab, text key filter)
+                auto findUsers = [&] {
+                    m_csClass[0] = m_csUses[0] = m_csProp[0] = m_csValue[0] = m_csName[0] = m_csFolder[0] = 0;
+                    snprintf(m_csTextKey, sizeof(m_csTextKey), "%s", e->key.c_str());
+                    m_searchTab = 3;
+                    StartContentSearch();
+                };
+                if (ImGui::Selectable(e->text.c_str(), false, ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowDoubleClick) &&
+                    ImGui::IsMouseDoubleClicked(0))
+                    findUsers();
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s%sDouble-click: find the assets using this text", e->text.size() > 60 ? e->text.c_str() : "", e->text.size() > 60 ? "\n\n" : "");
                 if (ImGui::BeginPopupContextItem("##lctx")) {
+                    if (ImGui::MenuItem("Find Assets Using This Text")) findUsers();
+                    ImGui::Separator();
                     if (ImGui::MenuItem("Copy Text")) CopyToClipboard(e->text);
                     if (ImGui::MenuItem("Copy Key")) CopyToClipboard(e->key);
                     ImGui::EndPopup();
@@ -3030,11 +3041,16 @@ void App::StartContentSearch() {
     q.name = m_csName;
     q.folder = m_csFolder;
     q.exact = m_csExact;
+    q.textKey = m_csTextKey;
     q.limit = 5000;
-    if (!q.uses.empty() && !m_refReady) {   // 'uses' reads the reference index: build it first, the search starts once it is ready
-        StartReferenceIndex();
-        m_csPendingIndex = true;
-        return;
+    if (!q.uses.empty() || !q.textKey.empty()) {   // these read the reference index: build it first, the search starts once it is ready
+        if (!m_refReady) StartReferenceIndex();
+        if (m_refReady && !q.textKey.empty() && !(m_api->references && m_api->references->HasTextKeys()))
+            StartReferenceIndex(true);   // a cached index from before text keys
+        if (!m_refReady || m_refBuilding) {
+            m_csPendingIndex = true;
+            return;
+        }
     }
     m_csPendingIndex = false;
     if (m_contentJob && !m_contentJob->done) m_contentJob->cancel = true;
@@ -3108,6 +3124,11 @@ void App::DrawContentTab() {
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Use the folder open in the explorer");
     ImGui::SameLine(0, gap * 2);
     field("Name", "##csname", m_csName, sizeof(m_csName), "path contains", half - labelW);
+    // row 4: localisation key (the Localization tab's "Find Assets Using This Text" fills it)
+    field("Text key", "##cstkey", m_csTextKey, sizeof(m_csTextKey), "uses the FText with this localisation key", half - labelW);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("A key from the Localization tab: packages whose FText properties (or Blueprint code) use that string.\n"
+                          "Read from the reference index, so the whole game is searched.");
 
     bool running = m_contentJob && !m_contentJob->done;
     if (Button("Search", ImVec2(Dip(100), 0)) || go) StartContentSearch();
@@ -3120,9 +3141,9 @@ void App::DrawContentTab() {
         ImGui::SameLine(0, gap);
     }
     if (m_csPendingIndex) {
-        if (m_refReady) StartContentSearch();
+        if (m_refReady && !m_refBuilding) StartContentSearch();
         int done = m_refDone, total = std::max(1, m_refTotal.load());
-        ImGui::ProgressBar((float)done / total, ImVec2(-FLT_MIN, 0), Fmt("Indexing package imports %d / %d", done, total).c_str());
+        ImGui::ProgressBar((float)done / total, ImVec2(-FLT_MIN, 0), Fmt("Indexing package imports and texts %d / %d", done, total).c_str());
         m_busyFrames = 3;
     } else if (running) {
         int done = m_contentJob->progress, total = std::max(1, m_contentJob->total.load());
@@ -3130,7 +3151,7 @@ void App::DrawContentTab() {
         m_busyFrames = 3;
     } else if (!m_contentJob) {
         ImGui::AlignTextToFramePadding();
-        ImGui::TextDisabled("Every filter given must match. 'Uses' searches the whole game; without it, give a folder.");
+        ImGui::TextDisabled("Every filter given must match. 'Uses' and 'Text key' search the whole game; otherwise give a folder.");
     } else if (!m_contentJob->ok) {
         ImGui::AlignTextToFramePadding();
         ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(kError), "%s", m_contentJob->error.c_str());

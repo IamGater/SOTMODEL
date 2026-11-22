@@ -42,8 +42,8 @@ renders the window off-screen-safe (from the app's own back buffer), saves it on
 handy for checking what the viewer shows without screen capture. `--shaders <path>` opens the compiled shaders
 of a material package or of `Engine/Content/GlobalShaderCache-PCD3D_SM5.bin` instead; `--material-hlsl <path>`
 opens a material's graph translated to HLSL next to its node graph; `--references <path>` opens the References tab
-on the package's dependency graph; `--content "uses=<path>;class=<class>;property=..;value=..;name=..;folder=.."`
-runs the search window's Content tab (the GUI face of `search_content`, same filters, results open on double-click); 3D views open in a separate viewer window that follows the active tab
+on the package's dependency graph; `--content "uses=<path>;class=<class>;property=..;value=..;name=..;folder=..;textkey=.."`
+runs the search window's Content tab (the GUI face of `search_content`, same filters, results open on double-click; the Localization tab's "Find Assets Using This Text" / double-click fills `textkey`); 3D views open in a separate viewer window that follows the active tab
 (`ViewerWindow=0` in Settings.ini / "Back to tab" keeps them inside the tabs; `--popout` forces the window for one run);
 `--screenshot` saves that window's back buffer next to the main one as `<file>.viewer.png`.
 More automation for the 3D views: `--pick u,v` clicks a map's viewport once at that fraction of its size (the pick is
@@ -128,7 +128,7 @@ or `/Game/Models/Props/Common/cmn_barrel_debris_02_a.cmn_barrel_debris_02_a`.
 | `get_localized_text` | one FText (namespace + key) in every language |
 | `find_references` | packages that import the given one (meshes using a material, maps placing a Blueprint, ...); index built once, then cached |
 | `get_dependency_graph` | nodes (path, class, side -1 referencer / 0 root / 1 reference, depth, how many the per-node `limit` left out) and [importer, imported] edges around a package, `depth` levels out; `direction` both / referencers / references |
-| `search_content` | packages by main class, by what they use (`uses`), by property name / value (structs, arrays and DataTable rows searched) |
+| `search_content` | packages by main class, by what they use (`uses`), by property name / value (structs, arrays and DataTable rows searched), by localisation key (`text_key` from `search_localization`: packages holding an FText with it; the reference index records every locres key it finds in package bytes, an index cached by an older version is rebuilt once) |
 | `get_material` | material instance chain with every texture / scalar / vector parameter resolved |
 | `export` | write files: textures (PNG/DDS), meshes (glTF/OBJ), animations (glTF with skeleton + skinned mesh), JSON; `raw=true` writes any file as stored. Meshes as glb carry their simple collision as a separate `Collision` node (`UCX_<mesh>`, `collision=false` to skip) |
 | `get_audio_info` | Wwise audio: a `.wem` (codec, channels, rate, length) or a sound bank (`WwiseBank` package / `.bnk`) with its embedded media and its events (ids, names from the WwiseEvent assets) |
