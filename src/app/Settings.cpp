@@ -54,6 +54,11 @@ void Settings::Load() {
             else if (k == "ViewerWindow") viewerWindow = v == "1";
             else if (k == "Language") { if (!v.empty()) language = v; }
             else if (k == "AccentColor") accentColor = (u32)strtoul(v.c_str(), nullptr, 16) & 0xFFFFFF;
+            else if (k == "WindowPlacement") {
+                int m = 0;
+                if (sscanf(v.c_str(), "%d,%d,%d,%d,%d", &windowX, &windowY, &windowW, &windowH, &m) == 5) windowMaximized = m != 0;
+                else windowW = windowH = 0;
+            }
             else if (k == "FavoriteDir") { if (!v.empty()) favoriteDirs.push_back(v); }
         }
     }
@@ -85,6 +90,7 @@ bool Settings::Save() const {
     s += std::string("ViewerWindow=") + (viewerWindow ? "1" : "0") + "\n";
     s += "Language=" + language + "\n";
     s += Fmt("AccentColor=%06X\n", accentColor & 0xFFFFFF);
+    if (windowW > 0 && windowH > 0) s += Fmt("WindowPlacement=%d,%d,%d,%d,%d\n", windowX, windowY, windowW, windowH, windowMaximized ? 1 : 0);
     for (auto& f : favoriteDirs) s += "FavoriteDir=" + f + "\n";
     std::wstring p = Path();
     CreateDirectories(p.substr(0, p.find_last_of(L'\\')));

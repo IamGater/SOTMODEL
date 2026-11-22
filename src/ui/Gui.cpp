@@ -23,6 +23,8 @@ ComPtr<IDXGISwapChain1> g_swap;
 ComPtr<ID3D11RenderTargetView> g_rtv;
 UINT g_resizeW = 0, g_resizeH = 0;
 bool g_minimized = false;
+WINDOWPLACEMENT g_mainPlacement = {};   // main window placement when it was destroyed (remembered for the next start)
+bool g_mainPlacementOk = false;
 std::function<void(bool)> g_frame;   // renders one frame; called from WM_SIZE so resizing redraws live instead of stretching
 bool g_inFrame = false;
 
@@ -235,6 +237,8 @@ LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         if ((wParam & 0xfff0) == SC_KEYMENU) return 0;
         break;
     case WM_DESTROY:
+        g_mainPlacement.length = sizeof(g_mainPlacement);   // saved to the settings after the main loop
+        g_mainPlacementOk = GetWindowPlacement(hWnd, &g_mainPlacement) != FALSE;
         PostQuitMessage(0);
         return 0;
     }
@@ -382,7 +386,17 @@ int RunGui(const std::vector<std::string>& args) {
     if (forceW > 0) {
         SetWindowPos(hwnd, nullptr, 20, 20, forceW, forceH, SWP_NOZORDER);
         ShowWindow(hwnd, SW_SHOWNORMAL);
-    } else {   // not maximized: about 90% of the work area, centred
+    } else if (Settings last; last.Load(), last.windowW > 0 && last.windowH > 0 && screenshot.empty()) {
+        // where it was closed (normal placement; maximized again if it was), unless that is off every monitor now
+        RECT r{last.windowX, last.windowY, last.windowX + last.windowW, last.windowY + last.windowH};
+        if (MonitorFromRect(&r, MONITOR_DEFAULTTONULL)) {
+            WINDOWPLACEMENT wp = {sizeof(wp)};
+            GetWindowPlacement(hwnd, &wp);
+            wp.rcNormalPosition = r;
+            wp.showCmd = last.windowMaximized ? SW_SHOWMAXIMIZED : SW_SHOWNORMAL;
+            SetWindowPlacement(hwnd, &wp);
+        } else ShowWindow(hwnd, SW_SHOWNORMAL);
+    } else {   // first start: about 90% of the work area, centred (not maximized)
         MONITORINFO mi = {sizeof(mi)};
         if (GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY), &mi)) {
             RECT wa = mi.rcWork;
@@ -514,6 +528,23 @@ int RunGui(const std::vector<std::string>& args) {
         }
         g_frame = nullptr;   // it references `app`: WM_SIZE during shutdown must not render with a destroyed App
         DestroyPopout();
+    }
+    // remember the window for the next start (after App is gone: its own settings copy must not overwrite this)
+    if (screenshot.empty() && forceW <= 0) {
+        WINDOWPLACEMENT wp = {sizeof(wp)};
+        if (IsWindow(hwnd)) g_mainPlacementOk = GetWindowPlacement(hwnd, &g_mainPlacement) != FALSE;   // quit from the app (window still up)
+        if (g_mainPlacementOk) {
+            wp = g_mainPlacement;
+            Settings s;
+            s.Load();
+            RECT r = wp.rcNormalPosition;
+            s.windowX = r.left;
+            s.windowY = r.top;
+            s.windowW = r.right - r.left;
+            s.windowH = r.bottom - r.top;
+            s.windowMaximized = wp.showCmd == SW_SHOWMAXIMIZED || (wp.flags & WPF_RESTORETOMAXIMIZED);
+            if (s.windowW > 100 && s.windowH > 100) s.Save();
+        }
     }
 
     ImGui_ImplDX11_Shutdown();
