@@ -11,6 +11,11 @@
 #include "ue/Mesh.h"
 #include "ue/Animation.h"
 #include "ue/MaterialGraph.h"
+#include "ue/Material.h"
+#include "render/GraphShader.h"
+#include <d3dcompiler.h>
+#include <wrl/client.h>
+using Microsoft::WRL::ComPtr;
 #include <windows.h>
 #include <map>
 #include <functional>
@@ -68,7 +73,9 @@ static int DevScan(Api& api, const std::string& arg, size_t max) {
             if (IsTextureClass(cls)) {
                 TextureInfo ti;
                 std::string terr;
-                if (ReadTextureInfo(pkg, e, ti, &terr)) formats[ti.pixelFormat]++;
+                if (ReadTextureInfo(pkg, e, ti, &terr)) {
+                    if (formats[ti.pixelFormat]++ < 3 && ti.pixelFormat.find("BC6H") != std::string::npos) Out(ti.pixelFormat + " " + p + "\n");
+                }
                 else if (++formats["<error>"] <= 5) Out("TEXTURE " + p + ": " + terr + "\n");
             }
         }
@@ -84,6 +91,7 @@ static int DevScan(Api& api, const std::string& arg, size_t max) {
 static int DevMaterials(Api& api, const std::string& arg) {
     std::string needle = ToLower(arg);
     std::map<std::string, std::pair<int, std::string>> missing;   // node type -> (materials, first example)
+    std::map<std::string, std::pair<int, std::string>> compileErrors;   // fxc error -> (materials, first example)
     size_t total = 0, failed = 0;
     Vfs& vfs = api.vfs;
     for (u32 i = 0; i < vfs.FileCount(); i++) {
@@ -98,9 +106,23 @@ static int DevMaterials(Api& api, const std::string& arg) {
         MaterialGraphStats st;
         if (!MaterialToHlsl(*api.cache, p, hlsl, &st, &err)) { failed++; Out("FAIL " + p + ": " + err + "\n"); continue; }
         for (auto& u : st.unsupported) { auto& m = missing[u]; if (m.first++ == 0) m.second = p; }
+        // the viewer's preview shader built from it must compile
+        MaterialInfo mi;
+        GraphShaderSource src;
+        if (cls == "Material" && ReadMaterial(*api.cache, p, mi, &err) && BuildGraphShaderSource(hlsl, mi.blendMode, mi.shadingModel, src, &err)) {
+            ComPtr<ID3DBlob> code, msgs;
+            if (FAILED(D3DCompile(src.hlsl.data(), src.hlsl.size(), nullptr, nullptr, nullptr, "GraphPSMain", "ps_5_0", 0, 0, &code, &msgs))) {
+                std::string m = msgs ? std::string((const char*)msgs->GetBufferPointer(), msgs->GetBufferSize()) : "?";
+                size_t k = m.find("error X");
+                m = k == std::string::npos ? m.substr(0, 120) : m.substr(k, m.find('\n', k) - k);
+                auto& c = compileErrors[m];
+                if (c.first++ == 0) c.second = p;
+            }
+        }
     }
     Out(Fmt("\nmaterials %zu, failed %zu\n", total, failed));
     for (auto& [k, v] : missing) Out(Fmt("untranslated %-40s %5d  e.g. %s\n", k.c_str(), v.first, v.second.c_str()));
+    for (auto& [k, v] : compileErrors) Out(Fmt("preview shader %5d  %s  e.g. %s\n", v.first, k.c_str(), v.second.c_str()));
     return 0;
 }
 
