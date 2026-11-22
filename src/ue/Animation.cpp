@@ -32,7 +32,7 @@ bool HeaderOk(const Bytes& s, i64 off, int frames) {
     if (off < 0 || (size_t)off + 4 > s.size()) return false;
     u32 h = Rd32(s, (size_t)off);
     u32 n = h & 0xffffff, f = h >> 28;
-    return n >= 1 && (int)n <= frames && (f == 1 || f == 2 || f == 3 || f == 4 || f == 6);
+    return n >= 1 && (int)n <= frames && (f == 1 || f == 2 || f == 3 || f == 4 || f == 5 || f == 6);
 }
 
 size_t BlockSize(const Bytes& s, size_t off, int frames) {
@@ -100,6 +100,18 @@ void FixQuatSigns(std::vector<Vec4>& q) {
     }
 }
 
+// ACF_Float32NoW quaternion: X 11 bits, Y 11 bits, Z 10 bits, each a tiny float (sign, 3 bit exponent biased to
+// 2^-4.., 7 / 6 bit mantissa); layout as decoded by UE Viewer's FQuatFloat32NoW.
+void UnpackFloat32NoW(u32 pk, float c[3]) {
+    u32 x = pk >> 21, y = (pk >> 10) & 0x7ff, z = pk & 0x3ff;
+    u32 bits[3] = {
+        ((((x >> 7) & 7) + 123) << 23) | (((x & 0x7f) | 32 * (x & 0xfffffc00)) << 16),
+        ((((y >> 7) & 7) + 123) << 23) | (((y & 0x7f) | 32 * (y & 0xfffffc00)) << 16),
+        ((((z >> 6) & 7) + 123) << 23) | (((z & 0x3f) | 32 * (z & 0xfffffe00)) << 17),
+    };
+    for (int i = 0; i < 3; i++) memcpy(&c[i], &bits[i], 4);
+}
+
 Vec4 QuatFromXYZ(float x, float y, float z) {
     float w = sqrtf(std::max(0.f, 1.f - (x * x + y * y + z * z)));
     float l = sqrtf(x * x + y * y + z * z + w * w);
@@ -143,6 +155,10 @@ void PerTrack(const Bytes& s, size_t off, int frames, bool rotation, std::vector
                 c[2] = ((float)(pk >> 21) - 1023.f) / 1023.f;
             }
             if (fmt == 3) for (int i = 0; i < 3; i++) c[i] = c[i] * ranges[i] + mins[i];
+        } else if (fmt == 5) {
+            if (!rotation) throw ParseError("ACF_Float32NoW translation keys are not supported");
+            UnpackFloat32NoW(Rd32(s, p), c);
+            p += 4;
         }
         if (rotation) v4[k] = QuatFromXYZ(c[0], c[1], c[2]);
         else v3[k] = {c[0], c[1], c[2]};
@@ -203,7 +219,12 @@ void KeyLerpTrack(const Bytes& s, size_t off, int count, int frames, bool rotati
             c[3] = -2;
             break;
         }
-        case F_Float32NoW: throw ParseError("ACF_Float32NoW key-lerp tracks are not supported");
+        case F_Float32NoW:
+            if (!rotation) throw ParseError("ACF_Float32NoW translation keys are not supported");
+            UnpackFloat32NoW(Rd32(s, p), c);
+            p += 4;
+            c[3] = -2;
+            break;
         default: break;   // identity
         }
         if (rotation) {
