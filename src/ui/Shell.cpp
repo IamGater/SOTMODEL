@@ -802,7 +802,8 @@ void App::DrawFoldersTab() {
         float bs = Dip(26), w = ImGui::GetContentRegionAvail().x;
         ImVec2 p = ImGui::GetCursorScreenPos();
         IconTag(dl, ImVec2(p.x + Dip(8), p.y + bs * 0.5f), Dip(16), IM_COL32(94, 188, 144, 255));
-        std::string s = Fmt("'%s' has %zu folders and %zu packages", m_folder ? cur.name.c_str() : "None", cur.folders.size(), cur.files.size());
+        std::string s = m_folder ? Fmt("'%s' has %zu folders and %zu packages", cur.name.c_str(), cur.folders.size(), cur.files.size())
+                                 : Fmt("Root has %zu folders and %zu packages", cur.folders.size(), cur.files.size());
         TextEllipsis(dl, ImVec2(p.x + Dip(19.5f), p.y + (bs - ImGui::GetFontSize()) * 0.5f), p.x + w - bs * 2 - Dip(10), kText, s.c_str());
         ImGui::SetCursorScreenPos(ImVec2(p.x + w - bs * 2, p.y));
         if (ToolbarButton("##locate", ImVec2(bs, bs), IconLocate, "Bring Selected Folder To View")) SelectFolder(m_folder);
