@@ -11,6 +11,11 @@ struct AnimNotifyInfo {
     float time = 0, duration = 0;
     int track = 0;
     std::string detail;    // a few interesting properties of the notify object (particle, sound, socket)
+    // what the viewer plays: a WwiseEvent / sound (AnimNotify_WwiseSound, AnimNotify_PlaySound) or a particle system
+    // (AnimNotify_PlayParticleEffect, AnimNotify_AthenaPlayParticleEffect) at a socket, following it when attached
+    std::string sound, particle, socket;
+    bool attached = true;
+    Vec3 locationOffset, rotationOffset;   // rotation: pitch, yaw, roll (degrees)
 };
 bool ReadAnimNotifies(const Package& pkg, const PropertyList& props, std::vector<AnimNotifyInfo>& out);
 

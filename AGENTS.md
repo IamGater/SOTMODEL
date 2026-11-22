@@ -58,6 +58,10 @@ opens `WwiseEvent` assets as the list of sounds the event plays (a bank's Events
 Maps get the sea's day cycle ("Day cycle" in the map toolbar, `time_of_day` in `preview_world`): island levels have no
 sun or sky light, so the lighting curves of the region (`Curves/Lighting/<WSP|Wilds|Volcanic|Standard|...>`: sun colour
 and intensity, sky light, sky dome horizon / zenith, fog) are evaluated for the hour (`ue/TimeOfDay`).
+Animations and montages play their AnimNotifies ("Notifies" toggle, `ui/AnimNotifies.cpp`): `AnimNotify_WwiseSound`
+events are decoded up front and played (a random one of the event's sounds, several at once), particle notifies spawn the
+system at their socket (a bone missing on the preview mesh falls back to its nearest Skeleton ancestor; `Attached=false`
+stays where it spawned). `get_anim_asset_info` lists each notify's `sound` / `particle` / `socket`.
 "Export glTF" in the map / Blueprint toolbar writes what the view shows as one .glb: the assembled Blueprint, the whole
 loaded map or only the part within a radius of the view target (optionally only the outliner's mesh filter), moved to
 the origin (`WorldExportOptions::clip` / `recenter` / `meshFilter`; the landscape is reloaded, the viewer frees its CPU copy).

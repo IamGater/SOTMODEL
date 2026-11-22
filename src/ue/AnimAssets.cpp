@@ -37,6 +37,15 @@ bool ReadAnimNotifies(const Package& pkg, const PropertyList& props, std::vector
             if (obj > 0) {   // a few telling properties of the notify object
                 PropertyList np = pkg.ReadProperties((size_t)obj - 1);
                 for (auto& p : np) {
+                    if (p.name == "WwiseEvent" || p.name == "Sound" || p.name == "AkEvent") a.sound = Obj(pkg, &p.value);
+                    else if (p.name == "PSTemplate") a.particle = Obj(pkg, &p.value);
+                    else if (p.name == "SocketName") a.socket = p.value.str == "None" ? "" : p.value.str;
+                    else if (p.name == "Attached") a.attached = p.value.b;
+                    else if ((p.name == "LocationOffset" || p.name == "RotationOffset") && p.value.Fields()) {
+                        const PropValue& s = p.value;
+                        Vec3 v = p.name == "LocationOffset" ? Vec3{F(s, "X"), F(s, "Y"), F(s, "Z")} : Vec3{F(s, "Pitch"), F(s, "Yaw"), F(s, "Roll")};
+                        (p.name == "LocationOffset" ? a.locationOffset : a.rotationOffset) = v;
+                    }
                     std::string v = p.value.type == PropType::Object ? pkg.ObjectName(p.value.ObjIndex()) : p.value.str;
                     if (v.empty() || v == "None") continue;
                     if (!a.detail.empty()) a.detail += ", ";

@@ -138,8 +138,16 @@ struct Document {
         float psTime = 0, psLength = 1;
         Mat4 world = Mat4::Identity();   // this frame's attachment -> mesh space
         bool placed = false;             // false: the socket is not on the current mesh
+        Mat4 offset = Mat4::Identity();  // notify effects: location / rotation offset from the socket
+        bool follow = true;              // notify effects: false = stays where it was spawned
     };
     std::vector<Attachment> attachments;
+    // AnimNotify sounds and particle effects fired as the animation plays over their times
+    bool notifiesLoaded = false, playNotifies = true;
+    std::vector<AnimNotifyInfo> notifies;
+    std::unordered_map<std::string, std::string> notifyParents;   // skeleton asset bone -> parent (lower case): sockets missing on the mesh
+    float notifyPrevTime = -1;   // -1: notifies at 0 s fire on the first frame
+    std::vector<Attachment> notifyFx;   // spawned effects, dropped once their particles are gone
     char attachEdit[512] = {};
     int attachSocket = -1;   // -1: pick a hand socket
     bool attachLoading = false;
@@ -333,6 +341,17 @@ private:
     void DrawWorldParticles(Document& d);     // inside the viewport scene
     static bool Has3dView(const Document& d);
     void LoadWorld(std::shared_ptr<Document> d);
+    // AnimNotify playback (AnimNotifies.cpp)
+    struct NotifySound { int state = 0; std::vector<std::shared_ptr<AudioPcm>> clips; };   // 0 loading, 1 ready, 2 nothing playable
+    struct NotifyFxTemplate { int state = 0; std::shared_ptr<Document::Attachment> fx; };
+    std::mutex m_notifyMutex;
+    std::unordered_map<std::string, NotifySound> m_notifySounds;          // by event path
+    std::unordered_map<std::string, NotifyFxTemplate> m_notifyFxTemplates; // by particle system path
+    AudioPlayer m_notifyPlayers[6];                                       // overlapping notify sounds (WinMM mixes the devices)
+    void LoadNotifies(Document& d);
+    void FireNotifies(Document& d, float from, float to);   // notifies with from < time <= to
+    void UpdateNotifyFx(Document& d, const std::vector<Mat4>* boneWorld);
+    void DrawNotifyToggle(Document& d);
     void DrawWorldExport(Document& d);                      // toolbar button + options popup
     void ExportWorldDoc(std::shared_ptr<Document> d, WorldExportOptions wo);
     void LoadAnimationMesh(std::shared_ptr<Document> d, std::string meshPath);

@@ -707,11 +707,13 @@ static void DrawViewport(Renderer& r, Document& d, ImVec2 size, bool allowFly) {
             if (at.gpu && at.placed) r.DrawMesh(*at.gpu, &at.world, 1);
         if (d.showCollision && !d.collisionLines.empty()) r.DrawLines(d.collisionLines, 0xff60ff40u);
         std::vector<ParticleSprite> sprites;
-        for (auto& at : d.attachments)
-            if (at.sim && at.placed) {
-                at.sim->Sprites(sprites);
-                DrawParticleSprites(r, d.camera, sprites, at.looks, at.world);
-            }
+        for (auto* list : {&d.attachments, &d.notifyFx})
+            for (auto& at : *list)
+                if (at.sim && at.placed) {
+                    sprites.clear();
+                    at.sim->Sprites(sprites);
+                    DrawParticleSprites(r, d.camera, sprites, at.looks, at.world);
+                }
         if (d.showSockets) {
             static const u32 axis[3] = {0xff4040ffu, 0xff40ff40u, 0xffff6040u};
             for (int k = 0; k < 3; k++)
@@ -1168,6 +1170,7 @@ void App::DrawModel(Document& d) {
 void App::DrawAnimation(Document& d) {
     auto& a = *d.anim;
     float fps = a.FrameRate();
+    if (!d.notifiesLoaded) LoadNotifies(d);
     // toolbar: transport + options
     if (ImGui::Button(d.animPlaying ? "Pause" : "Play")) d.animPlaying = !d.animPlaying;
     ImGui::SameLine();
@@ -1188,6 +1191,7 @@ void App::DrawAnimation(Document& d) {
     ImGui::Checkbox("Textures", &d.draw.textures);
     ImGui::SameLine();
     ImGui::Checkbox("Grid", &d.draw.grid);
+    DrawNotifyToggle(d);
     ImGui::SameLine();
     PopoutButton(d, false);
     if (d.montage || d.blendSpace) DrawAnimAssetHeader(d);
@@ -1210,11 +1214,20 @@ void App::DrawAnimation(Document& d) {
     DrawAttachControls(d);
     // advance time and pose the mesh (CPU skinning into the dynamic vertex buffer)
     if (d.animPlaying && a.length > 0) {
+        float prev = d.animTime;
         d.animTime += ImGui::GetIO().DeltaTime * d.animSpeed;
         if (d.animTime > a.length) d.animTime = d.animLoop ? fmodf(d.animTime, a.length) : a.length;
         if (!d.animLoop && d.animTime >= a.length) d.animPlaying = false;
+        // notifies passed this frame (a wrap fires the end of the clip, then its start)
+        float from = d.notifyPrevTime <= prev ? d.notifyPrevTime : prev;
+        if (d.animTime >= prev) FireNotifies(d, from, d.animTime);
+        else {
+            FireNotifies(d, from, a.length + 1);
+            FireNotifies(d, -1, d.animTime);
+        }
         m_busyFrames = 3;
     }
+    d.notifyPrevTime = d.animTime;
     std::vector<Bone> pose;
     if (!AnimAssetPose(d, pose)) d.poser->MeshPose(a, d.animTime * fps, pose);
     std::vector<Vec3> pos, nrm;
@@ -1223,8 +1236,9 @@ void App::DrawAnimation(Document& d) {
     m_renderer->UpdateMeshVertices(*d.gpuMesh, pos, nrm);
     d.boneLines.clear();
     std::vector<Mat4> world;
-    if (d.showBones || !d.attachments.empty()) AnimPoser::WorldMatrices(pose, world);
+    if (d.showBones || !d.attachments.empty() || !d.notifyFx.empty()) AnimPoser::WorldMatrices(pose, world);
     PlaceAttachments(d, &world);
+    UpdateNotifyFx(d, &world);
     if (d.showBones) {
         for (size_t i = 0; i < pose.size(); i++)
             if (pose[i].parent >= 0) {

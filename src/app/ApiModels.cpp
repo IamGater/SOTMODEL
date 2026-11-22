@@ -473,6 +473,12 @@ void RegisterMeshTools(Api& api) {
                               if (n.duration > 0) w.KV("duration", (double)n.duration);
                               w.KV("track", n.track);
                               if (!n.detail.empty()) w.KV("detail", n.detail);
+                              if (!n.sound.empty()) w.KV("sound", n.sound);
+                              if (!n.particle.empty()) {
+                                  w.KV("particle", n.particle);
+                                  if (!n.socket.empty()) w.KV("socket", n.socket);
+                                  w.KV("attached", n.attached);
+                              }
                               w.EndObject();
                           }
                           w.EndArray();
