@@ -83,8 +83,10 @@ OodlePath=C:\...\oodle-data-shared.dll
 OutputDir=C:\...\SOTModel\Output
 ```
 
-`UiAnimations=0` turns the interface transitions off (sliding tab marks, content fades, turning tree expanders, the
-sliding log, spinners); a `--screenshot` may otherwise catch one mid-way.
+`UiAnimations=0` turns the interface transitions off (eased hovers, popups / menus / tooltips / windows fading in,
+content fades, turning tree expanders, the sliding log, spinners); a `--screenshot` may otherwise catch one mid-way.
+Tooltips (`Tip`) show after the pointer rests 0.6 s on an item. Standard ImGui widgets ease their colours through
+`GImGuiItemColorHook`, a small SOTModel patch in `third_party/imgui/imgui_widgets.cpp`.
 
 ## Paths
 

@@ -327,7 +327,7 @@ void App::DrawReferencesTab() {
     if (!refs.empty()) {
         ImGui::SameLine();
         if (ImGui::SmallButton("Export...")) ImGui::OpenPopup("##refexp");
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Export every referencing package (choose what)");
+        if (ImGui::IsItemHovered()) Tip("Export every referencing package (choose what)");
         if (ImGui::BeginPopup("##refexp")) {
             DrawExportResultsMenu(refs);
             ImGui::EndPopup();

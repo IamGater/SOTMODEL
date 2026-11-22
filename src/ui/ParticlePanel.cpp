@@ -66,7 +66,7 @@ void App::DrawParticlePanel(Document& d) {
         ImGui::SameLine();
         if (ImGui::Selectable(Fmt("%s  [%s]", e.name.c_str(), e.type.c_str()).c_str(), d.psSel == (int)i)) { d.psSel = (int)i; d.psModule = -1; }
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("%s\nmaterial %s (%s)\n%s%s\nduration %.2f s, loops %d%s\nspawn rate %s, %zu burst(s)", e.cls.c_str(), e.material.c_str(),
+            Tip("%s\nmaterial %s (%s)\n%s%s\nduration %.2f s, loops %d%s\nspawn rate %s, %zu burst(s)", e.cls.c_str(), e.material.c_str(),
                               e.blendMode.c_str(), e.screenAlignment.c_str(), e.mesh.empty() ? "" : ("\nmesh " + e.mesh).c_str(), e.duration, e.loops,
                               e.subH * e.subV > 1 ? Fmt(", subUV %dx%d", e.subH, e.subV).c_str() : "", e.rate.Describe().c_str(), e.bursts.size());
         ImGui::PopID();
@@ -95,7 +95,7 @@ void App::DrawParticlePanel(Document& d) {
             if (ImGui::Selectable(Fmt("%s##%zu", label.c_str(), i).c_str(), d.psModule == (int)i)) d.psModule = (int)i;
             if (!m.simulated) {
                 ImGui::PopStyleColor();
-                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Not simulated by the preview");
+                if (ImGui::IsItemHovered()) Tip("Not simulated by the preview");
             }
         }
     } else {

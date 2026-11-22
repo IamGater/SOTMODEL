@@ -247,7 +247,7 @@ void App::DrawNotifyToggle(Document& d) {
             tip += Fmt("\n%6.2f s  %s", n.time, what.substr(what.rfind('.') + 1).c_str());
             if (!n.particle.empty() && !n.socket.empty()) tip += " @ " + n.socket + (n.attached ? "" : " (detached)");
         }
-        ImGui::SetTooltip("%s", tip.c_str());
+        Tip("%s", tip.c_str());
     }
 }
 
@@ -288,7 +288,7 @@ void App::DrawNotifyStrip(Document& d, float x0, float x1) {
     }
     float cx = xOf(d.animTime);   // playhead
     dl->AddTriangleFilled(ImVec2(cx - 4, p.y), ImVec2(cx + 4, p.y), ImVec2(cx, p.y + h * 0.6f), IM_COL32(255, 255, 255, 200));
-    if (hovered) ImGui::SetTooltip("%s", tip.empty() ? "Notify markers: blue sound, orange effect, green held item, grey event. Click one to jump to it." : tip.c_str());
+    if (hovered) Tip("%s", tip.empty() ? "Notify markers: blue sound, orange effect, green held item, grey event. Click one to jump to it." : tip.c_str());
     if (clicked && nearest && best <= 6) {
         d.animTime = nearest->time;
         d.animPlaying = false;

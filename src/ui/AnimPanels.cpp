@@ -88,7 +88,7 @@ void App::DrawAnimAssetHeader(Document& d) {
             dl->AddText(ImVec2(x0 + 4, y + rowH * 0.15f), IM_COL32(230, 230, 230, 255), label.c_str());
             dl->PopClipRect();
             if (hovered && ImGui::GetIO().MousePos.x >= x0 && ImGui::GetIO().MousePos.x < x1 && ImGui::GetIO().MousePos.y < y + rowH)
-                ImGui::SetTooltip("Section %s at %.3f s%s%s", s.name.c_str(), s.start, s.next.empty() || s.next == "None" ? "" : "\nnext: ", s.next.c_str());
+                Tip("Section %s at %.3f s%s%s", s.name.c_str(), s.start, s.next.empty() || s.next == "None" ? "" : "\nnext: ", s.next.c_str());
         }
         y += rowH;
         // slot tracks
@@ -103,7 +103,7 @@ void App::DrawAnimAssetHeader(Document& d) {
                 dl->PopClipRect();
                 ImVec2 mp = ImGui::GetIO().MousePos;
                 if (hovered && mp.x >= x0 && mp.x < x1 && mp.y >= y && mp.y < y + rowH)
-                    ImGui::SetTooltip("%s\nslot %s\n%.3f .. %.3f s (anim %.3f .. %.3f, rate %.2f, loops %d)", g.anim.c_str(), slot.name.c_str(), g.startPos,
+                    Tip("%s\nslot %s\n%.3f .. %.3f s (anim %.3f .. %.3f, rate %.2f, loops %d)", g.anim.c_str(), slot.name.c_str(), g.startPos,
                                       g.startPos + g.Length(), g.animStart, g.animEnd, g.rate, g.loops);
             }
             dl->AddText(ImVec2(p.x + W - ImGui::CalcTextSize(slot.name.c_str()).x - 4, y + rowH * 0.15f), IM_COL32(160, 160, 160, 200), slot.name.c_str());
@@ -115,7 +115,7 @@ void App::DrawAnimAssetHeader(Document& d) {
             dl->AddQuadFilled(ImVec2(x, cy - r), ImVec2(x + r, cy), ImVec2(x, cy + r), ImVec2(x - r, cy), IM_COL32(240, 190, 60, 255));
             ImVec2 mp = ImGui::GetIO().MousePos;
             if (hovered && fabsf(mp.x - x) <= r + 2 && mp.y >= y && mp.y < y + rowH)
-                ImGui::SetTooltip("%s\n%s at %.3f s%s\n%s", n.name.c_str(), n.cls.c_str(), n.time, n.duration > 0 ? Fmt(" for %.3f s", n.duration).c_str() : "",
+                Tip("%s\n%s at %.3f s%s\n%s", n.name.c_str(), n.cls.c_str(), n.time, n.duration > 0 ? Fmt(" for %.3f s", n.duration).c_str() : "",
                                   n.detail.c_str());
         }
         float cx = X(d.animTime);
@@ -171,7 +171,7 @@ void App::DrawAnimAssetHeader(Document& d) {
         if (fabsf(mp.x - s.x) < fs * 0.5f && fabsf(mp.y - s.y) < fs * 0.5f) hover = (int)i;
     }
     if (hover >= 0 && ImGui::IsWindowHovered())
-        ImGui::SetTooltip("%s\n%s %g%s\nweight %.3f", b.samples[hover].anim.c_str(), ax.name.c_str(), b.samples[hover].x,
+        Tip("%s\n%s %g%s\nweight %.3f", b.samples[hover].anim.c_str(), ax.name.c_str(), b.samples[hover].x,
                           two ? Fmt(", %s %g", ay.name.c_str(), b.samples[hover].y).c_str() : "", hover < (int)d.bsWeights.size() ? d.bsWeights[hover] : 0.f);
     ImVec2 ip = toScreen(d.bsX, d.bsY);
     dl->AddCircle(ip, fs * 0.45f, IM_COL32(255, 90, 90, 255), 0, 2);
@@ -304,12 +304,12 @@ void App::DrawStateMachinePanel(Document& d) {
         auto sname = [&](int i) { return i >= 0 && i < (int)sm.states.size() ? sm.states[i].name : Fmt("#%d", i); };
         if (hoverS >= 0) {
             const auto& s = sm.states[hoverS];
-            ImGui::SetTooltip("%s%s%s\n%zu player node(s), %zu outgoing transition(s)", s.name.c_str(), s.conduit ? " (conduit)" : "",
+            Tip("%s%s%s\n%zu player node(s), %zu outgoing transition(s)", s.name.c_str(), s.conduit ? " (conduit)" : "",
                               hoverS == sm.initial ? " (initial)" : "", s.players.size(), s.transitions.size());
             if (ImGui::IsMouseReleased(ImGuiMouseButton_Left) && ImGui::GetMouseDragDelta(ImGuiMouseButton_Left, 0).x == 0) d.smState = hoverS;
         } else if (hoverT >= 0) {
             const auto& t = sm.transitions[hoverT];
-            ImGui::SetTooltip("%s -> %s\ncrossfade %.2f s, %s, %s%s", sname(t.from).c_str(), sname(t.to).c_str(), t.crossfade, t.blendMode.c_str(),
+            Tip("%s -> %s\ncrossfade %.2f s, %s, %s%s", sname(t.from).c_str(), sname(t.to).c_str(), t.crossfade, t.blendMode.c_str(),
                               t.logic.c_str(), t.priority ? Fmt(", priority %d", t.priority).c_str() : "");
         }
         if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && hoverS < 0) { d.smState = -1; d.graphZoom = 0; }
@@ -338,7 +338,7 @@ void App::DrawStateMachinePanel(Document& d) {
                 i64 e = m_api->ResolveFile(bp.players[i].asset);
                 if (e >= 0) OpenFile((u32)e, true);
             }
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s\n%s\nclick to open", bp.players[i].node.c_str(), bp.players[i].asset.c_str());
+            if (ImGui::IsItemHovered()) Tip("%s\n%s\nclick to open", bp.players[i].node.c_str(), bp.players[i].asset.c_str());
             ImGui::PopID();
         }
     }

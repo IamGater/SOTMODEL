@@ -164,7 +164,7 @@ void App::DrawDependencyGraph() {
             DrawFileMenu(n.entry);
             ImGui::EndPopup();
         }
-        if (hov) ImGui::SetTooltip("%s\n%s%s", n.path.c_str(), n.cls.empty() ? "?" : n.cls.c_str(),
+        if (hov) Tip("%s\n%s%s", n.path.c_str(), n.cls.empty() ? "?" : n.cls.c_str(),
                                    i == 0 ? "" : n.side < 0 ? "\nimports the package on its right" : "\nimported by the package on its left");
         ImGui::PopID();
         ImU32 cc = ClassColor(n.cls);

@@ -4215,3 +4215,6 @@ extern const char*  ImGuiTestEngine_FindItemDebugLabel(ImGuiContext* ctx, ImGuiI
 #endif
 
 #endif // #ifndef IMGUI_DISABLE
+
+// SOTModel: eases widget frame colours (imgui_widgets.cpp calls it with the item id and the colour it would draw).
+extern ImU32 (*GImGuiItemColorHook)(ImGuiID id, ImU32 target);

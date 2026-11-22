@@ -124,6 +124,74 @@ void Spinner(ImDrawList* dl, ImVec2 c, float r, ImU32 col, float thickness) {
     if (g_uiAnim) g_animating = true;
 }
 
+// ImGui widget frames (buttons, combos, checkboxes, selectables, menu items, sliders): their colour eases to the one
+// ImGui picks this frame (GImGuiItemColorHook, a SOTModel patch of imgui_widgets.cpp)
+struct EasedColor { ImVec4 c; int frame; };
+std::unordered_map<ImGuiID, EasedColor> g_itemColors;
+ImU32 EaseItemColor(ImGuiID id, ImU32 target) {
+    ImVec4 want = ImGui::ColorConvertU32ToFloat4(target);
+    int frame = ImGui::GetFrameCount();
+    auto [it, fresh] = g_itemColors.try_emplace(id, EasedColor{want, frame});
+    EasedColor& e = it->second;
+    if (!fresh && e.frame < frame - 1) e.c = want;   // not drawn for a while (scrolled away, popup reopened): no stale fade
+    e.frame = frame;
+    if (!fresh) {
+        float k = 1.f - expf(-std::min(ImGui::GetIO().DeltaTime, 0.05f) * 5.f / 0.14f);
+        if (want.w == 0.f && e.c.w > 0.f) want = ImVec4(e.c.x, e.c.y, e.c.z, 0.f);   // fading out keeps the hue
+        if (e.c.w == 0.f && want.w > 0.f) e.c = ImVec4(want.x, want.y, want.z, 0.f);  // fading in starts from the hue
+        e.c = ImLerp(e.c, want, k);
+        float d = fabsf(e.c.x - want.x) + fabsf(e.c.y - want.y) + fabsf(e.c.z - want.z) + fabsf(e.c.w - want.w);
+        if (d < 0.004f) e.c = want;
+        else g_animating = true;
+    }
+    if (g_itemColors.size() > 20000) {   // forget items gone for long
+        for (auto i = g_itemColors.begin(); i != g_itemColors.end();)
+            i = frame - i->second.frame > 600 ? g_itemColors.erase(i) : std::next(i);
+    }
+    return ImGui::ColorConvertFloat4ToU32(e.c);
+}
+
+// Popups, combo lists, menus, tooltips, modals and floating windows ease in when they appear: a fade plus a short slide
+// (down for drop-downs and menus, up for windows), applied to their finished draw lists at the end of the frame.
+std::unordered_map<ImGuiID, double> g_winShownAt;
+std::unordered_set<ImGuiID> g_winVisible;
+void AnimateAppearingWindows() {
+    ImGuiContext& g = *GImGui;
+    double now = ImGui::GetTime();
+    std::unordered_set<ImGuiID> visible;
+    for (ImGuiWindow* w : g.Windows) {
+        if (!w->Active || w->Hidden || (w->Flags & ImGuiWindowFlags_ChildWindow) || !strcmp(w->Name, "##main")) continue;
+        visible.insert(w->ID);
+        if (!g_winVisible.count(w->ID)) g_winShownAt[w->ID] = now;
+        auto it = g_winShownAt.find(w->ID);
+        if (it == g_winShownAt.end()) continue;
+        bool tooltip = (w->Flags & ImGuiWindowFlags_Tooltip) != 0, drop = (w->Flags & (ImGuiWindowFlags_Popup | ImGuiWindowFlags_ChildMenu)) && !(w->Flags & ImGuiWindowFlags_Modal);
+        float dur = tooltip ? 0.15f : drop ? 0.16f : 0.2f;
+        float t = (float)((now - it->second) / dur);
+        if (!g_uiAnim || t >= 1.f) {
+            g_winShownAt.erase(it);
+            continue;
+        }
+        float e = 1.f - (1.f - t) * (1.f - t) * (1.f - t);   // ease out
+        float slide = (1.f - e) * Dip(tooltip ? 4.f : drop ? -8.f : 12.f);
+        for (ImGuiWindow* c : g.Windows) {   // the window and its child windows
+            if (c->RootWindow != w || !c->Active || !c->DrawList) continue;
+            ImDrawList* dl = c->DrawList;
+            for (ImDrawVert& v : dl->VtxBuffer) {
+                v.pos.y += slide;
+                ImU32 a = (v.col >> IM_COL32_A_SHIFT) & 0xFF;
+                v.col = (v.col & ~IM_COL32_A_MASK) | ((ImU32)(a * e) << IM_COL32_A_SHIFT);
+            }
+            for (ImDrawCmd& cmd : dl->CmdBuffer) {
+                cmd.ClipRect.y += slide;
+                cmd.ClipRect.w += slide;
+            }
+        }
+        g_animating = true;
+    }
+    g_winVisible.swap(visible);
+}
+
 // Rotates the vertices added to dl since `start` about c (for glyphs turned by an animated angle)
 void RotateSince(ImDrawList* dl, int start, ImVec2 c, float angle) {
     float s = sinf(angle), co = cosf(angle);
@@ -134,12 +202,6 @@ void RotateSince(ImDrawList* dl, int start, ImVec2 c, float angle) {
     }
 }
 
-// Accent mark under the selected tab sliding to a newly selected one; x / y / w relative to `origin` (moving windows
-// carry it along)
-void TabMark(ImDrawList* dl, ImGuiID id, ImVec2 origin, float x, float y, float w, float h) {
-    float gx = Glide(id, x), gy = Glide(id ^ 0x9e3779b9, y), gw = Glide(id ^ 0x7f4a7c15, w);
-    dl->AddRectFilled(ImVec2(origin.x + gx, origin.y + gy), ImVec2(origin.x + gx + gw, origin.y + gy + h), kAccent, h * 0.5f);
-}
 
 void Text(ImDrawList* dl, ImVec2 p, ImU32 c, const char* s, const char* e = nullptr) { dl->AddText(ImGui::GetFont(), ImGui::GetFontSize(), p, c, s, e); }
 void TextEllipsis(ImDrawList* dl, ImVec2 p, float maxX, ImU32 c, const char* s) {
@@ -377,7 +439,7 @@ bool ToolbarButton(const char* id, ImVec2 size, IconFn icon, const char* tip, bo
     ImDrawList* dl = ImGui::GetWindowDrawList();
     float ht = enabled ? HoverAnim() : 0.f;
     if (ht > 0) dl->AddRectFilled(p, ImVec2(p.x + size.x, p.y + size.y), ImGui::IsItemActive() ? kAccent : Alpha(kTabSel, ht), Dip(2));
-    if (tip && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s", tip);
+    if (tip && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) Tip("%s", tip);
     icon(dl, ImVec2(p.x + size.x * 0.5f, p.y + size.y * 0.5f), Dip(16), enabled ? kText : kTextDim);
     return r && enabled;
 }
@@ -524,6 +586,30 @@ constexpr ImU32 kJsonPunct = IM_COL32(0x89, 0xDD, 0xFF, 255);
 
 }   // namespace
 
+// Tooltips show after the pointer rests on the same item for a while (and fade in with the other popups)
+void Tip(const char* fmt, ...) {
+    static ImGuiID key = 0;
+    static double since = 0;
+    static int lastFrame = -10;
+    ImGuiID k = ImGui::GetItemID();
+    if (!k) k = ImHashStr(fmt);
+    int frame = ImGui::GetFrameCount();
+    double now = ImGui::GetTime();
+    if (k != key || lastFrame < frame - 1) {
+        key = k;
+        since = now;
+    }
+    lastFrame = frame;
+    if (now - since < 0.6) {
+        g_animating = true;   // keep drawing frames until it is due
+        return;
+    }
+    va_list args;
+    va_start(args, fmt);
+    ImGui::SetTooltipV(fmt, args);
+    va_end(args);
+}
+
 // ================================================================== frame
 
 void App::Frame() {
@@ -562,6 +648,7 @@ void App::Frame() {
     SyncPopoutDoc();
     g_animating = false;
     g_uiAnim = m_settings.uiAnimations;
+    GImGuiItemColorHook = g_uiAnim ? EaseItemColor : nullptr;
 
     const ImGuiViewport* vp = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(vp->WorkPos);
@@ -608,6 +695,7 @@ void App::Frame() {
     if (m_showSearch) DrawSearchWindow();
     if (m_showBackups) DrawBackupWindow();
     DrawExportProgress();
+    AnimateAppearingWindows();
     if (g_animating) m_busyFrames = std::max(m_busyFrames, 2);   // transitions still running: keep drawing
 }
 
@@ -721,7 +809,6 @@ void App::DrawLeftPanel(float width, float height) {
         Text(dl, ImVec2(a.x + (tw - ts.x) * 0.5f, a.y + (tabH - ts.y) * 0.5f), kText, labels[i].c_str());
     }
     dl->AddRectFilled(ImVec2(p.x + 1, p.y + 1 + tabH), ImVec2(p.x + width - 1, p.y + 1 + tabH + strip), kTabSel);
-    TabMark(dl, ImGui::GetID("##ltabmark"), p, 1 + tw * m_leftTab + Dip(10), 1 + tabH - Dip(2), tw - Dip(20), Dip(3));
 
     float top = 1 + tabH + strip;
     ImGui::SetCursorScreenPos(ImVec2(p.x + 1, p.y + top));
@@ -965,7 +1052,7 @@ void App::DrawFoldersTab() {
                     m_leftTab = 2;
                 }
             }
-            if (rs.hovered) ImGui::SetTooltip("%s has %zu folders and %zu packages", f.name.c_str(), f.folders.size(), f.files.size());
+            if (rs.hovered) Tip("%s has %zu folders and %zu packages", f.name.c_str(), f.folders.size(), f.files.size());
             if (ImGui::BeginPopupContextItem("##fctx")) {
                 DrawFolderMenu(r.f);
                 ImGui::EndPopup();
@@ -1230,7 +1317,7 @@ void App::DrawRightPanel(float width, float height) {
         ImVec2 c((a.x + z.x) * 0.5f, (a.y + z.y) * 0.5f);
         if (m_explorerVisible) IconFolder(fg, ImVec2(c.x - Dip(9), c.y - Dip(9)), Dip(18), false);
         else FileGlyph(fg, c, Dip(18), "x.uasset", bg);
-        if (bh) ImGui::SetTooltip(m_explorerVisible ? "Assets Explorer (Z)" : "File Properties (Z)");
+        if (bh) Tip(m_explorerVisible ? "Assets Explorer (Z)" : "File Properties (Z)");
         // texture thumbnails on the explorer cards
         ImGui::SetCursorScreenPos(ImVec2(mn.x + pad + b + Dip(2), mn.y + pad));
         ImGui::SetNextItemAllowOverlap();
@@ -1243,7 +1330,7 @@ void App::DrawRightPanel(float width, float height) {
         fg->AddRectFilled(a, z, Alpha(bg, op), Dip(8));
         fg->AddRect(a, z, Alpha(kPanel, op), Dip(8));
         IconImages(fg, ImVec2((a.x + z.x) * 0.5f, (a.y + z.y) * 0.5f), Dip(18), Alpha(kText, std::max(op, 0.8f)));
-        if (ph) ImGui::SetTooltip(m_settings.previewTextures ? "Preview Textures (ON)" : "Preview Textures (OFF)");
+        if (ph) Tip(m_settings.previewTextures ? "Preview Textures (ON)" : "Preview Textures (OFF)");
     }
 
     // log expander
@@ -1279,7 +1366,7 @@ void App::DrawExplorer() {
             dl->AddRectFilled(bp, ImVec2(bp.x + tb, bp.y + bh), Mix(Mix(kField, kTabSel, ht), kAccent, ot));
             dl->AddRect(bp, ImVec2(bp.x + tb, bp.y + bh), on ? Shade(kAccent, 1.3f) : kBorder);
             (i == 0 ? IconGrid : IconList)(dl, ImVec2(bp.x + tb * 0.5f, bp.y + bh * 0.5f), Dip(14), kText);
-            if (hov) ImGui::SetTooltip(i == 0 ? "Grid View" : "List View");
+            if (hov) Tip(i == 0 ? "Grid View" : "List View");
             if (clicked && !on) { m_settings.explorerViewMode = i; m_settings.Save(); }
         }
         ImGui::SetCursorScreenPos(ImVec2(p.x, p.y + bh + Dip(5)));
@@ -1395,7 +1482,7 @@ void App::DrawExplorer() {
                     std::string sz = HumanSize(vfs.Entry(id).usize);
                     Text(dl, ImVec2(x + inner - ImGui::CalcTextSize(sz.c_str()).x, cy - ImGui::GetFontSize() * 0.5f), kTextDim, sz.c_str());
                     ImGui::PopFont();
-                    if (rs.hovered) ImGui::SetTooltip("%s", std::string(vfs.Path(id)).c_str());
+                    if (rs.hovered) Tip("%s", std::string(vfs.Path(id)).c_str());
                 }
                 ImGui::PopID();
             }
@@ -1485,7 +1572,7 @@ void App::DrawExplorer() {
                     if (sel) dl->AddRect(mn, mxp, accentBorder, 0, 0, Dip(1.5f));
                     if (clicked) m_selected = id;
                     if (dbl) { m_explorerVisible = false; OpenFile(id); }
-                    if (hov) ImGui::SetTooltip("%s", std::string(vfs.Path(id)).c_str());
+                    if (hov) Tip("%s", std::string(vfs.Path(id)).c_str());
                     fileMenu(id);
                 }
                 ImGui::PopID();
@@ -1592,7 +1679,7 @@ void App::DrawDocTabs(float height) {
         float ht = HoverAnim(), st = Anim(ImGui::GetItemID() ^ 0x7ab, sel);
         if (ImGui::IsItemClicked(0)) m_activeDoc = d.id;
         if (ImGui::IsItemClicked(2)) close = d.id;
-        if (hov) ImGui::SetTooltip("%s", d.newTab ? d.name.c_str() : d.gamePath.c_str());
+        if (hov) Tip("%s", d.newTab ? d.name.c_str() : d.gamePath.c_str());
         if (ImGui::BeginPopupContextItem("##tabctx")) {
             if (MenuItemIcon("Close", nullptr, IconClose)) close = d.id;
             if (MenuItemIcon("Close All Tabs", nullptr, IconClose)) closeAll = true;
@@ -1658,7 +1745,7 @@ void App::DrawDocTabs(float height) {
         dl->AddCircleFilled(cc, Dip(5.5f) + Dip(1.5f) * ct, Mix(kBorder, kError, ct));
         if (ct > 0) IconClose(dl, cc, Dip(9), Alpha(kText, ct));
         if (ch) {
-            ImGui::SetTooltip("Close Tab");
+            Tip("Close Tab");
         }
         ImGui::PopID();
     }
@@ -1670,15 +1757,10 @@ void App::DrawDocTabs(float height) {
         bool hov = ImGui::IsItemHovered();
         dl->AddRectFilled(a, ImVec2(a.x + plusW, a.y + tabH), Mix(kPanel, kTabSel, HoverAnim()));
         IconPlus(dl, ImVec2(a.x + plusW * 0.5f, a.y + tabH * 0.5f), Dip(16), kText);
-        if (hov) ImGui::SetTooltip("Add New Tab (Ctrl+T)");
+        if (hov) Tip("Add New Tab (Ctrl+T)");
     }
     float stripY = p.y + headerH;
     dl->AddRectFilled(ImVec2(p.x, stripY), ImVec2(p.x + width, stripY + Dip(4)), kTabSel);
-    for (size_t i = 0; i < m_docs.size(); i++)
-        if (m_docs[i]->id == m_activeDoc) {
-            int r = (int)i / perRow, c = (int)i % perRow;
-            TabMark(dl, ImGui::GetID("##doctabmark"), p, c * tabW + Dip(6), r * tabH + tabH - Dip(3), tabW - Dip(12), Dip(3));
-        }
 
     if (close) CloseDocument(close);
     if (closeOthers) CloseOtherDocuments(closeOthers);
@@ -1878,7 +1960,7 @@ void App::DrawImagePanel(Document& d) {
         if (hov && d.texture) {
             float u = (io.MousePos.x - a.x) / sz.x, v = (io.MousePos.y - a.y) / sz.y;
             if (u >= 0 && u < 1 && v >= 0 && v < 1)
-                ImGui::SetTooltip("%d, %d  (%.0f%%)\nWheel: zoom, drag: pan, double click: fit", (int)(u * d.tex.sizeX), (int)(v * d.tex.sizeY),
+                Tip("%d, %d  (%.0f%%)\nWheel: zoom, drag: pan, double click: fit", (int)(u * d.tex.sizeX), (int)(v * d.tex.sizeY),
                                   s * tex->width / std::max(1, d.tex.sizeX) * 100);
         }
         if (ImGui::BeginPopupContextItem("##imgctx")) {
@@ -2009,7 +2091,7 @@ void App::DrawMaterialGraphPanel(Document& d) {
         auto& n = nodes[hot];
         std::string tip = n.type + (n.caption.empty() ? "" : "  \"" + n.caption + "\"") + "\n" + n.name;
         for (auto& l : n.inputs) tip += "\n  " + l.input + " <- " + l.from + (l.output ? Fmt(" [%d]", l.output) : "");
-        ImGui::SetTooltip("%s", tip.c_str());
+        Tip("%s", tip.c_str());
     }
     if (ImGui::IsWindowHovered() && ImGui::IsKeyPressed(ImGuiKey_F, false)) d.graphZoom = 0;   // F: fit
 }
@@ -2113,7 +2195,7 @@ void App::DrawShaderPanel(Document& d) {
             std::string sub = sh.vertexFactory.empty() ? std::string(ShaderFrequencyName(sh.frequency)) : sh.vertexFactory;
             if (sh.numTextureSamplers) sub += Fmt("   %u samplers", sh.numTextureSamplers);
             TextEllipsis(dl, ImVec2(tx, rp.y + Dip(5) + lh), rp.x + rw - Dip(6), kTextDim, sub.c_str());
-            if (rs.hovered && !sh.usage.empty()) ImGui::SetTooltip("%s", sh.usage.c_str());
+            if (rs.hovered && !sh.usage.empty()) Tip("%s", sh.usage.c_str());
             ImGui::PopID();
         }
     ImGui::EndChild();
@@ -2174,7 +2256,7 @@ void App::DrawTablePanel(Document& d) {
     }
     ImGui::SameLine(0, Dip(6));
     bool exportCsv = Button(filtered ? Fmt("Export CSV (%zu rows)", rows.size()).c_str() : "Export CSV", ImVec2(bw, 0));
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip(filtered ? "The rows shown, in the shown order" : "Every row");
+    if (ImGui::IsItemHovered()) Tip(filtered ? "The rows shown, in the shown order" : "Every row");
     ImGui::PushFont(nullptr, FontDip(11));
     ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(kTextDim), "showing %zu of %zu rows%s | column filters: text, >5, <=10, =x, !x | double-click a /Game/ path to open it",
                        rows.size(), t.cells.size(), cols > tcols ? Fmt(" | first %d of %d columns", tcols, cols).c_str() : "");
@@ -2227,7 +2309,7 @@ void App::DrawTablePanel(Document& d) {
                     ImGui::TextUnformatted(s.c_str());
                     if (c == 0) ImGui::PopFont();
                     bool asset = s.find("/Game/") != std::string::npos;
-                    if (ImGui::IsItemHovered() && (s.size() > 24 || asset)) ImGui::SetTooltip("%s%s", s.c_str(), asset ? "\n(double-click to open)" : "");
+                    if (ImGui::IsItemHovered() && (s.size() > 24 || asset)) Tip("%s%s", s.c_str(), asset ? "\n(double-click to open)" : "");
                     if (asset && ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(0)) {
                         size_t a = s.find("/Game/"), b = s.find_first_of("'\" ,)", a);
                         i64 e = m_api->ResolveFile(s.substr(a, b == std::string::npos ? std::string::npos : b - a));
@@ -2388,7 +2470,7 @@ void App::DrawAudioPanel(Document& d) {
                 }
             }
             if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Play one of the listed sounds, like the game does%s", d.eventSwitches.empty() ? "" : " with the switch values chosen here");
+                Tip("Play one of the listed sounds, like the game does%s", d.eventSwitches.empty() ? "" : " with the switch values chosen here");
             for (size_t g = 0; g < d.eventSwitches.size(); g++) {
                 auto& s = d.eventSwitches[g];
                 ImGui::PushID((int)g);
@@ -2403,7 +2485,7 @@ void App::DrawAudioPanel(Document& d) {
                 ImGui::AlignTextToFramePadding();
                 ImGui::TextColored(s.sel >= 0 ? ImGui::ColorConvertU32ToFloat4(kText) : ImGui::ColorConvertU32ToFloat4(kTextDim), "%s", label.c_str());
                 if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("%s group %s (0x%08X), %zu values\nNames are guessed from the words of event and audio asset names; "
+                    Tip("%s group %s (0x%08X), %zu values\nNames are guessed from the words of event and audio asset names; "
                                       "hex ids had no match.", s.state ? "State" : "Switch", s.name.c_str(), s.group, s.values.size());
                 ImGui::SameLine();
                 ImGui::SetNextItemWidth(comboW);
@@ -2418,7 +2500,7 @@ void App::DrawAudioPanel(Document& d) {
             if (!d.eventSwitches.empty()) {
                 ImGui::SameLine();
                 if (ImGui::Button("Any")) for (auto& s : d.eventSwitches) s.sel = -1;
-                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Reset every switch to any value");
+                if (ImGui::IsItemHovered()) Tip("Reset every switch to any value");
             }
             y = ImGui::GetCursorScreenPos().y + Dip(4);
             listH -= y - y0;
@@ -2442,7 +2524,7 @@ void App::DrawAudioPanel(Document& d) {
                     ImVec2 rp = ImGui::GetCursorScreenPos();
                     RowState rs = ListRow("##ev", ImVec2(rw, rowH), false);
                     if (rs.doubleClicked) OpenBankEvent(d, id);
-                    if (rs.hovered) ImGui::SetTooltip("Double-click: open the event and the sounds it plays");
+                    if (rs.hovered) Tip("Double-click: open the event and the sounds it plays");
                     float cy = rp.y + rowH * 0.5f, ty = cy - ImGui::GetFontSize() * 0.5f;
                     IconNote(ldl, ImVec2(rp.x + Dip(10), cy), Dip(14), kTextDim);
                     Text(ldl, ImVec2(rp.x + Dip(22), ty), name.empty() ? kTextDim : kText, name.empty() ? Fmt("event %u", id).c_str() : name.c_str());
@@ -2480,7 +2562,7 @@ void App::DrawAudioPanel(Document& d) {
                     if (d.isEvent && i < (int)d.eventWhen.size() && !d.eventWhen[i].empty()) {
                         float wx = rp.x + Dip(22) + std::max(Dip(110), ImGui::CalcTextSize(idText.c_str()).x + Dip(16));
                         TextEllipsis(ldl, ImVec2(wx, ty), szX - Dip(12), kTextDim, d.eventWhen[i].c_str());
-                        if (rs.hovered) ImGui::SetTooltip("Plays when %s", d.eventWhen[i].c_str());
+                        if (rs.hovered) Tip("Plays when %s", d.eventWhen[i].c_str());
                     }
                     ImGui::PopID();
                 }
@@ -2533,7 +2615,7 @@ void App::DrawAudioPanel(Document& d) {
     if (ImGui::IsItemHovered()) {
         float t = (ImGui::GetIO().MousePos.x - wa.x) / (wb.x - wa.x);
         dl->AddLine(ImVec2(ImGui::GetIO().MousePos.x, wa.y), ImVec2(ImGui::GetIO().MousePos.x, wb.y), Alpha(kText, 0.35f));
-        ImGui::SetTooltip("%.2f s", t * len);
+        Tip("%.2f s", t * len);
         if (ImGui::IsItemClicked()) {
             if (mine) m_player.Seek(t * len);
             else PlayAudio(d, pcm, t * len);
@@ -2549,7 +2631,7 @@ void App::DrawAudioPanel(Document& d) {
         ImVec2 c(x + bs * 0.5f, by + bs * 0.5f);
         dl->AddCircleFilled(c, bs * 0.5f, Mix(accent ? kAccent : kField, accent ? Shade(kAccent, 1.2f) : kTabSel, ht));
         icon(c);
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
+        if (ImGui::IsItemHovered()) Tip("%s", tip);
         return r;
     };
     bool playing = mine && !m_player.Paused();
@@ -2759,7 +2841,7 @@ void App::DrawJsonEditor(Document& d, ImVec2 size) {
                     i64 target = candidate ? m_api->ResolveFile(val) : -1;
                     if (target >= 0) {
                         dl->AddLine(ImVec2(ta.x + cw, tb.y - 1), ImVec2(tb.x - cw, tb.y - 1), col);
-                        ImGui::SetTooltip("Ctrl+Click to open %s", std::string(m_api->vfs.Path((u32)target)).c_str());
+                        Tip("Ctrl+Click to open %s", std::string(m_api->vfs.Path((u32)target)).c_str());
                         if (io.KeyCtrl) {
                             ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
                             if (ImGui::IsMouseClicked(0)) { u32 e = (u32)target; Post([this, e] { OpenFile(e, true); }); }
@@ -2809,7 +2891,7 @@ void App::DrawJsonEditor(Document& d, ImVec2 size) {
             if (*v || hv) fdl->AddRectFilled(tp, ImVec2(tp.x + tb, tp.y + bh), *v ? kAccent : kTabSel);
             ImVec2 gs = ImGui::CalcTextSize(glyph);
             fdl->AddText(ImVec2(tp.x + (tb - gs.x) * 0.5f, tp.y + (bh - gs.y) * 0.5f), kText, glyph);
-            if (hv) ImGui::SetTooltip("%s", tip);
+            if (hv) Tip("%s", tip);
         };
         bool regex = false;
         toggle("##up", &d.searchUp, "Search Up", "\xE2\x86\x91");
@@ -2979,7 +3061,7 @@ void App::DrawStatusBar() {
         Text(dl, ImVec2(rx, ty), IM_COL32_WHITE, right.c_str());
         IconRefresh(dl, ImVec2(rx - Dip(10) - Dip(8), p.y + h * 0.5f), Dip(16), IM_COL32_WHITE);
     }
-    if (m_mountState == MountState::Failed && ImGui::IsMouseHoveringRect(p, ImVec2(p.x + w, p.y + h))) ImGui::SetTooltip("%s", m_mountError.c_str());
+    if (m_mountState == MountState::Failed && ImGui::IsMouseHoveringRect(p, ImVec2(p.x + w, p.y + h))) Tip("%s", m_mountError.c_str());
     ImGui::Dummy(ImVec2(w, h));
 }
 
@@ -2988,7 +3070,7 @@ static bool ExportResultsButton(const char* id, size_t count) {
     ImGui::BeginDisabled(count == 0);
     bool open = Button(Fmt("Export %zu...%s", count, id).c_str(), ImVec2(Dip(110), 0));
     ImGui::EndDisabled();
-    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Export every result (choose what)");
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) Tip("Export every result (choose what)");
     if (open) ImGui::OpenPopup(id);
     return ImGui::BeginPopup(id);
 }
@@ -3024,7 +3106,6 @@ void App::DrawSearchWindow() {
         }
         float w = ImGui::GetContentRegionAvail().x;
         dl->AddRectFilled(ImVec2(p.x, p.y + th), ImVec2(p.x + w, p.y + th + Dip(4)), kTabSel);
-        TabMark(dl, ImGui::GetID("##stabmark"), p, tw * m_searchTab + Dip(10), th - Dip(2), tw - Dip(20) - 1, Dip(3));
         ImGui::SetCursorScreenPos(ImVec2(p.x, p.y + th + Dip(10)));
         // the chosen tab's page fades in (drawn over the window's inner area below the tabs at the end of the frame's window)
         ImGuiWindow* win = ImGui::GetCurrentWindow();
@@ -3157,7 +3238,7 @@ void App::DrawLocalizationTab() {
                 if (ImGui::Selectable(e->text.c_str(), false, ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowDoubleClick) &&
                     ImGui::IsMouseDoubleClicked(0))
                     findUsers();
-                if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s%sDouble-click: find the assets using this text", e->text.size() > 60 ? e->text.c_str() : "", e->text.size() > 60 ? "\n\n" : "");
+                if (ImGui::IsItemHovered()) Tip("%s%sDouble-click: find the assets using this text", e->text.size() > 60 ? e->text.c_str() : "", e->text.size() > 60 ? "\n\n" : "");
                 if (ImGui::BeginPopupContextItem("##lctx")) {
                     if (ImGui::MenuItem("Find Assets Using This Text")) findUsers();
                     ImGui::Separator();
@@ -3234,7 +3315,7 @@ void App::DrawContentTab() {
     if (ImGui::Button("Selected##csu", ImVec2(btnW, FieldH()))) snprintf(m_csUses, sizeof(m_csUses), "%s", std::string(vfs.Path((u32)m_selected)).c_str());
     ImGui::EndDisabled();
     PopFieldStyle();
-    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Use the package selected in the explorer");
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) Tip("Use the package selected in the explorer");
     ImGui::SameLine(0, gap * 2);
     field("Class", "##cscls", m_csClass, sizeof(m_csClass), "main asset class", half - labelW - FieldH() - gap);
     ImGui::SameLine(0, 0);
@@ -3245,7 +3326,7 @@ void App::DrawContentTab() {
         ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
         IconChevron(ImGui::GetWindowDrawList(), ImVec2((a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f), Dip(14), kPi * 0.5f, kText);
     }
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Common classes");
+    if (ImGui::IsItemHovered()) Tip("Common classes");
     if (ImGui::BeginPopup("##csclasses")) {
         static const char* kClasses[] = {"BlueprintGeneratedClass", "StaticMesh", "SkeletalMesh", "Material", "MaterialInstanceConstant", "Texture2D",
                                          "AnimSequence", "AnimMontage", "ParticleSystem", "AkAudioEvent", "SoundWave", "DataTable", "CurveFloat", "World"};
@@ -3266,13 +3347,13 @@ void App::DrawContentTab() {
     PushFieldStyle();
     if (ImGui::Button("Current##csf", ImVec2(btnW, FieldH()))) snprintf(m_csFolder, sizeof(m_csFolder), "%s", FolderPath(vfs.Folders(), m_folder).c_str());
     PopFieldStyle();
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Use the folder open in the explorer");
+    if (ImGui::IsItemHovered()) Tip("Use the folder open in the explorer");
     ImGui::SameLine(0, gap * 2);
     field("Name", "##csname", m_csName, sizeof(m_csName), "path contains", half - labelW);
     // row 4: localisation key (the Localization tab's "Find Assets Using This Text" fills it)
     field("Text key", "##cstkey", m_csTextKey, sizeof(m_csTextKey), "uses the FText with this localisation key", half - labelW);
     if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("A key from the Localization tab: packages whose FText properties (or Blueprint code) use that string.\n"
+        Tip("A key from the Localization tab: packages whose FText properties (or Blueprint code) use that string.\n"
                           "Read from the reference index, so the whole game is searched.");
 
     bool running = m_contentJob && !m_contentJob->done;
@@ -3345,7 +3426,7 @@ void App::DrawContentTab() {
                     std::string tip = path + (h.matches.empty() ? "" : "\n\n");
                     for (size_t k = 0; k < h.matches.size() && k < 12; k++) tip += h.matches[k] + "\n";
                     if (h.matches.size() > 12) tip += "...";
-                    ImGui::SetTooltip("%s", tip.c_str());
+                    Tip("%s", tip.c_str());
                 }
                 if (ImGui::BeginPopupContextItem("##csctx")) {
                     DrawFileMenu(h.entry);

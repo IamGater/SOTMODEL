@@ -6,3 +6,4 @@ std::string HumanSize(u64 bytes);
 void CopyToClipboard(const std::string& s);
 std::string GamePathToPackage(std::string_view gamePath);   // Athena/Content/X/y.uasset -> /Game/X/y
 bool IsPackageFile(std::string_view path);                 // .uasset / .umap
+void Tip(const char* fmt, ...);   // ImGui::SetTooltip after the pointer rests on the item (Shell.cpp)

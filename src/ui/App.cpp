@@ -766,7 +766,7 @@ void App::PopoutButton(Document& d, bool flow) {
     const char* label = m_inPopout ? "Back to tab" : "Separate window";
     if (flow ? FlowButton(label) : ImGui::Button(label)) SetViewerWindow(!m_inPopout, &d);
     if (ImGui::IsItemHovered())
-        ImGui::SetTooltip(m_inPopout ? "Show 3D views inside their tabs again" : "Show 3D views in their own window (e.g. on a second monitor)");
+        Tip(m_inPopout ? "Show 3D views inside their tabs again" : "Show 3D views in their own window (e.g. on a second monitor)");
 }
 
 std::string App::PopoutTitle() const {
@@ -925,13 +925,13 @@ void App::DrawAttachControls(Document& d) {
         }
         ImGui::EndCombo();
     }
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Socket to attach to");
+    if (ImGui::IsItemHovered()) Tip("Socket to attach to");
     if (!narrow) ImGui::SameLine();
     float btnW = ImGui::CalcTextSize("Attach").x + ImGui::GetStyle().FramePadding.x * 2;
     ImGui::SetNextItemWidth(std::max(60 * u, ImGui::GetContentRegionAvail().x - btnW - ImGui::GetStyle().ItemSpacing.x));
     bool go = ImGui::InputTextWithHint("##am", narrow ? "mesh path" : "mesh to attach (/Game/... path; empty = the explorer's selection)", d.attachEdit,
                                        sizeof(d.attachEdit), ImGuiInputTextFlags_EnterReturnsTrue);
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Static or skeletal mesh path; leave empty to attach the mesh selected in the explorer");
+    if (ImGui::IsItemHovered()) Tip("Static or skeletal mesh path; leave empty to attach the mesh selected in the explorer");
     ImGui::SameLine();
     ImGui::BeginDisabled(d.attachLoading);
     go |= ImGui::Button("Attach");
@@ -954,7 +954,7 @@ void App::DrawAttachControls(Document& d) {
             ImGui::PopID();
             break;
         }
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Detach");
+        if (ImGui::IsItemHovered()) Tip("Detach");
         ImGui::SameLine();
         std::string name = at.mesh.substr(at.mesh.find_last_of('/') + 1);
         if (size_t dot = name.find('.'); dot != std::string::npos) name.resize(dot);
@@ -979,7 +979,7 @@ void App::DrawGraphParams(GpuMaterial& mat) {
     }
     if (!g->ps) {
         ImGui::TextDisabled("graph shader failed");
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", g->error.c_str());
+        if (ImGui::IsItemHovered()) Tip("%s", g->error.c_str());
         return;
     }
     if (graphOnStart) ImGui::SetNextItemOpen(true, ImGuiCond_Once);
@@ -999,7 +999,7 @@ void App::DrawGraphParams(GpuMaterial& mat) {
         if (unnamed && !edited) ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
         ImGui::TextUnformatted(unnamed ? "(unnamed parameter)" : p.name.c_str());
         if (edited || unnamed) ImGui::PopStyleColor();
-        if (edited && ImGui::IsItemHovered()) ImGui::SetTooltip("changed; material value %g %g %g %g (right-click to restore)", p.value[0], p.value[1], p.value[2], p.value[3]);
+        if (edited && ImGui::IsItemHovered()) Tip("changed; material value %g %g %g %g (right-click to restore)", p.value[0], p.value[1], p.value[2], p.value[3]);
         if (ImGui::IsItemClicked(1)) {
             memcpy(v, p.value, sizeof(float) * 4);
             changed = true;
@@ -1080,10 +1080,10 @@ void App::DrawModel(Document& d) {
                                   d.collision->Count(CollisionShape::Capsule), d.collision->Count(CollisionShape::Convex));
         } else d.collisionNote = "no simple collision: " + err;
     }
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Simple collision (BodySetup / PhysicsAsset) as green wireframe%s%s", d.collisionNote.empty() ? "" : "\n", d.collisionNote.c_str());
+    if (ImGui::IsItemHovered()) Tip("Simple collision (BodySetup / PhysicsAsset) as green wireframe%s%s", d.collisionNote.empty() ? "" : "\n", d.collisionNote.c_str());
     if (!d.sockets.empty()) {
         FlowToggle("Sockets", &d.showSockets);
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Socket axes: X red, Y green, Z blue (%zu sockets)", d.sockets.size());
+        if (ImGui::IsItemHovered()) Tip("Socket axes: X red, Y green, Z blue (%zu sockets)", d.sockets.size());
     }
     if (FlowToggle("Graph shader", &d.draw.graphMaterials) && d.draw.graphMaterials) RequestGraphShaders(d);
     if (ImGui::IsItemHovered()) {
@@ -1093,7 +1093,7 @@ void App::DrawModel(Document& d) {
                 if (mat && mat->graph)
                     tip += "\n" + mat->path.substr(mat->path.rfind('/') + 1) + ": " +
                            (mat->graph->ps ? Fmt("ok, %.0f ms", mat->graph->compileMs) : mat->graph->error.substr(0, 200));
-        ImGui::SetTooltip("%s", tip.c_str());
+        Tip("%s", tip.c_str());
     }
     if (d.hasMaterial && FlowButton("Texture pages")) d.materialSphere = false;
     if (FlowButton("Frame")) d.camera.Frame(d.gpuMesh->boundsMin, d.gpuMesh->boundsMax);
@@ -1125,7 +1125,7 @@ void App::DrawModel(Document& d) {
                 i64 e = m_api->ResolveFile(s.materialPath);
                 if (e >= 0) OpenFile((u32)e);
             }
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Click to open the material");
+            if (ImGui::IsItemHovered()) Tip("Click to open the material");
         }
         if (!d.matVariantsListed) {
             ListMaterialVariants(d);
@@ -1155,11 +1155,11 @@ void App::DrawModel(Document& d) {
                         for (auto& sp : m_docs)
                             if (sp.get() == &d) ApplyMaterialVariants(sp);
                     }
-                    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", v.c_str());
+                    if (ImGui::IsItemHovered()) Tip("%s", v.c_str());
                 }
                 ImGui::EndCombo();
             }
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%zu material instances named like this one (skins / colour variants)", d.matVariants[i].size());
+            if (ImGui::IsItemHovered()) Tip("%zu material instances named like this one (skins / colour variants)", d.matVariants[i].size());
         }
         if (d.draw.graphMaterials && d.gpuMesh && i < d.gpuMesh->materials.size() && d.gpuMesh->materials[i]) DrawGraphParams(*d.gpuMesh->materials[i]);
         ImGui::PopID();
@@ -1169,7 +1169,7 @@ void App::DrawModel(Document& d) {
             d.draw.graphMaterials = true;
             RequestGraphShaders(d);
         }
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Turns on Graph shader: scalar / vector parameters can then be changed live");
+        if (ImGui::IsItemHovered()) Tip("Turns on Graph shader: scalar / vector parameters can then be changed live");
     }
     if (m.skeletal) ImGui::TextDisabled("%zu bones", m.skeleton.size());
     if (!d.sockets.empty()) {
@@ -1183,7 +1183,7 @@ void App::DrawModel(Document& d) {
             if (!so.bone.empty()) { ImGui::SameLine(); ImGui::TextDisabled("@ %s", so.bone.c_str()); }
             if (ImGui::IsItemHovered() || ImGui::IsItemClicked()) {
                 Vec3 t = so.transform.Translation();
-                ImGui::SetTooltip("location %.2f %.2f %.2f\nrotation P %.1f Y %.1f R %.1f\nscale %.2f %.2f %.2f\nmesh space %.2f %.2f %.2f%s", so.location.x,
+                Tip("location %.2f %.2f %.2f\nrotation P %.1f Y %.1f R %.1f\nscale %.2f %.2f %.2f\nmesh space %.2f %.2f %.2f%s", so.location.x,
                                   so.location.y, so.location.z, so.rotation.x, so.rotation.y, so.rotation.z, so.scale.x, so.scale.y, so.scale.z, t.x, t.y, t.z,
                                   so.source == "skeleton" ? "\n(from the skeleton)" : "");
             }
@@ -1302,7 +1302,7 @@ void App::DrawAnimation(Document& d) {
 // "Export glTF" in the world toolbar: the assembled Blueprint, the whole loaded map or the part around the view target
 void App::DrawWorldExport(Document& d) {
     if (FlowButton("Export glTF")) ImGui::OpenPopup("##wexp");
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Export the assembled scene (or the part around the view) as one .glb for Blender");
+    if (ImGui::IsItemHovered()) Tip("Export the assembled scene (or the part around the view) as one .glb for Blender");
     if (!ImGui::BeginPopup("##wexp")) return;
     const WorldData& w = *d.world;
     ImGui::TextUnformatted(d.worldBlueprint ? "Export the assembled Blueprint" : "Export the map");
@@ -1467,14 +1467,14 @@ void App::DrawTimeOfDayControls(Document& d) {
     }
     FlowToggle("Day cycle", &d.todEnabled);
     if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Lights the sea like the game's day cycle: sun or moon, sky light, sky dome and fog colours from the "
+        Tip("Lights the sea like the game's day cycle: sun or moon, sky light, sky dome and fog colours from the "
                           "lighting curves of the region (Curves/Lighting/%s)", d.todRegion.empty() ? "..." : d.todRegion.c_str());
     if (!d.todEnabled) return;
     FlowNext(130);
     ImGui::SetNextItemWidth(130);
     int hh = (int)d.todHour % 24, mm = (int)((d.todHour - (int)d.todHour) * 60);
     ImGui::SliderFloat("##tod", &d.todHour, 0, 24, Fmt("time %02d:%02d", hh, mm).c_str());
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Hour of the day cycle (in game hours)");
+    if (ImGui::IsItemHovered()) Tip("Hour of the day cycle (in game hours)");
     if (m_todRegions.size() > 1) {
         FlowNext(120);
         ImGui::SetNextItemWidth(120);
@@ -1486,7 +1486,7 @@ void App::DrawTimeOfDayControls(Document& d) {
                 }
             ImGui::EndCombo();
         }
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Lighting curve set (the map's sea is picked by default)");
+        if (ImGui::IsItemHovered()) Tip("Lighting curve set (the map's sea is picked by default)");
     }
 }
 
@@ -1584,7 +1584,7 @@ void App::DrawWorld(Document& d) {
         if (!d.worldSea) return;
         BeginToolbar();
         FlowToggle("Island proxies", &d.worldProxies, true);
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Each island as its merged LOD proxy mesh (fast). Off: every mesh and the landscapes (filter islands first)");
+        if (ImGui::IsItemHovered()) Tip("Each island as its merged LOD proxy mesh (fast). Off: every mesh and the landscapes (filter islands first)");
         FlowNext(260);
         ImGui::SetNextItemWidth(260);
         bool enter = ImGui::InputTextWithHint("##isl", "islands: name / sea terms, -excluded", d.worldIslands, sizeof(d.worldIslands), ImGuiInputTextFlags_EnterReturnsTrue);
@@ -1613,14 +1613,14 @@ void App::DrawWorld(Document& d) {
         FlowToggle("Landscape", &d.worldDraw.landscape);
         FlowToggle("Water", &d.worldDraw.water);
         FlowToggle("Lights", &d.worldDraw.lights);
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("The map's sun, sky light and the %d point / spot lights nearest the camera", kMaxSceneLights);
+        if (ImGui::IsItemHovered()) Tip("The map's sun, sky light and the %d point / spot lights nearest the camera", kMaxSceneLights);
         FlowToggle("Fog", &d.worldDraw.fog);
         FlowToggle("Gizmos", &d.worldDraw.gizmos);
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Light ranges / spot cones (yellow) and decal boxes (blue) within 300 m");
+        if (ImGui::IsItemHovered()) Tip("Light ranges / spot cones (yellow) and decal boxes (blue) within 300 m");
         DrawTimeOfDayControls(d);
     } else {   // a Blueprint: optionally on the sea (its origin at the water line) under the day cycle
         if (FlowToggle("Sea & sky", &d.bpEnv)) d.worldDraw.water = d.worldDraw.fog = d.worldDraw.lights = d.bpEnv;
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("The actor on the sea (water line at its origin) with the day cycle's sun, sky dome and fog");
+        if (ImGui::IsItemHovered()) Tip("The actor on the sea (water line at its origin) with the day cycle's sun, sky dome and fog");
         if (d.bpEnv) {
             FlowToggle("Water", &d.worldDraw.water);
             FlowToggle("Fog", &d.worldDraw.fog);
@@ -1630,19 +1630,19 @@ void App::DrawWorld(Document& d) {
     if (!w.emitters.empty()) {
         FlowToggle("Particles", &d.worldParticles);
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Simulates the %zu nearest of the %zu particle emitters within %.0f m of the camera", kFxMax, w.emitters.size(), kFxRange / 100);
+            Tip("Simulates the %zu nearest of the %zu particle emitters within %.0f m of the camera", kFxMax, w.emitters.size(), kFxRange / 100);
     }
     FlowToggle("Textures", &d.draw.textures);
     FlowToggle("Wireframe", &d.draw.wireframe);
     FlowNext(130);
     ImGui::SetNextItemWidth(130);
     ImGui::SliderFloat("##dd", &d.worldDraw.drawDistanceScale, 0, 4, d.worldDraw.drawDistanceScale > 0 ? "draw dist x%.2f" : "draw dist: all");
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Scales the game's per-mesh draw distances (0 = draw everything)");
+    if (ImGui::IsItemHovered()) Tip("Scales the game's per-mesh draw distances (0 = draw everything)");
     FlowNext(120);
     ImGui::SetNextItemWidth(120);
     float cullPx = d.worldDraw.minScreenSize * 1000;
     if (ImGui::SliderFloat("##cull", &cullPx, 0, 10, "small cull %.1f")) d.worldDraw.minScreenSize = cullPx / 1000;
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Skips instances smaller than this (per mille of the view height)");
+    if (ImGui::IsItemHovered()) Tip("Skips instances smaller than this (per mille of the view height)");
     FlowNext(120);
     ImGui::SetNextItemWidth(120);
     ImGui::SliderFloat("##fly", &d.camera.flySpeed, 200, 50000, "fly %.0f cm/s", ImGuiSliderFlags_Logarithmic);
@@ -1744,7 +1744,7 @@ void App::DrawWorld(Document& d) {
                         ImGui::EndPopup();
                     }
                     if (ImGui::IsItemHovered())
-                        ImGui::SetTooltip("%s%s\nDouble-click: fly to it, right-click: open", g.mesh.c_str(), g.materials.empty() ? "" : "\n(material overrides)");
+                        Tip("%s%s\nDouble-click: fly to it, right-click: open", g.mesh.c_str(), g.materials.empty() ? "" : "\n(material overrides)");
                     ImGui::TableNextColumn();
                     ImGui::TextDisabled("%zu", g.instances.size());
                     ImGui::PopID();
@@ -1788,7 +1788,7 @@ void App::DrawWorld(Document& d) {
                         ImGui::EndPopup();
                     }
                     if (ImGui::IsItemHovered())
-                        ImGui::SetTooltip("%s\nlocation %.0f %.0f %.0f, yaw %.1f\n%s%sDouble-click: fly to it, right-click: load / open", isl.dir.c_str(),
+                        Tip("%s\nlocation %.0f %.0f %.0f, yaw %.1f\n%s%sDouble-click: fly to it, right-click: load / open", isl.dir.c_str(),
                                           isl.location.x, isl.location.y, isl.location.z, isl.yaw, isl.type.c_str(), isl.type.empty() ? "" : "\n");
                     ImGui::TableNextColumn();
                     ImGui::TextDisabled("%s", isl.sea.c_str());
@@ -1802,7 +1802,7 @@ void App::DrawWorld(Document& d) {
             for (auto& l : w.levels) {
                 ImGui::TextUnformatted(l.path.substr(l.path.find_last_of('/') + 1).c_str());
                 if (!l.island.empty()) { ImGui::SameLine(); ImGui::TextDisabled("(%s)", l.island.c_str()); }
-                if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", l.path.c_str());
+                if (ImGui::IsItemHovered()) Tip("%s", l.path.c_str());
                 ImGui::TextDisabled("   %u actors, %u instances%s%s", l.actors, l.instances,
                                     l.landscapeComponents ? Fmt(", %u landscape", l.landscapeComponents).c_str() : "",
                                     l.unresolved ? Fmt(", %u unresolved", l.unresolved).c_str() : "");
