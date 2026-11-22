@@ -160,6 +160,13 @@ struct Document {
     bool worldSea = false;        // sot_world_layout_2: the whole open world
     bool worldBlueprint = false;  // a Blueprint actor class assembled from its components (shown through the world view)
     bool worldParticles = true;   // simulate the ParticleSystemComponents near the camera
+    // day cycle: the region's lighting curves evaluated at todHour
+    bool todEnabled = true;
+    float todHour = 12;
+    std::string todRegion;                     // empty: picked from the map path
+    std::shared_ptr<TimeOfDayCurves> tod;      // loaded curves (null while loading / none)
+    bool todLoading = false;
+    TimeOfDayLight todLight;
     struct FxTemplate { int state = 0; std::shared_ptr<Attachment> fx; };   // state 0 loading, 1 ready, 2 failed; fx: system + looks
     std::unordered_map<std::string, FxTemplate> fxTemplates;   // by system path
     struct FxLive { std::shared_ptr<ParticleSim> sim; float time = 0; };
@@ -242,6 +249,7 @@ public:
     bool popoutOnStart = false;             // --popout: show the opened tab's 3D view in the separate window
     std::vector<std::string> attachOnStart; // --attach mesh@socket: attached to the opened tab's mesh once loaded (automation)
     bool graphOnStart = false;              // --graph: model tabs open with Graph shader on and the parameters expanded
+    float timeOnStart = -1;                 // --time h: maps open at this hour of the day cycle (automation)
 
 private:
     void StartMount();
@@ -315,6 +323,8 @@ private:
     void PopoutButton(Document& d, bool flow);
     void DrawWorldSelection(Document& d, ImVec2 vp0, ImVec2 vsize);
     void UpdateWorldParticles(Document& d);   // picks the emitters near the camera, loads their systems, steps the simulations
+    void DrawTimeOfDayControls(Document& d);  // map toolbar: day cycle toggle, hour, lighting region (loads the curves)
+    std::vector<std::string> m_todRegions;    // lighting curve sets in the game (listed on first use)
     void DrawWorldParticles(Document& d);     // inside the viewport scene
     static bool Has3dView(const Document& d);
     void LoadWorld(std::shared_ptr<Document> d);

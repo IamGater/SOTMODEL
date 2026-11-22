@@ -1214,6 +1214,62 @@ void App::DrawAnimation(Document& d) {
     DrawViewport(*m_renderer, d, MinViewportAvail(), true);
 }
 
+void App::DrawTimeOfDayControls(Document& d) {
+    if (timeOnStart >= 0) {   // --time
+        d.todHour = std::clamp(timeOnStart, 0.f, 24.f);
+        d.todEnabled = true;
+        timeOnStart = -1;
+    }
+    if (d.todEnabled && !d.tod && !d.todLoading) {   // the curves of the map's region (or the one picked), in the background
+        std::shared_ptr<Document> sp;
+        for (auto& x : m_docs)
+            if (x.get() == &d) sp = x;
+        if (sp) {
+            d.todLoading = true;
+            std::string mapPath = d.world ? d.world->root : std::string(), want = d.todRegion;
+            m_jobs->Push([this, sp, mapPath, want] {
+                auto regions = TimeOfDayRegions(*m_api->cache);
+                std::string region = want.empty() ? TimeOfDayRegionFor(mapPath, regions) : want, err;
+                auto c = std::make_shared<TimeOfDayCurves>();
+                bool ok = !region.empty() && LoadTimeOfDay(*m_api->cache, region, *c, &err);
+                Post([this, sp, regions, region, c, ok, err] {
+                    m_todRegions = regions;
+                    sp->todLoading = false;
+                    sp->todRegion = region;
+                    if (ok) sp->tod = c;
+                    else {
+                        sp->todEnabled = false;
+                        LOGW("day cycle: %s", region.empty() ? "no lighting curves in the game files" : err.c_str());
+                    }
+                });
+            });
+        }
+    }
+    FlowToggle("Day cycle", &d.todEnabled);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Lights the sea like the game's day cycle: sun or moon, sky light, sky dome and fog colours from the "
+                          "lighting curves of the region (Curves/Lighting/%s)", d.todRegion.empty() ? "..." : d.todRegion.c_str());
+    if (!d.todEnabled) return;
+    FlowNext(130);
+    ImGui::SetNextItemWidth(130);
+    int hh = (int)d.todHour % 24, mm = (int)((d.todHour - (int)d.todHour) * 60);
+    ImGui::SliderFloat("##tod", &d.todHour, 0, 24, Fmt("time %02d:%02d", hh, mm).c_str());
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Hour of the day cycle (in game hours)");
+    if (m_todRegions.size() > 1) {
+        FlowNext(120);
+        ImGui::SetNextItemWidth(120);
+        if (ImGui::BeginCombo("##todr", d.todRegion.c_str(), ImGuiComboFlags_HeightLarge)) {
+            for (auto& r : m_todRegions)
+                if (ImGui::Selectable(r.c_str(), r == d.todRegion) && r != d.todRegion && !d.todLoading) {
+                    d.todRegion = r;
+                    d.tod = nullptr;   // reloads next frame
+                }
+            ImGui::EndCombo();
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Lighting curve set (the map's sea is picked by default)");
+    }
+}
+
 // Map effects: the nearest emitters within kFxRange of the camera are simulated (their systems load in the background).
 static constexpr float kFxRange = 12000;   // cm
 static constexpr size_t kFxMax = 48;
@@ -1341,6 +1397,7 @@ void App::DrawWorld(Document& d) {
         FlowToggle("Fog", &d.worldDraw.fog);
         FlowToggle("Gizmos", &d.worldDraw.gizmos);
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Light ranges / spot cones (yellow) and decal boxes (blue) within 300 m");
+        DrawTimeOfDayControls(d);
     }
     if (!w.emitters.empty()) {
         FlowToggle("Particles", &d.worldParticles);
@@ -1383,6 +1440,11 @@ void App::DrawWorld(Document& d) {
     float side = avail.x > 640 ? std::min(360.f, avail.x * 0.3f) : 0.f;   // the outliner is dropped in narrow windows
     Camera& cam = d.camera;
     UpdateWorldParticles(d);
+    d.worldDraw.timeOfDay = nullptr;
+    if (d.todEnabled && d.tod && !d.worldBlueprint) {
+        d.todLight = EvaluateTimeOfDay(*d.tod, d.todHour);
+        d.worldDraw.timeOfDay = &d.todLight;
+    }
     sc.Lighting(cam, d.worldDraw, d.worldLighting);
     d.draw.lighting = d.worldBlueprint ? nullptr : &d.worldLighting;   // a lone actor: the viewer's key light
     ImVec2 vp0 = ImGui::GetCursorScreenPos(), vsize(side > 0 ? avail.x - side - ImGui::GetStyle().ItemSpacing.x : avail.x, avail.y);

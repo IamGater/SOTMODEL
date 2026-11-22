@@ -47,12 +47,16 @@ on the package's dependency graph; 3D views open in a separate viewer window tha
 `--screenshot` saves that window's back buffer next to the main one as `<file>.viewer.png`.
 More automation for the 3D views: `--pick u,v` clicks a map's viewport once at that fraction of its size (the pick is
 logged), `--attach <mesh or particle system>@<socket>` (repeatable; without `@<socket>` the default hand socket) attaches
-assets to the opened mesh / animation's sockets, `--tab` takes `archives` / `folders` / `packages` or 0-2, `--graph` opens model tabs with Graph shader on and the material parameters expanded.
+assets to the opened mesh / animation's sockets, `--tab` takes `archives` / `folders` / `packages` or 0-2,
+`--time <hour>` opens maps at that hour of the day cycle, `--graph` opens model tabs with Graph shader on and the material parameters expanded.
 
 The viewer also opens `BlueprintGeneratedClass` packages as one assembled actor (component templates attached by the
 construction script tree, child actors included), draws particle systems with the 3D renderer (also on sockets and the
 `ParticleSystemComponent`s of maps near the camera), edits material scalar / vector parameters live (Graph shader), and
 opens `WwiseEvent` assets as the list of sounds the event plays (a bank's Events tab opens its events by name).
+Maps get the sea's day cycle ("Day cycle" in the map toolbar, `time_of_day` in `preview_world`): island levels have no
+sun or sky light, so the lighting curves of the region (`Curves/Lighting/<WSP|Wilds|Volcanic|Standard|...>`: sun colour
+and intensity, sky light, sky dome horizon / zenith, fog) are evaluated for the hour (`ue/TimeOfDay`).
 
 ## Configuration
 

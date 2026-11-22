@@ -86,7 +86,7 @@ float4 PSMain(PSIn i, bool front : SV_IsFrontFace) : SV_Target {
         c += base.rgb * b.rgb * saturate(dot(n, L)) * att;
     }
     float rim = pow(1 - saturate(dot(n, v)), 4) * 0.08;
-    c += rim;
+    c += rim * Ambient.rgb;   // follows the sky light (dark at night)
     if (FogParams.w > 0) {   // UE 4.10 exponential height fog
         float3 ray = i.wpos - EyePos.xyz;
         float len = length(ray);
@@ -141,6 +141,35 @@ float4 PSMain(PSIn i) : SV_Target {
     return c;
 }
 )";
+
+// Sky dome behind the scene: a full screen triangle; each pixel's view ray picks a horizon -> zenith gradient and the sun disc.
+static const char* kSkyShader = R"(
+#pragma pack_matrix(row_major)
+cbuffer Sky : register(b1) { float4x4 InvViewProj; float4 Eye; float4 Horizon; float4 Zenith; float4 ToSun; float4 SunDisc; };
+struct PSIn { float4 pos : SV_Position; float2 ndc : TEXCOORD0; };
+PSIn VSMain(uint id : SV_VertexID) {
+    PSIn o;
+    float2 p = float2((id << 1) & 2, id & 2) * 2 - 1;
+    o.pos = float4(p, 0, 1);
+    o.ndc = p;
+    return o;
+}
+float4 PSMain(PSIn i) : SV_Target {
+    float4 w = mul(float4(i.ndc, 0.5, 1), InvViewProj);
+    float3 d = normalize(w.xyz / w.w - Eye.xyz);
+    float up = saturate(d.z);
+    float3 c = lerp(Horizon.rgb, Zenith.rgb, pow(up, 0.3));
+    if (d.z < 0) c = Horizon.rgb * lerp(1.0, 0.55, saturate(-d.z * 4));   // below the horizon (seen past the water)
+    float s = dot(d, normalize(ToSun.xyz));
+    c += SunDisc.rgb * (smoothstep(0.9994, 0.9998, s) * 6 + pow(saturate(s), 64) * 0.35);
+    return float4(c, 1);
+}
+)";
+
+struct SkyConstants {
+    Mat4 invViewProj;
+    float eye[4], horizon[4], zenith[4], toSun[4], sunDisc[4];
+};
 
 struct MeshVertex {
     float pos[3], nrm[3], tan[4], uv[2];
@@ -238,6 +267,12 @@ bool Renderer::Init(ID3D11Device* device, ID3D11DeviceContext* ctx, std::string*
     m_dev->CreateBuffer(&cb, nullptr, &m_materialCb);
     cb.ByteWidth = 32;
     m_dev->CreateBuffer(&cb, nullptr, &m_graphCb);
+    cb.ByteWidth = sizeof(SkyConstants);
+    m_dev->CreateBuffer(&cb, nullptr, &m_skyCb);
+    ComPtr<ID3DBlob> kvs, kps;
+    if (!Compile(kSkyShader, "VSMain", "vs_5_0", kvs, error) || !Compile(kSkyShader, "PSMain", "ps_5_0", kps, error)) return false;
+    m_dev->CreateVertexShader(kvs->GetBufferPointer(), kvs->GetBufferSize(), nullptr, &m_skyVs);
+    m_dev->CreatePixelShader(kps->GetBufferPointer(), kps->GetBufferSize(), nullptr, &m_skyPs);
     m_startTime = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
 
     D3D11_SAMPLER_DESC sd = {};
@@ -535,6 +570,28 @@ void Renderer::BeginFrame(int width, int height, const Camera& cam, const DrawOp
         float g[8] = {opt.time >= 0 ? opt.time : (float)(now - m_startTime), 0, 0, 0, (float)m_w, (float)m_h, 1.f / m_w, 1.f / m_h};
         memcpy(ms.pData, g, sizeof(g));
         m_ctx->Unmap(m_graphCb.Get(), 0);
+    }
+    if (opt.lighting && opt.lighting->sky && m_skyPs && SUCCEEDED(m_ctx->Map(m_skyCb.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &ms))) {
+        const SceneLighting& sl = *opt.lighting;
+        SkyConstants k{};
+        k.invViewProj = m_viewProj.Inverse();
+        k.eye[0] = eye.x; k.eye[1] = eye.y; k.eye[2] = eye.z;
+        k.horizon[0] = sl.skyHorizon.x; k.horizon[1] = sl.skyHorizon.y; k.horizon[2] = sl.skyHorizon.z;
+        k.zenith[0] = sl.skyZenith.x; k.zenith[1] = sl.skyZenith.y; k.zenith[2] = sl.skyZenith.z;
+        k.toSun[0] = sl.toSun.x; k.toSun[1] = sl.toSun.y; k.toSun[2] = sl.toSun.z;
+        k.sunDisc[0] = sl.skySunColor.x; k.sunDisc[1] = sl.skySunColor.y; k.sunDisc[2] = sl.skySunColor.z;
+        memcpy(ms.pData, &k, sizeof(k));
+        m_ctx->Unmap(m_skyCb.Get(), 0);
+        m_ctx->IASetInputLayout(nullptr);
+        m_ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        m_ctx->VSSetShader(m_skyVs.Get(), nullptr, 0);
+        m_ctx->PSSetShader(m_skyPs.Get(), nullptr, 0);
+        ID3D11Buffer* cb = m_skyCb.Get();
+        m_ctx->PSSetConstantBuffers(1, 1, &cb);
+        m_ctx->RSSetState(m_rsSolid[1].Get());
+        m_ctx->OMSetDepthStencilState(m_noDepth.Get(), 0);
+        m_ctx->OMSetBlendState(m_opaqueBlend.Get(), nullptr, 0xffffffff);
+        m_ctx->Draw(3, 0);
     }
     m_ctx->OMSetDepthStencilState(m_depth.Get(), 0);
     m_ctx->OMSetBlendState(m_opaqueBlend.Get(), nullptr, 0xffffffff);

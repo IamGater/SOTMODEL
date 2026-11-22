@@ -191,7 +191,9 @@ void RegisterWorldTools(Api& api) {
                       R"J("lights":{"type":"boolean","default":true,"description":"the map's sun, sky light and nearest point / spot lights"},)J"
                       R"J("fog":{"type":"boolean","default":true,"description":"the map's exponential height fog"},)J"
                       R"J("water":{"type":"boolean","default":true,"description":"sea plane at the water level"},)J"
-                      R"J("gizmos":{"type":"boolean","default":false,"description":"outlines of lights (range circles, spot cones) and decal boxes"},"save_to":{"type":"string"}},"required":["path"]})J",
+                      R"J("gizmos":{"type":"boolean","default":false,"description":"outlines of lights (range circles, spot cones) and decal boxes"},)J"
+                      R"J("time_of_day":{"type":"number","description":"hour (0-24) of the sea's day cycle: sun / moon, sky light, sky dome and fog from the lighting curves; omitted = the map's own lights only"},)J"
+                      R"J("lighting_region":{"type":"string","description":"lighting curve set under Curves/Lighting (WSP, Wilds, Volcanic, Standard, ...); default: from the map path"},"save_to":{"type":"string"}},"required":["path"]})J",
                   "path",
                   [](Api& a, const JsonValue& args) {
                       WorldLoader loader(*a.cache);
@@ -213,6 +215,17 @@ void RegisterWorldTools(Api& api) {
                       req.world.fog = args.GetBool("fog", true);
                       req.world.water = args.GetBool("water", true);
                       req.world.gizmos = args.GetBool("gizmos", false);
+                      TimeOfDayCurves tod;
+                      TimeOfDayLight todLight;
+                      std::string todRegion;
+                      if (args.Get("time_of_day")) {
+                          auto regions = TimeOfDayRegions(*a.cache);
+                          todRegion = args.GetStr("lighting_region");
+                          if (todRegion.empty()) todRegion = TimeOfDayRegionFor(wd.root, regions);
+                          if (!LoadTimeOfDay(*a.cache, todRegion, tod, &err)) return ApiResult::Error("time_of_day: " + err);
+                          todLight = EvaluateTimeOfDay(tod, (float)args.GetNum("time_of_day", 12));
+                          req.world.timeOfDay = &todLight;
+                      }
                       auto vec = [&](const char* k, Vec3& v) {
                           const JsonValue* j = args.Get(k);
                           if (!j || j->arr.size() < 3) return false;
@@ -237,6 +250,7 @@ void RegisterWorldTools(Api& api) {
                       w.KV("lights", (i64)wd.lights.size());
                       w.KV("decals", (i64)wd.decals.size());
                       if (wd.hasWater) w.KV("waterLevel", (double)wd.waterLevel);
+                      if (req.world.timeOfDay) { w.KV("lightingRegion", todRegion); w.KV("sunrise", (double)tod.sunrise); w.KV("sunset", (double)tod.sunset); }
                       if (!save.empty()) w.KV("savedTo", save);
                       w.EndObject();
                       r.json = w.Take();

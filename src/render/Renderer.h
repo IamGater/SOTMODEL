@@ -85,7 +85,10 @@ struct SceneLighting {
     Vec3 fogColor;
     float fogDensity = 0, fogFalloff = 0;   // as on the component (divided by 1000 in the shader math)
     float fogHeight = 0, fogStart = 0, fogMaxOpacity = 1;
-    std::vector<SceneLight> lights;         // the first kMaxSceneLights are used
+    bool sky = false;                       // a sky dome behind the scene instead of the flat background
+    Vec3 skyHorizon, skyZenith, skySunColor;   // linear; skySunColor: the disc (black = none)
+    Vec3 toSun{0, 0, 1};
+    std::vector<SceneLight> lights;        // the first kMaxSceneLights are used
 };
 
 struct DrawOptions {
@@ -159,6 +162,9 @@ private:
     ComPtr<ID3D11BlendState> m_opaqueBlend, m_lineBlend, m_addBlend, m_modBlend;
     ComPtr<ID3D11DepthStencilState> m_depthNoWrite;
     ComPtr<ID3D11Buffer> m_graphCb;
+    ComPtr<ID3D11VertexShader> m_skyVs;
+    ComPtr<ID3D11PixelShader> m_skyPs;
+    ComPtr<ID3D11Buffer> m_skyCb;
     double m_startTime = 0;
     std::shared_ptr<GpuTexture> m_white, m_flatNormal;
 

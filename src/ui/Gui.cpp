@@ -341,6 +341,7 @@ int RunGui(const std::vector<std::string>& args) {
     float pickU = -1, pickV = -1;
     std::vector<std::string> attach;
     bool graph = false;
+    float timeOfDay = -1;
     for (size_t i = 0; i < args.size(); i++) {
         if (args[i] == "--screenshot" && i + 1 < args.size()) screenshot = Widen(args[++i]);
         else if (args[i] == "--size" && i + 1 < args.size()) sscanf(args[++i].c_str(), "%dx%d", &forceW, &forceH);
@@ -352,6 +353,7 @@ int RunGui(const std::vector<std::string>& args) {
         else if (args[i] == "--delay" && i + 1 < args.size()) delay = atof(args[++i].c_str());
         else if (args[i] == "--popout") popout = true;
         else if (args[i] == "--graph") graph = true;
+        else if (args[i] == "--time" && i + 1 < args.size()) timeOfDay = (float)atof(args[++i].c_str());
         else if (args[i] == "--attach" && i + 1 < args.size()) attach.push_back(args[++i]);
         else if (args[i] == "--pick" && i + 1 < args.size()) sscanf(args[++i].c_str(), "%f,%f", &pickU, &pickV);
         else if (args[i] == "--shaders" && i + 1 < args.size()) open.push_back("shaders:" + args[++i]);
@@ -431,6 +433,7 @@ int RunGui(const std::vector<std::string>& args) {
         app.pickV = pickV;
         app.attachOnStart = attach;
         app.graphOnStart = graph;
+        app.timeOnStart = timeOfDay;
         app.startTab = startTab;
         app.startFolder = startFolder;
         if (!app.Init(hwnd, g_dev.Get(), g_ctx.Get())) {

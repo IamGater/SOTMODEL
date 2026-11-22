@@ -1,6 +1,7 @@
 #pragma once
 #include "render/GpuAssets.h"
 #include "ue/World.h"
+#include "ue/TimeOfDay.h"
 
 // GPU side of a loaded map: one instanced mesh per (mesh, materials) group, landscape patches and deformed spline meshes,
 // drawn with per-instance frustum, draw-distance and screen-size culling.
@@ -12,6 +13,8 @@ struct WorldDrawOptions {
     bool fog = true;               // the map's exponential height fog
     bool water = true;             // sea plane at the map's water level
     bool gizmos = false;           // light and decal outlines
+    // the sea's day cycle at an hour (null: only the map's own lights): sun / moon, sky light, sky dome, fog colour
+    const TimeOfDayLight* timeOfDay = nullptr;
 };
 
 struct WorldDrawStats {

@@ -288,6 +288,30 @@ void WorldScene::Lighting(const Camera& cam, const WorldDrawOptions& opt, SceneL
             out.fogMaxOpacity = pick->maxOpacity;
         }
     }
+    if (const TimeOfDayLight* t = opt.timeOfDay) {   // the day cycle replaces the sun, sky light and sky colours
+        if (opt.lights) {
+            out.sun = true;
+            out.sunDir = t->toSun * -1.f;
+            out.sunColor = t->sunColor;
+            out.ambientScale = t->ambient;
+        }
+        out.sky = true;
+        out.toSun = t->toSun;
+        out.skyHorizon = t->horizon;
+        out.skyZenith = t->zenith;
+        out.skySunColor = t->moon ? t->sunColor * 2.f : t->sunColor;
+        if (opt.fog && eye.z >= m_waterLevel) {
+            if (!out.fog) {   // no fog component on the map: the curves' fog over the water level
+                out.fog = true;
+                out.fogDensity = t->fogDensity;
+                out.fogFalloff = 0.2f;
+                out.fogHeight = m_waterLevel;
+                out.fogStart = t->fogStart;
+                out.fogMaxOpacity = 1;
+            }
+            out.fogColor = t->fogColor;
+        }
+    }
 }
 
 void WorldScene::DrawOverlays(const Camera& cam, const WorldDrawOptions& opt) {
