@@ -70,19 +70,141 @@ PropValue ObjectRef(const Package& pkg, i32 idx) {
     return v;
 }
 
+PropValue ReadText(Reader& r);
+PropValue MakeStr(std::string s, PropType t = PropType::Str) { PropValue v; v.type = t; v.str = std::move(s); return v; }
+
+// FFormatArgumentValue: a type byte then the value (Text arguments nest a whole FText).
+PropValue ReadFormatArgument(Reader& r) {
+    u8 type = r.U8();
+    switch (type) {
+    case 0: return MakeInt(r.I64(), PropType::Int64);
+    case 1: { PropValue v; v.type = PropType::UInt64; v.u = r.U64(); return v; }
+    case 2: return MakeFloat(r.F32());
+    case 3: { PropValue v; v.type = PropType::Double; v.f = r.Read<double>(); return v; }
+    case 4: return ReadText(r);
+    case 5: return MakeInt(r.U8(), PropType::Byte);   // ETextGender
+    }
+    throw ParseError(Fmt("unknown FText format argument type %u", type));
+}
+
+std::string ArgumentString(const PropValue& v) {
+    switch (v.type) {
+    case PropType::Int64: case PropType::Int: case PropType::Byte: return std::to_string(v.i);
+    case PropType::UInt64: return std::to_string(v.u);
+    case PropType::Float: case PropType::Double: return Fmt("%g", v.f);
+    default: return v.str;
+    }
+}
+
+// Replaces {Name} / {0} in a pattern by the arguments' display strings.
+std::string ApplyFormat(const std::string& pattern, const PropertyList& args) {
+    std::string out;
+    for (size_t i = 0; i < pattern.size(); i++) {
+        if (pattern[i] == '{') {
+            size_t close = pattern.find('}', i);
+            if (close != std::string::npos) {
+                std::string name = pattern.substr(i + 1, close - i - 1);
+                if (const PropValue* a = FindValue(args, name)) { out += ArgumentString(*a); i = close; continue; }
+            }
+        }
+        out += pattern[i];
+    }
+    return out;
+}
+
+// FNumberFormattingOptions (UE 4.10): grouping, rounding mode, min/max integral and fractional digits.
+void SkipNumberOptions(Reader& r) {
+    if (!r.U32()) return;
+    r.U32();   // UseGrouping
+    r.U8();    // RoundingMode
+    r.Skip(16);
+}
+
+// FText with its history. Base texts keep namespace / key in items[0..1]; generated texts (format, number, date,
+// transform) keep the parts in fields and their reconstructed display string in str.
 PropValue ReadText(Reader& r) {
     PropValue v;
     v.type = PropType::Text;
     r.U32();   // flags
     i8 history = r.Read<i8>();
-    if (history == 0) {   // base: namespace, key, source string
+    auto parts = [&](const char* kind) {
+        v.fields = std::make_shared<PropertyList>();
+        AddField(*v.fields, "History", MakeStr(kind));
+        return v.fields.get();
+    };
+    switch (history) {
+    case -1: break;
+    case 0: {   // base: namespace, key, source string
         std::string ns = r.FString(), key = r.FString(), src = r.FString();
         v.str = src;
         v.items.resize(2);
         v.items[0].type = PropType::Str; v.items[0].str = ns;
         v.items[1].type = PropType::Str; v.items[1].str = key;
-    } else if (history != -1) {
-        throw ParseError(Fmt("unsupported FText history %d", history));
+        break;
+    }
+    case 1: case 2: case 3: {   // named / ordered / argument format: pattern + arguments
+        PropertyList* f = parts(history == 1 ? "NamedFormat" : history == 2 ? "OrderedFormat" : "ArgumentFormat");
+        PropValue pattern = ReadText(r);
+        PropValue args;
+        args.type = PropType::Struct;
+        args.fields = std::make_shared<PropertyList>();
+        i32 n = r.Count(2);
+        for (i32 i = 0; i < n; i++) {
+            std::string name = history == 2 ? std::to_string(i) : r.FString();
+            AddField(*args.fields, "", ReadFormatArgument(r));
+            args.fields->back().name = name;
+        }
+        v.str = ApplyFormat(pattern.str, *args.fields);
+        AddField(*f, "Format", std::move(pattern));
+        AddField(*f, "Arguments", std::move(args));
+        break;
+    }
+    case 4: case 5: case 6: {   // as number / percent / currency
+        PropertyList* f = parts(history == 4 ? "AsNumber" : history == 5 ? "AsPercent" : "AsCurrency");
+        std::string currency = history == 6 ? r.FString() : std::string();
+        PropValue value = ReadFormatArgument(r);
+        SkipNumberOptions(r);
+        std::string culture = r.FString();
+        v.str = history == 5 ? Fmt("%g%%", value.AsFloat() * 100) : ArgumentString(value);
+        if (!currency.empty()) { v.str = currency + " " + v.str; AddField(*f, "Currency", MakeStr(currency)); }
+        AddField(*f, "Value", std::move(value));
+        if (!culture.empty()) AddField(*f, "Culture", MakeStr(culture));
+        break;
+    }
+    case 7: case 8: case 9: {   // as date / time / date-time: FDateTime ticks, styles, (time zone), culture
+        PropertyList* f = parts(history == 7 ? "AsDate" : history == 8 ? "AsTime" : "AsDateTime");
+        i64 ticks = r.I64();
+        if (history != 8) r.U8();   // date style
+        if (history != 7) r.U8();   // time style
+        AddField(*f, "TimeZone", MakeStr(r.FString()));
+        AddField(*f, "Culture", MakeStr(r.FString()));
+        // ticks: 100 ns since 0001-01-01
+        i64 days = ticks / 864000000000LL, secs = ticks / 10000000 % 86400;
+        i64 z = days + 306, era = z / 146097, doe = z - era * 146097, yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+        i64 doy = doe - (365 * yoe + yoe / 4 - yoe / 100), mp = (5 * doy + 2) / 153, d = doy - (153 * mp + 2) / 5 + 1;
+        i64 m = mp < 10 ? mp + 3 : mp - 9, y = yoe + era * 400 + 1 + (m <= 2);
+        std::string date = Fmt("%04lld-%02lld-%02lld", y, m, d), time = Fmt("%02lld:%02lld:%02lld", secs / 3600, secs / 60 % 60, secs % 60);
+        v.str = history == 7 ? date : history == 8 ? time : date + " " + time;
+        AddField(*f, "Ticks", MakeInt(ticks, PropType::Int64));
+        break;
+    }
+    case 10: {   // transform: source text, ETransformType (0 lower, 1 upper)
+        PropertyList* f = parts("Transform");
+        PropValue src = ReadText(r);
+        u8 t = r.U8();
+        v.str = src.str;
+        for (auto& c : v.str) c = t == 1 ? (char)toupper((u8)c) : (char)tolower((u8)c);
+        AddField(*f, "Source", std::move(src));
+        AddField(*f, "Transform", MakeStr(t == 1 ? "ToUpper" : "ToLower"));
+        break;
+    }
+    case 11: {   // string table entry: table id, key
+        PropertyList* f = parts("StringTableEntry");
+        AddField(*f, "Table", MakeStr(r.FString()));
+        AddField(*f, "Key", MakeStr(r.FString()));
+        break;
+    }
+    default: throw ParseError(Fmt("unsupported FText history %d", history));
     }
     return v;
 }
@@ -397,6 +519,8 @@ void WriteValue(JsonWriter& w, const PropValue& v) {
         w.BeginObject();
         if (v.items.size() == 2) { w.KV("Namespace", v.items[0].str); w.KV("Key", v.items[1].str); }
         w.KV("SourceString", v.str);
+        if (v.fields)   // generated text: history and its parts
+            for (auto& f : *v.fields) { w.Key(f.name); WriteValue(w, f.value); }
         if (g_jsonLoc && v.items.size() == 2)   // the text in the chosen game language
             if (const std::string* loc = g_jsonLoc->Find(v.items[0].str, v.items[1].str)) w.KV("LocalizedString", *loc);
         w.EndObject();
