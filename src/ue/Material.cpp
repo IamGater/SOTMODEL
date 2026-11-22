@@ -107,10 +107,28 @@ bool ReadMaterial(PackageCache& cache, const std::string& path, MaterialInfo& m,
         i32 parent = PropObj(props, "Parent");
         cur = parent ? pkg->FullPath(parent) : std::string();
     }
+    // best texture per slot: plain names ("Diffuse", "Normal") beat layers such as decals, damage, liveries
+    // and detail maps, which often use another UV set; referenced-only defaults come last
+    auto score = [](const MaterialTextureParam& t) {
+        if (t.name == "<referenced>") return 0;
+        std::string n = ToLower(t.name), path = ToLower(t.texturePath);
+        static const char* plain[] = {"diffuse", "albedo", "basecolor", "base color", "base colour", "normal", "metallic/roughness", "emissive"};
+        static const char* layers[] = {"decal", "damage", "livery", "detail", "overlay", "blend", "dirt", "colour map", "color map", "mask"};
+        for (const char* l : layers)
+            if (n.find(l) != std::string::npos) return 1;
+        if (path.find("livery") != std::string::npos || path.find("/default/") != std::string::npos) return 1;
+        for (const char* p : plain)
+            if (n == p) return 3;
+        return 2;
+    };
+    int best[4] = {-1, -1, -1, -1};
     for (auto& t : m.textures) {
         std::string kind = ClassifyTexture(t.name == "<referenced>" ? "" : t.name, t.texturePath);
-        std::string* slot = kind == "diffuse" ? &m.diffuse : kind == "normal" ? &m.normal : kind == "packed" ? &m.packed : kind == "emissive" ? &m.emissive : nullptr;
-        if (slot && slot->empty()) *slot = t.texturePath;
+        int k = kind == "diffuse" ? 0 : kind == "normal" ? 1 : kind == "packed" ? 2 : kind == "emissive" ? 3 : -1;
+        if (k < 0) continue;
+        std::string* slot = k == 0 ? &m.diffuse : k == 1 ? &m.normal : k == 2 ? &m.packed : &m.emissive;
+        int s = score(t);
+        if (s > best[k]) best[k] = s, *slot = t.texturePath;
     }
     return true;
 }
