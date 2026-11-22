@@ -1235,6 +1235,135 @@ void App::DrawAnimation(Document& d) {
     DrawViewport(*m_renderer, d, MinViewportAvail(), true);
 }
 
+// "Export glTF" in the world toolbar: the assembled Blueprint, the whole loaded map or the part around the view target
+void App::DrawWorldExport(Document& d) {
+    if (FlowButton("Export glTF")) ImGui::OpenPopup("##wexp");
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Export the assembled scene (or the part around the view) as one .glb for Blender");
+    if (!ImGui::BeginPopup("##wexp")) return;
+    const WorldData& w = *d.world;
+    ImGui::TextUnformatted(d.worldBlueprint ? "Export the assembled Blueprint" : "Export the map");
+    ImGui::Separator();
+    if (!d.worldBlueprint) {
+        if (ImGui::RadioButton("Everything loaded", !d.expPart)) d.expPart = false;
+        if (ImGui::RadioButton("Around the view target", d.expPart)) d.expPart = true;
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!d.expPart);
+        ImGui::SetNextItemWidth(170);
+        ImGui::SliderFloat("##exr", &d.expRadius, 5, 5000, "radius %.0f m", ImGuiSliderFlags_Logarithmic);
+        ImGui::EndDisabled();
+    }
+    bool part = d.expPart && !d.worldBlueprint, filtered = d.expFiltered && d.worldFilter[0];
+    std::string filter = ToLower(d.worldFilter);
+    Vec3 c = d.camera.target;
+    float r2 = d.expRadius * 100 * d.expRadius * 100;
+    size_t inst = 0, meshes = 0;
+    for (auto& g : w.groups) {   // what the export will hold
+        if (filtered && ToLower(g.mesh).find(filter) == std::string::npos) continue;
+        size_t n = 0;
+        for (auto& i : g.instances) {
+            Vec3 p = i.transform.Translation() - c;
+            if (!part || Dot(p, p) <= r2) n++;
+        }
+        inst += n;
+        meshes += n > 0;
+    }
+    ImGui::TextDisabled("%zu instances of %zu meshes", inst, meshes);
+    if (d.worldFilter[0]) ImGui::Checkbox(Fmt("Only meshes matching \"%s\"", d.worldFilter).c_str(), &d.expFiltered);
+    if (!d.worldBlueprint) {
+        ImGui::Checkbox(part ? "Move the view target to the origin" : "Move the centre to the origin", &d.expRecenter);
+        if (!w.landscapes.empty()) ImGui::Checkbox("Landscape", &d.expLandscape);
+        ImGui::Checkbox("Lights, decal boxes, fog", &d.expLights);
+    }
+    ImGui::Checkbox("Textures", &d.expTextures);
+    ImGui::SameLine();
+    static const char* sizes[] = {"512", "1024", "2048", "full size"};
+    ImGui::SetNextItemWidth(100);
+    ImGui::BeginDisabled(!d.expTextures);
+    ImGui::Combo("##exts", &d.expTexSize, sizes, 4);
+    ImGui::EndDisabled();
+    ImGui::BeginDisabled(m_exporting || inst == 0);
+    if (ImGui::Button("Export", ImVec2(120, 0))) {
+        WorldExportOptions wo;
+        wo.textures = d.expTextures;
+        wo.maxTextureSize = d.expTexSize < 3 ? 512 << d.expTexSize : 0;
+        wo.landscape = !d.worldBlueprint && d.expLandscape;
+        wo.lights = !d.worldBlueprint && d.expLights;
+        wo.clip = part;
+        wo.clipCenter = c;
+        wo.clipRadius = d.expRadius * 100;
+        wo.recenter = !d.worldBlueprint && d.expRecenter;
+        if (filtered) wo.meshFilter = d.worldFilter;
+        for (auto& sp : m_docs)
+            if (sp.get() == &d) ExportWorldDoc(sp, wo);
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    ImGui::TextDisabled("to %s", Narrow(m_settings.outputDir).c_str());
+    ImGui::EndPopup();
+}
+
+void App::ExportWorldDoc(std::shared_ptr<Document> d, WorldExportOptions wo) {
+    if (m_mountState != MountState::Ready || !d->world) return;
+    if (m_exporting) {
+        LOGW("an export is already running");
+        return;
+    }
+    m_exporting = true;
+    m_exportCancel = false;
+    m_exportDone = m_exportFailed = 0;
+    m_exportTotal = 1;
+    {
+        std::lock_guard lk(m_exportMutex);
+        m_exportLast = d->gamePath;
+    }
+    // the viewer drops the landscape meshes once they are on the GPU: reload the map for them
+    bool reload = wo.landscape && !d->worldBlueprint && !d->world->landscapes.empty();
+    std::shared_ptr<const WorldData> world = d->world;
+    std::string gp = d->gamePath, islands = d->worldIslands;
+    bool sea = d->worldSea, proxies = d->worldProxies;
+    ExportOptions eo = MakeExportOptions();
+    m_jobs->Push([this, wo, world, gp, islands, sea, proxies, reload, eo] {
+        std::shared_ptr<const WorldData> src = world;
+        std::string err;
+        bool ok = true;
+        if (reload) {
+            auto fresh = std::make_shared<WorldData>();
+            WorldLoader loader(*m_api->cache);
+            WorldOptions opt;
+            opt.landscapeStep = 1;
+            if (sea) {
+                opt.proxies = proxies;
+                opt.islands = islands;
+            }
+            opt.cancel = [this] { return m_exportCancel.load(); };
+            ok = loader.Load(gp, opt, *fresh, &err);
+            src = fresh;
+        }
+        Bytes glb;
+        if (ok && !m_exportCancel)
+            ok = ExportWorldGlb(*m_api->cache, *src, wo, glb, &err, [this](int done, int total) {
+                m_exportDone = done;
+                m_exportTotal = total;
+            });
+        if (ok && !m_exportCancel) {
+            std::string rel = gp.substr(0, gp.rfind('.'));
+            if (wo.clip) rel += Fmt("_part_%.0fm", wo.clipRadius / 100);
+            if (!eo.keepDirectories) rel = rel.substr(rel.rfind('/') + 1);
+            std::wstring out = eo.outputDir + L"\\" + Widen(rel) + L".glb";
+            for (auto& ch : out) if (ch == L'/') ch = L'\\';
+            CreateDirectories(out.substr(0, out.find_last_of(L'\\')));
+            if (WriteWholeFile(out, glb.data(), glb.size())) LOGI("exported %s (%s) -> %s", gp.c_str(), HumanSize(glb.size()).c_str(), Narrow(out).c_str());
+            else { ok = false; err = "could not write " + Narrow(out); }
+        }
+        if (!ok) {
+            m_exportFailed++;
+            LOGW("export %s: %s", gp.c_str(), err.c_str());
+        }
+        m_exporting = false;
+        Post([] {});
+    });
+}
 void App::DrawTimeOfDayControls(Document& d) {
     if (timeOnStart >= 0) {   // --time
         d.todHour = std::clamp(timeOnStart, 0.f, 24.f);
@@ -1446,6 +1575,7 @@ void App::DrawWorld(Document& d) {
         d.camera.flySpeed = 3000;
     };
     if (FlowButton("Frame")) frameWorld();
+    DrawWorldExport(d);
     PopoutButton(d, true);
     EndToolbar();
     seaOptions();

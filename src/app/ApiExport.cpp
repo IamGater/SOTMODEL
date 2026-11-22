@@ -115,9 +115,10 @@ void RegisterExportTools(Api& api) {
 
     api.Register({"export_world",
                   "Export a whole map (.umap) as one glTF .glb for Blender: a node per level, every placed mesh (with material overrides and "
-                  "textures, downscaled to max_texture_size) and the landscape terrain. Large maps take a while. path = sot_world_layout_2 exports "
+                  "textures, downscaled to max_texture_size) and the landscape terrain. Large maps take a while. A Blueprint class path exports the assembled actor. "
+                  "'center' [x,y,z] + 'radius' (cm) export a part of the map (moved to the origin unless recenter=false). path = sot_world_layout_2 exports "
                   "the open world: pick islands ('islands' terms, 'region' [minX,minY,maxX,maxY] cm) or 'proxies' for the whole sea.",
-                  R"({"type":"object","properties":{"path":{"type":"string"},"output_dir":{"type":"string"},"textures":{"type":"boolean","default":true},"max_texture_size":{"type":"integer","default":1024},"lod":{"type":"integer","default":0},"landscape":{"type":"boolean","default":true},"sublevels":{"type":"boolean","default":true},"filter":{"type":"string"},"islands":{"type":"string"},"proxies":{"type":"boolean","default":false},"lights":{"type":"boolean","default":true,"description":"lights (KHR_lights_punctual), decal boxes, fog / water level as scene extras"},"region":{"type":"array","items":{"type":"number"}}},"required":["path"]})",
+                  R"({"type":"object","properties":{"path":{"type":"string"},"output_dir":{"type":"string"},"textures":{"type":"boolean","default":true},"max_texture_size":{"type":"integer","default":1024},"lod":{"type":"integer","default":0},"landscape":{"type":"boolean","default":true},"sublevels":{"type":"boolean","default":true},"filter":{"type":"string"},"islands":{"type":"string"},"proxies":{"type":"boolean","default":false},"lights":{"type":"boolean","default":true,"description":"lights (KHR_lights_punctual), decal boxes, fog / water level as scene extras"},"region":{"type":"array","items":{"type":"number"}},"center":{"type":"array","items":{"type":"number"},"description":"[x,y,z] cm: export only what lies within radius of it"},"radius":{"type":"number","default":5000},"recenter":{"type":"boolean","description":"move the centre to the origin; on by default with center"}},"required":["path"]})",
                   "path",
                   [](Api& a, const JsonValue& args) {
                       WorldLoader loader(*a.cache);
@@ -132,16 +133,32 @@ void RegisterExportTools(Api& api) {
                       i64 e = a.ResolveFile(args.GetStr("path"));
                       if (e < 0) return ApiResult::Error("map not found: " + args.GetStr("path"));
                       std::string gp(a.vfs.Path((u32)e));
-                      if (!loader.Load(gp, opt, world, &err)) return ApiResult::Error(err);
+                      bool blueprint = false;   // an actor class: its components assembled like in the viewer
+                      if (auto pkg = a.cache->Load((u32)e, &err); pkg && pkg->MainExport() && pkg->ExportClass(pkg->MainExport() - 1) == "BlueprintGeneratedClass")
+                          blueprint = true;
+                      if (blueprint) {
+                          std::string pp = gp.substr(0, gp.rfind('.'));
+                          if (size_t c = pp.find("/Content/"); c != std::string::npos) pp = "/Game/" + pp.substr(c + 9);
+                          if (!loader.AddBlueprint(pp, Mat4::Identity(), opt, world, &err)) return ApiResult::Error(err);
+                          if (!world.InstanceCount()) return ApiResult::Error("the Blueprint has no mesh components");
+                      } else if (!loader.Load(gp, opt, world, &err)) return ApiResult::Error(err);
                       WorldExportOptions wo;
+                      if (const JsonValue* c = args.Get("center"); c && c->arr.size() >= 3) {   // part of the map
+                          wo.clip = true;
+                          wo.clipCenter = {(float)c->arr[0].num, (float)c->arr[1].num, (float)c->arr[2].num};
+                          wo.clipRadius = (float)args.GetNum("radius", 5000);
+                      }
+                      wo.recenter = args.GetBool("recenter", wo.clip);
                       wo.textures = args.GetBool("textures", true);
                       wo.maxTextureSize = (int)args.GetNum("max_texture_size", 1024);
                       wo.lod = (int)args.GetNum("lod", 0);
                       wo.landscape = opt.landscape;
                       wo.lights = opt.lights;
                       Bytes glb;
-                      if (!ExportWorldGlb(*a.cache, world, wo, glb, &err)) return ApiResult::Error(err);
+                      WorldExportStats st;
+                      if (!ExportWorldGlb(*a.cache, world, wo, glb, &err, {}, &st)) return ApiResult::Error(err);
                       std::string name = gp;
+                      if (wo.clip) name = gp.substr(0, gp.rfind('.')) + Fmt("_part_%.0fm", wo.clipRadius / 100) + gp.substr(gp.rfind('.'));
                       if (IsWorldLayoutMap(gp)) {   // name the file after the selection
                           std::string sel = opt.islands.empty() ? (opt.region ? "region" : "all") : opt.islands;
                           for (auto& c : sel) if (!isalnum((unsigned char)c) && c != '_') c = '_';
@@ -149,8 +166,7 @@ void RegisterExportTools(Api& api) {
                       }
                       std::wstring out = OutFile(a, args.GetStr("output_dir"), name, L".glb");
                       if (!WriteWholeFile(out, glb.data(), glb.size())) return ApiResult::Error("could not write " + Narrow(out));
-                      return Written({Narrow(out)}, Fmt("%zu levels, %zu meshes, %zu instances, %zu landscape patches", world.levels.size(), world.groups.size(),
-                                                        world.InstanceCount(), world.landscapes.size()));
+                      return Written({Narrow(out)}, Fmt("%zu levels, %zu meshes, %zu instances, %zu landscape patches", world.levels.size(), st.meshes, st.instances, st.landscapes));
                   }});
 
     api.Register({"export_animations",

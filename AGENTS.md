@@ -58,6 +58,9 @@ opens `WwiseEvent` assets as the list of sounds the event plays (a bank's Events
 Maps get the sea's day cycle ("Day cycle" in the map toolbar, `time_of_day` in `preview_world`): island levels have no
 sun or sky light, so the lighting curves of the region (`Curves/Lighting/<WSP|Wilds|Volcanic|Standard|...>`: sun colour
 and intensity, sky light, sky dome horizon / zenith, fog) are evaluated for the hour (`ue/TimeOfDay`).
+"Export glTF" in the map / Blueprint toolbar writes what the view shows as one .glb: the assembled Blueprint, the whole
+loaded map or only the part within a radius of the view target (optionally only the outliner's mesh filter), moved to
+the origin (`WorldExportOptions::clip` / `recenter` / `meshFilter`; the landscape is reloaded, the viewer frees its CPU copy).
 
 ## Configuration
 
@@ -100,7 +103,7 @@ or `/Game/Models/Props/Common/cmn_barrel_debris_02_a.cmn_barrel_debris_02_a`.
 | `get_world_info` | a map (.umap) as a scene: sublevels, placed meshes with Blueprint templates resolved, landscape components, instance counts, unresolved components (`filter=rock,-small` narrows the meshes). `path=Athena/Content/Maps/World_Layout/sot_world_layout_2.umap` is the whole sea: every island placed by the world layout; `islands=wsp_,-fort` / `region=[minX,minY,maxX,maxY]` select islands, `proxies=true` loads each island's merged LOD proxy instead (whole sea in seconds). Also lists lights by type, decal materials, particle emitters (systems with counts), height fog and the water level |
 | `preview_world` | renders a whole map (meshes, Blueprint components, landscape terrain coloured by paint layers) to a PNG; orbit with `yaw`/`pitch`/`zoom` or place the camera with `eye`/`target`. Lit by the map's sun / sky light / nearest 32 point and spot lights with its exponential height fog and the sea plane at the water level (`lights`, `fog`, `water`); `gizmos=true` outlines light ranges, spot cones and decal boxes |
 | `decompile_blueprint` | a Blueprint (`BlueprintGeneratedClass` package) as C++-like code: variables, functions with parameters and locals, Kismet bytecode as statements with labelled jumps |
-| `export_world` | a whole map (.umap with sublevels) as one glTF scene for Blender: level nodes, every placed mesh with materials and textures, landscape. For `sot_world_layout_2` pick islands with `islands` / `region` or use `proxies`. Lights go out as KHR_lights_punctual, decals as empties scaled to their box (extras: material, half extents), fog and water level as scene extras |
+| `export_world` | a whole map (.umap with sublevels) or an assembled Blueprint class as one glTF scene for Blender: level nodes, every placed mesh with materials and textures, landscape. `center` [x,y,z] + `radius` (cm) export only that part of a map, moved to the origin (`recenter=false` keeps world coordinates). For `sot_world_layout_2` pick islands with `islands` / `region` or use `proxies`. Lights go out as KHR_lights_punctual, decals as empties scaled to their box (extras: material, half extents), fog and water level as scene extras |
 | `get_world_layout` | the open world: every island / outpost / fort folder with its persistent map, sea, type, tile transform (location + yaw), bounds centre and radius (`filter`, `levels=true` for per-sublevel transforms) |
 | `find_mesh_placements` | where a mesh is placed: levels using it (reference index, also through Blueprints), instance counts and world positions (open-world levels moved to their island's place) |
 | `export_animations` | several AnimSequences of one skeleton (list or folder) into one .glb: the skinned mesh once, one animation per sequence |

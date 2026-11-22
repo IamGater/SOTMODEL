@@ -49,6 +49,13 @@ struct WorldExportOptions {
     int maxTextureSize = 1024;
     bool landscape = true;
     bool lights = true;   // lights (KHR_lights_punctual), decal boxes (empties with extras), fog + water level (scene extras)
+    // part of a map: only instances (by origin), landscape patches, lights and decals within clipRadius cm of clipCenter
+    bool clip = false;
+    Vec3 clipCenter;
+    float clipRadius = 0;
+    bool recenter = false;   // move clipCenter (without clip: the centre of the instance bounds) to the origin
+    std::string meshFilter;  // only mesh groups whose path contains this (case-insensitive)
 };
+struct WorldExportStats { size_t meshes = 0, instances = 0, landscapes = 0; };   // what went into the file
 bool ExportWorldGlb(PackageCache& cache, const WorldData& world, const WorldExportOptions& opt, Bytes& out, std::string* error = nullptr,
-                    const std::function<void(int, int)>& progress = {});
+                    const std::function<void(int, int)>& progress = {}, WorldExportStats* stats = nullptr);

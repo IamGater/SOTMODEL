@@ -12,6 +12,7 @@
 #include "ue/AnimAssets.h"
 #include "ue/Particles.h"
 #include "export/Exporter.h"
+#include "export/MeshExport.h"
 #include "audio/Player.h"
 #include "ue/DataTable.h"
 #include "ue/Shaders.h"
@@ -174,6 +175,10 @@ struct Document {
     int fxDrawn = 0;
     bool worldProxies = true;     // whole sea: islands as their merged LOD proxies
     char worldIslands[256] = {};  // whole sea: island filter (comma terms, '-' excludes)
+    // "Export glTF" popup of the world view: everything loaded or the part around the view target
+    bool expPart = false, expRecenter = true, expFiltered = false, expTextures = true, expLandscape = true, expLights = true;
+    float expRadius = 100;   // m
+    int expTexSize = 1;      // 512 / 1024 / 2048 / full
 
     // audio: a .wem, or a sound bank (WwiseBank) with embedded media decoded on demand
     std::shared_ptr<AudioPcm> audio;
@@ -328,6 +333,8 @@ private:
     void DrawWorldParticles(Document& d);     // inside the viewport scene
     static bool Has3dView(const Document& d);
     void LoadWorld(std::shared_ptr<Document> d);
+    void DrawWorldExport(Document& d);                      // toolbar button + options popup
+    void ExportWorldDoc(std::shared_ptr<Document> d, WorldExportOptions wo);
     void LoadAnimationMesh(std::shared_ptr<Document> d, std::string meshPath);
     bool LoadAnimationMeshNow(Document& d, const std::string& meshPath);
     void DrawFileMenu(u32 entry);

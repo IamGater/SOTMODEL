@@ -229,8 +229,75 @@ static void ExportWorldEffects(GltfBuilder& g, const WorldData& w, const std::ve
     if (!extras.empty()) g.SetSceneExtras("{" + extras + "}");
 }
 
-bool ExportWorldGlb(PackageCache& cache, const WorldData& w, const WorldExportOptions& wo, Bytes& out, std::string* error,
-                    const std::function<void(int, int)>& progress) {
+static Vec3 VMin(const Vec3& a, const Vec3& b) { return {std::min(a.x, b.x), std::min(a.y, b.y), std::min(a.z, b.z)}; }
+static Vec3 VMax(const Vec3& a, const Vec3& b) { return {std::max(a.x, b.x), std::max(a.y, b.y), std::max(a.z, b.z)}; }
+
+// The part of a world within the clip sphere, shifted so the centre sits at the origin when asked.
+static WorldData ClipWorld(const WorldData& w, const WorldExportOptions& wo) {
+    Vec3 c = wo.clip ? wo.clipCenter : (w.boundsMin + w.boundsMax) * 0.5f;
+    Vec3 off = wo.recenter ? c * -1.f : Vec3{};
+    float r2 = wo.clipRadius * wo.clipRadius;
+    auto inside = [&](const Vec3& p) { return !wo.clip || Dot(p - c, p - c) <= r2; };
+    auto shift = [&](Mat4 m) { m.m[3][0] += off.x; m.m[3][1] += off.y; m.m[3][2] += off.z; return m; };
+    WorldData o;
+    o.root = w.root;
+    o.levels = w.levels;
+    o.actors = w.actors;
+    o.unresolved = w.unresolved;
+    o.hasWater = w.hasWater;
+    o.waterLevel = w.waterLevel + off.z;
+    std::string filter = ToLower(wo.meshFilter);
+    for (auto& g : w.groups) {
+        if (!filter.empty() && ToLower(g.mesh).find(filter) == std::string::npos) continue;
+        WorldMeshGroup ng = g;
+        ng.instances.clear();
+        for (auto& inst : g.instances)
+            if (inside(inst.transform.Translation())) {
+                WorldInstance ni = inst;
+                ni.transform = shift(inst.transform);
+                ng.instances.push_back(ni);
+                Vec3 p = ni.transform.Translation();
+                o.boundsMin = VMin(o.boundsMin, p);
+                o.boundsMax = VMax(o.boundsMax, p);
+            }
+        if (!ng.instances.empty()) o.groups.push_back(std::move(ng));
+    }
+    for (auto& l : w.landscapes) {   // patches touching the sphere
+        Vec3 q = VMax(l.boundsMin, VMin(c, l.boundsMax));
+        if (wo.clip && Dot(q - c, q - c) > r2) continue;
+        WorldLandscape nl = l;
+        for (auto& p : nl.mesh.positions) p = p + off;
+        nl.boundsMin = l.boundsMin + off;
+        nl.boundsMax = l.boundsMax + off;
+        o.landscapes.push_back(std::move(nl));
+    }
+    for (auto& l : w.lights)
+        if (l.type == WorldLight::Directional || l.type == WorldLight::Sky || inside(l.position)) {
+            WorldLight nl = l;
+            nl.position = l.position + off;
+            o.lights.push_back(nl);
+        }
+    for (auto& d : w.decals)
+        if (inside(d.transform.Translation())) {
+            WorldDecal nd = d;
+            nd.transform = shift(d.transform);
+            o.decals.push_back(nd);
+        }
+    for (auto& f : w.fogs) {
+        WorldFog nf = f;
+        nf.position = f.position + off;
+        o.fogs.push_back(nf);
+    }
+    return o;
+}
+
+bool ExportWorldGlb(PackageCache& cache, const WorldData& world, const WorldExportOptions& wo, Bytes& out, std::string* error,
+                    const std::function<void(int, int)>& progress, WorldExportStats* stats) {
+    WorldData clipped;
+    bool part = wo.clip || wo.recenter || !wo.meshFilter.empty();
+    if (part) clipped = ClipWorld(world, wo);
+    const WorldData& w = part ? clipped : world;
+    if (part && w.groups.empty() && w.landscapes.empty()) { if (error) *error = "nothing matches (radius / mesh filter)"; return false; }
     GltfBuilder g;
     MeshExportOptions mo;
     mo.embedTextures = wo.textures;
@@ -288,6 +355,7 @@ bool ExportWorldGlb(PackageCache& cache, const WorldData& w, const WorldExportOp
     if (wo.lights) ExportWorldEffects(g, w, levelNodes);
     if (progress) progress(total, total);
     if (!meshes && w.landscapes.empty()) { if (error) *error = "the map has no exportable meshes"; return false; }
+    if (stats) *stats = {(size_t)meshes, w.InstanceCount(), wo.landscape ? w.landscapes.size() : 0};
     out = g.Finish();
     return true;
 }
