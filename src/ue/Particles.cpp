@@ -537,9 +537,21 @@ void ParticleSim::Sprites(std::vector<ParticleSprite>& out) const {
     for (size_t ei = 0; ei < m_emitters.size(); ei++) {
         const Emitter& em = m_emitters[ei];
         const ParticleEmitterInfo& e = *em.info;
+        // SoT flipbooks often key SubImageIndex 0..1279 (many loops of the grid) over the life: played over a one or two second life
+        // that is hundreds of frames a second. Such tables are run at a flipbook frame rate instead.
+        float subFrames = 0;
+        for (auto& m : e.modules)
+            if (m.enabled && m.cls == "ParticleModuleSubUV")
+                if (auto x = m.Curve("SubImageIndex")) {
+                    float mn, mx;
+                    x->Range(0, mn, mx);
+                    if (mx + 1 > 2.f * std::max(1, e.subH * e.subV)) subFrames = mx + 1;
+                }
+        const float kFlipbookFps = 30;
         for (auto& p : em.parts) {
             float rel = p.life < 1e8f ? std::clamp(p.age / p.life, 0.f, 1.f) : p.loopTime > 0 ? fmodf(p.age, p.loopTime) / p.loopTime : 0.f;
             float subRel = p.life >= 1e8f && p.subLoopTime > 0 ? fmodf(p.age, p.subLoopTime) / p.subLoopTime : rel;
+            if (subFrames > 0 && p.life < 1e8f) subRel = fmodf(p.age * kFlipbookFps / subFrames + p.subRnd, 1.f);
             Vec3 size = p.baseSize, col = p.baseColor;
             float alpha = p.baseAlpha, sub = 0;
             for (auto& m : e.modules) {
