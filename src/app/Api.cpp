@@ -329,6 +329,8 @@ void Api::RegisterAssetTools() {
                       w.KV("class", pkg->ExportClass(i));
                       if (ex.outerIndex) w.KV("outer", pkg->ObjectName(ex.outerIndex));
                       if (ex.superIndex) w.KV("super", pkg->FullPath(ex.superIndex));
+                      w.KV("serialOffset", (i64)ex.serialOffset);   // in the package file (raw export), for format work
+                      w.KV("serialSize", (i64)ex.serialSize);
                       WriteNativeInfo(w, *pkg, i, 0);
                       w.EndObject();
                   }
