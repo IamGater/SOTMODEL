@@ -1371,7 +1371,7 @@ void App::DrawRightPanel(float width, float height) {
         if (m_explorerVisible) IconFolder(fg, ImVec2(c.x - Dip(9), c.y - Dip(9)), Dip(18), false);
         else FileGlyph(fg, c, Dip(18), "x.uasset", bg);
         if (bh) Tip(m_explorerVisible ? "Assets Explorer (Z)" : "File Properties (Z)");
-        // texture thumbnails on the explorer cards
+        // thumbnails (textures, models, materials) on the explorer cards
         ImGui::SetCursorScreenPos(ImVec2(mn.x + pad + b + Dip(2), mn.y + pad));
         ImGui::SetNextItemAllowOverlap();
         if (ImGui::InvisibleButton("##previewtex", ImVec2(b, b))) { m_settings.previewTextures = !m_settings.previewTextures; m_settings.Save(); }
@@ -1383,7 +1383,7 @@ void App::DrawRightPanel(float width, float height) {
         fg->AddRectFilled(a, z, Alpha(bg, op), Dip(8));
         fg->AddRect(a, z, Alpha(kPanel, op), Dip(8));
         IconImages(fg, ImVec2((a.x + z.x) * 0.5f, (a.y + z.y) * 0.5f), Dip(18), Alpha(kText, std::max(op, 0.8f)));
-        if (ph) Tip(m_settings.previewTextures ? "Preview Textures (ON)" : "Preview Textures (OFF)");
+        if (ph) Tip(m_settings.previewTextures ? "Preview Thumbnails: textures, models, materials (ON)" : "Preview Thumbnails: textures, models, materials (OFF)");
     }
 
     // log expander

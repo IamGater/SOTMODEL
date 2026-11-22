@@ -84,7 +84,10 @@ OutputDir=C:\...\SOTModel\Output
 ```
 
 `UiAnimations=0` turns the interface transitions off (eased hovers, popups / menus / tooltips / windows fading in,
-content fades, turning tree expanders, the sliding log, spinners); a `--screenshot` may otherwise catch one mid-way.
+content fades, the sliding log, spinners); a `--screenshot` may otherwise catch one mid-way. The status bar and the
+folder tree's expanding are deliberately not animated. `PreviewTextures=1` (default) shows thumbnails on the explorer
+cards: textures, models (a small headless render of LOD 1 through `RenderMeshPreview`) and materials (their main
+texture). The main window opens at ~90% of the work area, centred (not maximized).
 Tooltips (`Tip`) show after the pointer rests 0.6 s on an item. Standard ImGui widgets ease their colours through
 `GImGuiItemColorHook`, a small SOTModel patch in `third_party/imgui/imgui_widgets.cpp`.
 

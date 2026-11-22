@@ -8,6 +8,8 @@
 #include "ue/Blueprint.h"
 #include "render/ShaderTools.h"
 #include "ue/Material.h"
+#include "ue/Mesh.h"
+#include "render/Offscreen.h"
 #include "app/WwiseEvents.h"
 #include "imgui.h"
 #include <windows.h>
@@ -383,8 +385,29 @@ std::shared_ptr<GpuTexture> App::Thumbnail(u32 entry) {
             i32 main = pkg->MainExport();
             TextureInfo info;
             Image img;
-            if (main && IsTextureClass(pkg->ExportClass(main - 1)) && ReadTextureInfo(*pkg, main - 1, info, &err) && DecodeTexture(*pkg, info, -1, 160, img, &err))
+            std::string cls = main ? pkg->ExportClass(main - 1) : std::string();
+            if (main && IsTextureClass(cls) && ReadTextureInfo(*pkg, main - 1, info, &err) && DecodeTexture(*pkg, info, -1, 160, img, &err))
                 tex = m_renderer->CreateTexture(img, info.srgb, false);
+            else if (cls == "StaticMesh" || cls == "SkeletalMesh") {   // models: a small textured render (3/4 view)
+                MeshData m;
+                PreviewRequest req;
+                req.width = req.height = 160;
+                req.draw.grid = false;
+                if (ReadMesh(*pkg, main - 1, m, &err) && !m.lods.empty()) {
+                    req.lod = m.lods.size() > 1 ? 1 : 0;   // LOD 1 is enough at this size
+                    if (RenderMeshPreview(*m_api->cache, m, req, img, &err)) tex = m_renderer->CreateTexture(img, true, false);
+                }
+            } else if (main && IsMaterialClass(cls)) {   // materials: their main texture
+                MaterialInfo mi;
+                if (ReadMaterial(*m_api->cache, std::string(m_api->vfs.Path(entry)), mi, &err)) {
+                    std::string path = !mi.diffuse.empty() ? mi.diffuse : !mi.emissive.empty() ? mi.emissive : mi.packed;
+                    if (auto tp = path.empty() ? nullptr : m_api->cache->LoadPath(path)) {
+                        i32 tm = tp->MainExport();
+                        if (tm && ReadTextureInfo(*tp, tm - 1, info, &err) && DecodeTexture(*tp, info, -1, 160, img, &err))
+                            tex = m_renderer->CreateTexture(img, info.srgb, false);
+                    }
+                }
+            }
         }
         {
             std::lock_guard lk(m_thumbMutex);

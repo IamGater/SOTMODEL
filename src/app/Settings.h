@@ -19,7 +19,7 @@ struct Settings {
     int explorerViewMode = 0;      // 0 grid, 1 list
     bool loggerExpanded = true;
     float leftPanelWidth = 0;      // 0 = automatic
-    bool previewTextures = false;  // texture thumbnails on explorer cards
+    bool previewTextures = true;   // thumbnails on explorer cards (textures, models, materials)
     bool viewerWindow = true;      // 3D views open in the separate viewer window (else inside the tab)
     std::string language = "en";  // culture of the localised strings shown for FText (Localisation/<target>/<culture>)
     std::vector<std::string> favoriteDirs;   // Packages > Favorite Directories (game folder paths)
