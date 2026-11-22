@@ -208,6 +208,7 @@ float4 GraphPSMain(GraphPSIn i, bool front : SV_IsFrontFace) : SV_Target {
     FMaterialPixelParameters Parameters = (FMaterialPixelParameters)0;
     [unroll] for (int k = 0; k < 8; k++) Parameters.TexCoords[k] = i.uv;
     Parameters.TexCoords[1] = i.uv1;   // second UV set (liveries, lightmap-style masks); later sets are not uploaded
+    [unroll] for (int cuv = 0; cuv < 8; cuv++) if (GRAPH_CUSTOM_UVS & (1u << cuv)) Parameters.TexCoords[cuv] = 0;
     Parameters.VertexColor = i.col;
     float3 n = normalize(i.nrm);
     if (!front) n = -n;
@@ -409,7 +410,15 @@ bool BuildGraphShaderSource(const std::string& translated, const std::string& bl
         body += line + "\n";
     }
     std::string params = out.params.empty() ? "" : Fmt("cbuffer GraphParams : register(b3) { float4 GraphParam[%zu]; };\n", out.params.size());
-    out.hlsl = Fmt("#define GRAPH_BLEND %d\n#define GRAPH_UNLIT %d\n", out.blend, out.unlit ? 1 : 0) + kPrelude + TransformFunctions() +
+    // customized UVs are computed by the vertex part, which the viewer doesn't run (SoT ships put fire charring in
+    // CustomizedUVs4): those TexCoords read 0, the neutral value, instead of the mesh UVs
+    unsigned customUvs = 0;
+    if (endPixel != std::string::npos) {
+        static const std::regex cuv(R"(CustomizedUVs\[(\d)\]\s*=)");
+        std::string vertex = translated.substr(endPixel);
+        for (std::sregex_iterator it(vertex.begin(), vertex.end(), cuv), e; it != e; ++it) customUvs |= 1u << ((*it)[1].str()[0] - '0');
+    }
+    out.hlsl = Fmt("#define GRAPH_BLEND %d\n#define GRAPH_UNLIT %d\n#define GRAPH_CUSTOM_UVS %u\n", out.blend, out.unlit ? 1 : 0, customUvs & 0xff) + kPrelude + TransformFunctions() +
                "\n// ---- translated material graph\n" + params + body + kMain;
     return true;
 }
