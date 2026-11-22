@@ -1730,7 +1730,7 @@ void App::DrawDocTabs(float height) {
     float width = ImGui::GetContentRegionAvail().x - Dip(3);
     ImDrawList* dl = ImGui::GetWindowDrawList();
     // header: wrap panel of tabs (6 per row), "+" on the right, highlight strip below
-    float tabH = Dip(23.2f), plusW = Dip(24);
+    float tabH = Dip(23.2f), plusW = 0.f;   // no "+" button (Ctrl+T still adds a tab)
     float textW = std::max(Dip(40), (width - plusW) / 6 - Dip(8));
     float tabW = Dip(6) + textW + Dip(10) + Dip(11) + Dip(4);
     int perRow = std::max(1, (int)((width - plusW) / tabW));
@@ -1819,16 +1819,7 @@ void App::DrawDocTabs(float height) {
         }
         ImGui::PopID();
     }
-    // "+" (Add New Tab)
-    {
-        ImVec2 a(p.x + width - plusW, p.y + headerH - tabH);
-        ImGui::SetCursorScreenPos(a);
-        if (ImGui::InvisibleButton("##addtab", ImVec2(plusW, tabH))) AddTab();
-        bool hov = ImGui::IsItemHovered();
-        dl->AddRectFilled(a, ImVec2(a.x + plusW, a.y + tabH), Mix(kPanel, kTabSel, HoverAnim()));
-        IconPlus(dl, ImVec2(a.x + plusW * 0.5f, a.y + tabH * 0.5f), Dip(16), kText);
-        if (hov) Tip("Add New Tab (Ctrl+T)");
-    }
+
     float stripY = p.y + headerH;
     dl->AddRectFilled(ImVec2(p.x, stripY), ImVec2(p.x + width, stripY + Dip(4)), kTabSel);
 
