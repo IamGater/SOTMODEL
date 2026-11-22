@@ -3106,21 +3106,10 @@ void App::DrawStatusBar() {
     bool docLoading = false;
     for (auto& d : m_docs) docLoading |= d->loading || d->worldLoading;
     bool busy = m_mountState == MountState::Mounting || m_exporting || docLoading || m_refBuilding;
-    // the colour eases between states; while busy a light band sweeps across and a spinner turns before the label
-    float busyT = Anim(ImGui::GetID("##sbbusy"), busy, 0.3f), failT = Anim(ImGui::GetID("##sbfail"), m_mountState == MountState::Failed, 0.3f);
-    ImU32 col = Mix(Mix(kAccent, kAlert, busyT), kError, failT);
+    // no animation here: the colour switches with the state
+    ImU32 col = m_mountState == MountState::Failed ? kError : busy ? kAlert : kAccent;
     ImDrawList* dl = ImGui::GetWindowDrawList();
     dl->AddRectFilled(p, ImVec2(p.x + w, p.y + h), col);
-    if (busyT > 0 && g_uiAnim) {
-        float band = std::max(Dip(160), w * 0.18f), cycle = 1.6f;
-        float x = p.x - band + (w + band) * (float)fmod(ImGui::GetTime() / cycle, 1.0);
-        ImU32 clear = IM_COL32(255, 255, 255, 0), lit = IM_COL32(255, 255, 255, (int)(40 * busyT));
-        dl->PushClipRect(p, ImVec2(p.x + w, p.y + h), true);
-        dl->AddRectFilledMultiColor(ImVec2(x, p.y), ImVec2(x + band * 0.5f, p.y + h), clear, lit, lit, clear);
-        dl->AddRectFilledMultiColor(ImVec2(x + band * 0.5f, p.y), ImVec2(x + band, p.y + h), lit, clear, clear, lit);
-        dl->PopClipRect();
-        g_animating = true;
-    }
     dl->AddLine(p, ImVec2(p.x + w, p.y), kBorder);
     std::string label = m_mountState == MountState::Mounting ? "Loading archives \xE2\x80\xA6"
                         : m_mountState == MountState::Failed  ? "Failed: " + m_mountError
@@ -3139,12 +3128,7 @@ void App::DrawStatusBar() {
     }
     float rw = right.empty() ? 0 : ImGui::CalcTextSize(right.c_str()).x + Dip(16) + Dip(10);
     dl->PushClipRect(p, ImVec2(p.x + w - rw - Dip(10), p.y + h), true);
-    float lx = p.x + Dip(9);
-    if (busy) {
-        Spinner(dl, ImVec2(lx + Dip(6), p.y + h * 0.5f), Dip(5.5f), Alpha(IM_COL32_WHITE, 0.4f + 0.6f * busyT), Dip(2));
-        lx += Dip(6) * 2 + Dip(8);
-    }
-    Text(dl, ImVec2(lx, ty), IM_COL32_WHITE, label.c_str());
+    Text(dl, ImVec2(p.x + Dip(9), ty), IM_COL32_WHITE, label.c_str());
     dl->PopClipRect();
     if (!right.empty()) {
         float rx = p.x + w - Dip(5) - ImGui::CalcTextSize(right.c_str()).x;
