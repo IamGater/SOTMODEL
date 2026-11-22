@@ -3,15 +3,17 @@
 //   SOTModel.exe --cli <tool> --json "{\"path\": \"...\"}"
 //   SOTModel.exe --cli tools                     list tools with their arguments
 // Images returned by preview tools are written to files (out=<file.png>, default %TEMP%).
-// Developer commands: scan <substring> [max], native <path> [bytes]
+// Developer commands: scan <substring> [max], native <path> [bytes], materials [substring]
 #include "app/Cli.h"
 #include "app/Api.h"
 #include "core/Json.h"
 #include "ue/Texture.h"
 #include "ue/Mesh.h"
 #include "ue/Animation.h"
+#include "ue/MaterialGraph.h"
 #include <windows.h>
 #include <map>
+#include <functional>
 
 static void Out(const std::string& s) {
     DWORD w;
@@ -22,6 +24,7 @@ static int DevScan(Api& api, const std::string& arg, size_t max) {
     std::string needle = ToLower(arg);
     std::map<std::string, std::pair<int, int>> perClass;   // class -> (ok, property errors)
     std::map<std::string, int> formats;
+    std::map<std::string, std::pair<int, std::string>> undecoded;   // raw property type -> (count, first example)
     size_t total = 0, readFail = 0, loadFail = 0;
     Vfs& vfs = api.vfs;
     for (u32 i = 0; i < vfs.FileCount() && total < max; i++) {
@@ -36,8 +39,17 @@ static int DevScan(Api& api, const std::string& arg, size_t max) {
         if (!pkg.Load(std::move(data), std::string(vfs.Path(i)), &err)) { loadFail++; Out("LOAD " + p + ": " + err + "\n"); continue; }
         for (size_t e = 0; e < pkg.Exports().size(); e++) {
             std::string perr;
-            pkg.ReadProperties(e, nullptr, &perr);
+            PropertyList props = pkg.ReadProperties(e, nullptr, &perr);
             std::string cls = pkg.ExportClass(e);
+            std::function<void(const PropValue&, const std::string&)> walk = [&](const PropValue& v, const std::string& name) {
+                if (v.type == PropType::Raw) {
+                    auto& u = undecoded[v.str];
+                    if (u.first++ == 0) u.second = p + " " + cls + "." + name;
+                }
+                for (auto& it : v.items) walk(it, name);
+                if (v.fields) for (auto& f : *v.fields) walk(f.value, name + "." + f.name);
+            };
+            for (auto& pr : props) walk(pr.value, pr.name);
             auto& c = perClass[cls];
             if (perr.empty()) c.first++;
             else if (c.second++ < 3) Out("PROPS " + p + " [" + pkg.Exports()[e].objectName + "]: " + perr + "\n");
@@ -64,6 +76,31 @@ static int DevScan(Api& api, const std::string& arg, size_t max) {
     Out(Fmt("\npackages %zu, read failures %zu, load failures %zu\n", total, readFail, loadFail));
     for (auto& [k, v] : perClass) Out(Fmt("%-48s ok %6d  errors %d\n", k.c_str(), v.first, v.second));
     for (auto& [k, v] : formats) Out(Fmt("texture format %-20s %d\n", k.c_str(), v));
+    for (auto& [k, v] : undecoded) Out(Fmt("undecoded %-32s %6d  e.g. %s\n", k.c_str(), v.first, v.second.c_str()));
+    return 0;
+}
+
+// Every Material / MaterialFunction under paths containing `arg`: node types the HLSL translator leaves at 0.
+static int DevMaterials(Api& api, const std::string& arg) {
+    std::string needle = ToLower(arg);
+    std::map<std::string, std::pair<int, std::string>> missing;   // node type -> (materials, first example)
+    size_t total = 0, failed = 0;
+    Vfs& vfs = api.vfs;
+    for (u32 i = 0; i < vfs.FileCount(); i++) {
+        std::string p(vfs.Path(i));
+        if (!IEndsWith(p, ".uasset") || (!needle.empty() && ToLower(p).find(needle) == std::string::npos)) continue;
+        auto pkg = api.cache->LoadPath(p);
+        if (!pkg || !pkg->MainExport()) continue;
+        std::string cls = pkg->ExportClass((size_t)pkg->MainExport() - 1);
+        if (cls != "Material" && cls != "MaterialFunction") continue;
+        total++;
+        std::string hlsl, err;
+        MaterialGraphStats st;
+        if (!MaterialToHlsl(*api.cache, p, hlsl, &st, &err)) { failed++; Out("FAIL " + p + ": " + err + "\n"); continue; }
+        for (auto& u : st.unsupported) { auto& m = missing[u]; if (m.first++ == 0) m.second = p; }
+    }
+    Out(Fmt("\nmaterials %zu, failed %zu\n", total, failed));
+    for (auto& [k, v] : missing) Out(Fmt("untranslated %-40s %5d  e.g. %s\n", k.c_str(), v.first, v.second.c_str()));
     return 0;
 }
 
@@ -118,6 +155,7 @@ int RunCli(int argc, wchar_t** argv) {
     std::string err;
     if (!api.EnsureMounted(&err)) { Out("{\"error\": \"" + err + "\"}\n"); return 2; }
     if (tool == "scan") return DevScan(api, argc > 3 ? Narrow(argv[3]) : "", argc > 4 ? (size_t)_wtoi(argv[4]) : SIZE_MAX);
+    if (tool == "materials") return DevMaterials(api, argc > 3 ? Narrow(argv[3]) : "/materials/");
     if (tool == "native") return DevNative(api, argc > 3 ? Narrow(argv[3]) : "", argc > 4 ? (size_t)_wtoi(argv[4]) : 128);
 
     const ApiTool* t = api.FindTool(tool);
