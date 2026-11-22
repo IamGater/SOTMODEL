@@ -46,8 +46,8 @@ on the package's dependency graph; 3D views open in a separate viewer window tha
 (`ViewerWindow=0` in Settings.ini / "Back to tab" keeps them inside the tabs; `--popout` forces the window for one run);
 `--screenshot` saves that window's back buffer next to the main one as `<file>.viewer.png`.
 More automation for the 3D views: `--pick u,v` clicks a map's viewport once at that fraction of its size (the pick is
-logged), `--attach <mesh or particle system>@<socket>` (repeatable) attaches assets to the opened mesh / animation's
-sockets, `--graph` opens model tabs with Graph shader on and the material parameters expanded.
+logged), `--attach <mesh or particle system>@<socket>` (repeatable; without `@<socket>` the default hand socket) attaches
+assets to the opened mesh / animation's sockets, `--tab` takes `archives` / `folders` / `packages` or 0-2, `--graph` opens model tabs with Graph shader on and the material parameters expanded.
 
 The viewer also opens `BlueprintGeneratedClass` packages as one assembled actor (component templates attached by the
 construction script tree, child actors included), draws particle systems with the 3D renderer (also on sockets and the

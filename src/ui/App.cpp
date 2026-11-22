@@ -805,8 +805,7 @@ void App::PlaceAttachments(Document& d, const std::vector<Mat4>* boneWorld) {
                         at.world = Mat4::FromTRS(so.location, RotatorToQuat(so.rotation.x, so.rotation.y, so.rotation.z), so.scale) * (*boneWorld)[b];
                         break;
                     }
-            at.placed = true;
-            break;
+            at.placed = true;            break;
         }
     }
 }
@@ -861,16 +860,6 @@ void App::AttachMesh(std::shared_ptr<Document> sp, std::string path, std::string
 
 void App::DrawAttachControls(Document& d) {
     if (d.sockets.empty()) return;
-    if (!attachOnStart.empty()) {   // --attach mesh@socket
-        for (auto& sp : m_docs)
-            if (sp.get() == &d)
-                for (auto& a : attachOnStart) {
-                    size_t at = a.rfind('@');
-                    if (at != std::string::npos) AttachMesh(sp, a.substr(0, at), a.substr(at + 1));
-                }
-        attachOnStart.clear();
-    }
-    ImGui::PushID("attach");
     if (d.attachSocket < 0) {   // default: a hand prop socket
         d.attachSocket = 0;
         int best = 0;
@@ -881,6 +870,17 @@ void App::DrawAttachControls(Document& d) {
         }
     }
     d.attachSocket = std::clamp(d.attachSocket, 0, (int)d.sockets.size() - 1);
+    if (!attachOnStart.empty()) {   // --attach mesh@socket (no socket: the default one)
+        for (auto& sp : m_docs)
+            if (sp.get() == &d)
+                for (auto& a : attachOnStart) {
+                    size_t at = a.rfind('@');
+                    std::string mesh = a.substr(0, at), socket = at == std::string::npos ? "" : a.substr(at + 1);
+                    AttachMesh(sp, mesh, socket.empty() ? d.sockets[d.attachSocket].name : socket);
+                }
+        attachOnStart.clear();
+    }
+    ImGui::PushID("attach");
     float u = ImGui::GetFontSize() / 16.f;
     bool narrow = ImGui::GetContentRegionAvail().x < 420 * u;   // side panel: socket and path on separate lines
     ImGui::SetNextItemWidth(narrow ? -1 : 180 * u);
