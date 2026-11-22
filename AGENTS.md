@@ -204,6 +204,13 @@ Typical flow: `search` → `get_package` → `get_properties` / `preview_*` → 
   and tint it with `EmissiveColourMultiply`, mesh emitters (TypeDataMesh) draw their mesh per particle (size = scale).
   SoT has no Beam / Ribbon emitters (a scan of all ~920 systems): only sprites, GPU sprites, meshes and 2 AnimTrails
   (weapon swing trails, not drawn). No soft-particle depth fade.
+  Simulated besides the basics: `*_Seeded` variants (as their base module), RotationRateMultiplyLife and
+  AccelerationDragScaleOverLife (scale the running rate / drag every frame, as UE does), Orbit (offset turned by
+  rotation + rate), SizeScaleBySpeed, AttractorPointGravity (approximation: Strength fading to 0 at Radius),
+  SphereSlice as a sphere; VelocityInheritParent / SpawnPerUnit do nothing for the still preview emitter. Module
+  properties that reference a Distribution object (not an inline raw distribution) are read as curves too.
+  `--cli particles` lists what stays unsimulated: modules needing the world (collision, lights, bone sockets, wind,
+  vector fields), material dynamic parameters, SoT's own MurkyColor / SizeOverVelocity / ParametersOver*, AnimTrail.
 - Explorer thumbnails (`App::Thumbnail`, async, 160 px): textures, meshes (headless render, LOD 1), materials (main
   texture), particle systems (software sprite render ~2 s in), .wem (waveform), Blueprint classes (assembled actor,
   no water / fog).

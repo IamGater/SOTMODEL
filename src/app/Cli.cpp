@@ -3,7 +3,7 @@
 //   SOTModel.exe --cli <tool> --json "{\"path\": \"...\"}"
 //   SOTModel.exe --cli tools                     list tools with their arguments
 // Images returned by preview tools are written to files (out=<file.png>, default %TEMP%).
-// Developer commands: scan <substring> [max], native <path> [bytes], materials [substring]
+// Developer commands: scan <substring> [max], native <path> [bytes], materials [substring], particles
 #include "app/Cli.h"
 #include "app/Api.h"
 #include "core/Json.h"
@@ -12,6 +12,8 @@
 #include "ue/Animation.h"
 #include "ue/MaterialGraph.h"
 #include "ue/Material.h"
+#include "ue/Particles.h"
+#include <set>
 #include "render/GraphShader.h"
 #include <d3dcompiler.h>
 #include <wrl/client.h>
@@ -126,6 +128,30 @@ static int DevMaterials(Api& api, const std::string& arg) {
     return 0;
 }
 
+// Every ParticleSystem: modules (enabled, in some emitter LOD) the preview simulation does not understand.
+static int DevParticles(Api& api) {
+    std::map<std::string, std::pair<int, std::string>> modules;   // class -> (systems, first example)
+    size_t total = 0;
+    Vfs& vfs = api.vfs;
+    for (u32 i = 0; i < vfs.FileCount(); i++) {
+        std::string p(vfs.Path(i));
+        if (!IEndsWith(p, ".uasset") || ToLower(p).find("particle") == std::string::npos) continue;
+        auto pkg = api.cache->LoadPath(p);
+        if (!pkg || !pkg->MainExport() || pkg->ExportClass((size_t)pkg->MainExport() - 1) != "ParticleSystem") continue;
+        total++;
+        ParticleSystemInfo ps;
+        if (!ReadParticleSystem(*api.cache, *pkg, (size_t)pkg->MainExport() - 1, ps)) { Out("FAIL " + p + "\n"); continue; }
+        std::set<std::string> seen;
+        for (auto& e : ps.emitters)
+            for (auto& m : e.modules)
+                if (!m.simulated && m.enabled) seen.insert(m.cls);
+        for (auto& c : seen) { auto& m = modules[c]; if (m.first++ == 0) m.second = p; }
+    }
+    Out(Fmt("\nparticle systems %zu\n", total));
+    for (auto& [k, v] : modules) Out(Fmt("not simulated %-48s %5d  e.g. %s\n", k.c_str(), v.first, v.second.c_str()));
+    return 0;
+}
+
 static int DevNative(Api& api, const std::string& path, size_t n) {
     std::string err;
     auto pkg = api.LoadPackage(path, &err);
@@ -178,6 +204,7 @@ int RunCli(int argc, wchar_t** argv) {
     if (!api.EnsureMounted(&err)) { Out("{\"error\": \"" + err + "\"}\n"); return 2; }
     if (tool == "scan") return DevScan(api, argc > 3 ? Narrow(argv[3]) : "", argc > 4 ? (size_t)_wtoi(argv[4]) : SIZE_MAX);
     if (tool == "materials") return DevMaterials(api, argc > 3 ? Narrow(argv[3]) : "/materials/");
+    if (tool == "particles") return DevParticles(api);
     if (tool == "native") return DevNative(api, argc > 3 ? Narrow(argv[3]) : "", argc > 4 ? (size_t)_wtoi(argv[4]) : 128);
 
     const ApiTool* t = api.FindTool(tool);
