@@ -151,6 +151,28 @@ ImU32 EaseItemColor(ImGuiID id, ImU32 target) {
     return ImGui::ColorConvertFloat4ToU32(e.c);
 }
 
+// Floating windows, popups, menus and tooltips stand out from the main window: a soft drop shadow round them and a
+// light outline (appended to their own draw list, outside their rectangle, so it never covers their content)
+void DecorateFloatingWindow(ImGuiWindow* w) {
+    ImDrawList* dl = w->DrawList;
+    if (!dl) return;
+    const ImGuiStyle& st = ImGui::GetStyle();
+    bool tooltip = (w->Flags & ImGuiWindowFlags_Tooltip) != 0, popup = (w->Flags & (ImGuiWindowFlags_Popup | ImGuiWindowFlags_ChildMenu)) != 0;
+    float r = popup || tooltip ? st.PopupRounding : st.WindowRounding;
+    ImVec2 a = w->Pos, b(w->Pos.x + w->Size.x, w->Pos.y + w->Size.y);
+    ImGuiViewport* vp = w->Viewport ? w->Viewport : ImGui::GetMainViewport();
+    dl->PushClipRect(vp->Pos, ImVec2(vp->Pos.x + vp->Size.x, vp->Pos.y + vp->Size.y), false);
+    int n = (int)Dip(tooltip ? 8.f : popup ? 12.f : 18.f);
+    float strength = tooltip ? 0.3f : popup ? 0.38f : 0.45f;
+    for (int i = 1; i <= n; i++) {   // rings fading outwards, a little lower than the window (light from above)
+        float t = (float)i / n, al = strength * (1 - t) * (1 - t);
+        float dy = i * 0.35f;
+        dl->AddRect(ImVec2(a.x - i + 0.5f, a.y - i + dy + 0.5f), ImVec2(b.x + i - 0.5f, b.y + i + dy - 0.5f), IM_COL32(0, 0, 0, (int)(al * 255)), r + i, 0, 1.f);
+    }
+    dl->AddRect(a, b, IM_COL32(86, 88, 112, 255), r, 0, 1.f);   // outline, lighter than every panel
+    dl->PopClipRect();
+}
+
 // Popups, combo lists, menus, tooltips, modals and floating windows ease in when they appear: a fade plus a short slide
 // (down for drop-downs and menus, up for windows), applied to their finished draw lists at the end of the frame.
 std::unordered_map<ImGuiID, double> g_winShownAt;
@@ -162,6 +184,7 @@ void AnimateAppearingWindows() {
     for (ImGuiWindow* w : g.Windows) {
         if (!w->Active || w->Hidden || (w->Flags & ImGuiWindowFlags_ChildWindow) || !strcmp(w->Name, "##main")) continue;
         visible.insert(w->ID);
+        DecorateFloatingWindow(w);
         if (!g_winVisible.count(w->ID)) g_winShownAt[w->ID] = now;
         auto it = g_winShownAt.find(w->ID);
         if (it == g_winShownAt.end()) continue;
