@@ -197,7 +197,7 @@ PropValue ReadArray(const Package& pkg, Reader& r, const TagInfo& tag, size_t en
         } catch (...) {}
         v.items.clear();
         r.Seek(save);
-        const char* guess = elemSize == 12 ? "Vector" : elemSize == 16 ? "Vector4" : elemSize == 8 ? "Vector2D" : elemSize == 4 ? "Color" : elemSize == 64 ? "Matrix" : nullptr;
+        const char* guess = elemSize == 27 && tag.name == "Keys" ? "RichCurveKey" : elemSize == 12 ? "Vector" : elemSize == 16 ? "Vector4" : elemSize == 8 ? "Vector2D" : elemSize == 4 ? "Color" : elemSize == 64 ? "Matrix" : nullptr;
         if (guess) {
             for (i32 i = 0; i < n; i++) v.items.push_back(ReadStructValue(pkg, r, guess, end));
             v.str = std::string("StructProperty(") + guess + "?)";
