@@ -30,6 +30,30 @@ static std::string ParamName(const PropValue& v) {
     return {};
 }
 
+// Cooked instances with their own shader permutation keep FStaticParameterSet in the export's native data, right
+// after the tagged properties and the object guid: switches are {FName, u32 Value, u32 bOverride, FGuid}.
+static void ReadNativeStaticSwitches(const Package& pkg, size_t exportIdx, std::vector<std::string>& out) {
+    try {
+        size_t end = 0;
+        pkg.ReadProperties(exportIdx, &end);
+        Reader r = pkg.ExportReader(exportIdx);
+        r.Seek(end);
+        if (r.U32()) r.Skip(16);
+        u32 n = r.U32();
+        if (n > 256) return;
+        std::vector<std::string> found;
+        for (u32 i = 0; i < n; i++) {
+            std::string name = pkg.ReadName(r);
+            u32 value = r.U32(), over = r.U32();
+            r.Skip(16);
+            if (value > 1 || over > 1 || name.empty()) return;   // not the layout we expect: keep the defaults
+            found.push_back(name + "=" + (value ? "true" : "false"));
+        }
+        out.insert(out.end(), found.begin(), found.end());
+    } catch (const std::exception&) {
+    }
+}
+
 bool ReadMaterial(PackageCache& cache, const std::string& path, MaterialInfo& m, std::string* error) {
     m.path = path;
     std::string cur = path;
@@ -79,12 +103,15 @@ bool ReadMaterial(PackageCache& cache, const std::string& path, MaterialInfo& m,
                 auto c = [&](const char* k) { auto f = pv->Field(k); return f ? (float)f->AsFloat() : 0.f; };
                 m.vectors.push_back({name, c("R"), c("G"), c("B"), c("A"), here});
             }
-        if (auto sp = FindValue(props, "StaticParameters"))
+        if (auto sp = FindValue(props, "StaticParameters")) {
             if (auto sw = sp->Field("StaticSwitchParameters"))
                 for (auto& v : sw->items) {
                     auto val = v.Field("Value");
                     m.staticSwitches.push_back(ParamName(v) + "=" + (val && val->AsBool() ? "true" : "false"));
                 }
+        } else if (PropBool(props, "bHasStaticPermutationResource", false)) {
+            ReadNativeStaticSwitches(*pkg, ex - 1, m.staticSwitches);
+        }
         if (auto bo = FindValue(props, "BasePropertyOverrides")) {
             if (!blendSet && bo->Field("bOverride_BlendMode") && bo->Field("bOverride_BlendMode")->AsBool() && bo->Field("BlendMode")) { m.blendMode = bo->Field("BlendMode")->str; blendSet = true; }
             if (!twoSidedSet && bo->Field("bOverride_TwoSided") && bo->Field("bOverride_TwoSided")->AsBool() && bo->Field("TwoSided")) { m.twoSided = bo->Field("TwoSided")->AsBool(); twoSidedSet = true; }
