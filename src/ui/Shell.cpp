@@ -1856,7 +1856,9 @@ void App::DrawDocContent(Document& d) {
     float sideW = side ? std::clamp(d.sideW, Dip(160), std::max(Dip(160), avail.x - Dip(200))) : 0;
     // the 3D view drawn in the separate window: the side only holds its two buttons, the JSON gets the room
     bool viewerSide = has3d && !hasGraph && !hasParticles && !hasSm && !hasShaders && !hasTable && !hasAudio;
-    bool poppedOut = viewerSide && d.id == m_popoutDoc;
+    // its separate window was closed with X: the view does not come back into the tab (only a button to reopen it)
+    bool viewerClosed = viewerSide && m_settings.viewerWindow && &d == m_popoutDismissed && d.id != m_popoutDoc;
+    bool poppedOut = viewerSide && (d.id == m_popoutDoc || viewerClosed);
     if (poppedOut) sideW = std::min(sideW, Dip(280));
     float editW = side ? avail.x - sideW - splitW : avail.x;
     ImVec2 p = ImGui::GetCursorScreenPos();
@@ -1929,6 +1931,15 @@ void App::DrawDocContent(Document& d) {
         if (ImGui::Button("Show window")) m_popoutFocus = true;
         ImGui::SameLine();
         if (ImGui::Button("Back to tab")) SetViewerWindow(false, nullptr);
+    } else if (viewerClosed) {
+        ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+        ImGui::TextWrapped("The 3D view window is closed.");
+        ImGui::PopStyleColor();
+        if (ImGui::Button("Open window")) {
+            m_popoutDismissed = nullptr;
+            m_popoutDoc = d.id;
+            m_popoutFocus = true;
+        }
     } else if (d.isWorld) DrawWorld(d);
     else if (d.anim) DrawAnimation(d);
     else DrawModel(d);
