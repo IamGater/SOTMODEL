@@ -401,6 +401,9 @@ void InfoRows(const std::vector<std::pair<std::string, const char*>>& rows) {
 
 // list row background; returns pressed (on press, like WPF list boxes select)
 struct RowState { bool pressed, hovered, doubleClicked, rightClicked; };
+// distance between list rows (row height plus item spacing) - the clipper must know the real pitch
+static float RowPitch(float rowH) { return rowH + ImGui::GetStyle().ItemSpacing.y; }
+
 RowState ListRow(const char* id, ImVec2 size, bool selected) {
     ImVec2 p = ImGui::GetCursorScreenPos();
     ImGui::InvisibleButton(id, size, ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight);
@@ -698,7 +701,7 @@ void App::DrawArchivesTab() {
         float rowH = Dip(22.4f), rw = ImGui::GetContentRegionAvail().x;
         ImDrawList* dl = ImGui::GetWindowDrawList();
         ImGuiListClipper clip;
-        clip.Begin((int)m_pakList.size(), rowH);
+        clip.Begin((int)m_pakList.size(), RowPitch(rowH));
         while (clip.Step())
             for (int i = clip.DisplayStart; i < clip.DisplayEnd; i++) {
                 ImGui::PushID(i);
@@ -721,7 +724,7 @@ void App::DrawArchivesTab() {
         float rowH = Dip(22.4f), rw = ImGui::GetContentRegionAvail().x;
         ImDrawList* dl = ImGui::GetWindowDrawList();
         ImGuiListClipper clip;
-        clip.Begin((int)paks.size(), rowH);
+        clip.Begin((int)paks.size(), RowPitch(rowH));
         while (clip.Step())
             for (int i = clip.DisplayStart; i < clip.DisplayEnd; i++) {
                 if (m_pakSizes[i] == UINT64_MAX) {
@@ -827,10 +830,11 @@ void App::DrawFoldersTab() {
     ImGui::BeginChild("##tree", ImVec2(0, ImGui::GetContentRegionAvail().y - infoH), ImGuiChildFlags_None, ImGuiWindowFlags_HorizontalScrollbar);
     dl = ImGui::GetWindowDrawList();
     float rowH = Dip(22), rw = ImGui::GetContentRegionAvail().x;
+    float stride = rowH + ImGui::GetStyle().ItemSpacing.y;   // the clipper must know the real row pitch
     if (m_scrollTreeTo != UINT32_MAX) {
         for (size_t i = 0; i < rows.size(); i++)
             if (rows[i].f == m_scrollTreeTo) {
-                float y = i * rowH, sy = ImGui::GetScrollY(), wh = ImGui::GetWindowHeight();
+                float y = i * stride, sy = ImGui::GetScrollY(), wh = ImGui::GetWindowHeight();
                 if (y < sy || y + rowH > sy + wh) ImGui::SetScrollY(std::max(0.f, y - wh * 0.4f));
                 break;
             }
@@ -839,7 +843,7 @@ void App::DrawFoldersTab() {
     bool focused = ImGui::IsWindowFocused();
     int selIndex = -1;
     ImGuiListClipper clip;
-    clip.Begin((int)rows.size(), rowH);
+    clip.Begin((int)rows.size(), stride);
     while (clip.Step())
         for (int i = clip.DisplayStart; i < clip.DisplayEnd; i++) {
             const Row& r = rows[i];
@@ -1019,7 +1023,7 @@ void App::DrawPackagesTab() {
     bool focused = ImGui::IsWindowFocused();
     int selIndex = -1;
     ImGuiListClipper clip;
-    clip.Begin((int)files.size(), rowH);
+    clip.Begin((int)files.size(), RowPitch(rowH));
     while (clip.Step())
         for (int i = clip.DisplayStart; i < clip.DisplayEnd; i++) {
             u32 e = files[i];
@@ -1045,7 +1049,7 @@ void App::DrawPackagesTab() {
         if (ImGui::IsKeyPressed(ImGuiKey_DownArrow)) next = std::min((int)files.size() - 1, selIndex + 1);
         if (next >= 0) {
             m_selected = files[next];
-            float y = next * rowH, sy = ImGui::GetScrollY(), wh = ImGui::GetWindowHeight();
+            float y = next * RowPitch(rowH), sy = ImGui::GetScrollY(), wh = ImGui::GetWindowHeight();
             if (y < sy) ImGui::SetScrollY(y);
             if (y + rowH > sy + wh) ImGui::SetScrollY(y + rowH - wh);
         }
@@ -1229,7 +1233,7 @@ void App::DrawExplorer() {
         float rowH = Dip(32), rw = ImGui::GetContentRegionAvail().x, mx = Dip(8);
         float inner = rw - mx * 2, c1 = inner * 3 / 5.2f, c2 = inner * 1 / 5.2f;
         ImGuiListClipper clip;
-        clip.Begin(total, rowH);
+        clip.Begin(total, RowPitch(rowH));
         while (clip.Step())
             for (int idx = clip.DisplayStart; idx < clip.DisplayEnd; idx++) {
                 bool isFolder = idx < (int)subfolders.size();
@@ -1963,7 +1967,7 @@ void App::DrawShaderPanel(Document& d) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
     float lh = ImGui::GetFontSize(), rowH = lh * 2 + Dip(10), rw = ImGui::GetContentRegionAvail().x;
     ImGuiListClipper clip;
-    clip.Begin((int)rows.size(), rowH);
+    clip.Begin((int)rows.size(), RowPitch(rowH));
     while (clip.Step())
         for (int r = clip.DisplayStart; r < clip.DisplayEnd; r++) {
             int i = rows[r];
@@ -2173,7 +2177,7 @@ void App::DrawAudioPanel(Document& d) {
         float rowH = Dip(22), rw = ImGui::GetContentRegionAvail().x;
         if (d.bankTab == 1) {
             ImGuiListClipper clip;
-            clip.Begin((int)d.bankEvents.size(), rowH);
+            clip.Begin((int)d.bankEvents.size(), RowPitch(rowH));
             while (clip.Step())
                 for (int i = clip.DisplayStart; i < clip.DisplayEnd; i++) {
                     auto& [id, name] = d.bankEvents[i];
@@ -2192,7 +2196,7 @@ void App::DrawAudioPanel(Document& d) {
                 ImGui::TextDisabled(d.isEvent ? "The event plays no sounds (only actions such as Stop or Set State)"
                                               : "This bank has no embedded media (its sounds are streamed .wem files)");
             ImGuiListClipper clip;
-            clip.Begin((int)d.bank.wems.size(), rowH);
+            clip.Begin((int)d.bank.wems.size(), RowPitch(rowH));
             while (clip.Step())
                 for (int i = clip.DisplayStart; i < clip.DisplayEnd; i++) {
                     const BankWem& bw = d.bank.wems[i];
