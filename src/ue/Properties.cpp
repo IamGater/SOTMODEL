@@ -342,11 +342,84 @@ PropValue ReadStructValue(const Package& pkg, Reader& r, std::string_view struct
     return v;
 }
 
+// TMap element kinds tried in order (4.10 map tags do not name the key / value types).
+enum class MapKind { Name, Str, TaggedStruct, Int4, Vector, Guid, Byte };
+const MapKind kMapKinds[] = {MapKind::Name, MapKind::Str, MapKind::TaggedStruct, MapKind::Int4, MapKind::Vector, MapKind::Guid, MapKind::Byte};
+
+PropValue ReadMapElement(const Package& pkg, Reader& r, MapKind k, size_t end) {
+    switch (k) {
+    case MapKind::Name: {
+        u64 raw = r.Peek<u64>();
+        i32 idx = (i32)(u32)raw, number = (i32)(raw >> 32);
+        if (idx < 0 || idx >= (i32)pkg.Names().size() || number < 0 || number > 100000) throw ParseError("not a name");
+        PropValue v;
+        v.type = PropType::Name;
+        v.str = pkg.ReadName(r);
+        return v;
+    }
+    case MapKind::Str: {
+        i32 len = r.Peek<i32>();
+        if (len == 0 || len > 4096 || len < -4096) throw ParseError("not a string");
+        PropValue v;
+        v.type = PropType::Str;
+        v.str = r.FString();
+        return v;
+    }
+    case MapKind::TaggedStruct: {
+        if (!IsValidName(pkg, r)) throw ParseError("not a struct");
+        PropValue v;
+        v.type = PropType::Struct;
+        v.fields = std::make_shared<PropertyList>();
+        size_t before = r.Pos();
+        ReadTaggedProperties(pkg, r, end, *v.fields);
+        if (r.Pos() == before) throw ParseError("empty struct");
+        return v;
+    }
+    case MapKind::Int4: {   // int / object index / float: shown as an int unless it only makes sense as a float
+        i32 i = r.I32();
+        float f;
+        memcpy(&f, &i, 4);
+        if (i > -(1 << 24) && i < (1 << 24)) return MakeInt(i);
+        return MakeFloat(f);
+    }
+    case MapKind::Vector: return Floats(r, XYZ, 3);
+    case MapKind::Guid: { PropValue v; ReadNativeStruct(pkg, r, "Guid", 16, v); return v; }
+    case MapKind::Byte: return MakeInt(r.U8(), PropType::Byte);
+    }
+    throw ParseError("map kind");
+}
+
+// TMap: NumKeysToRemove (0 on disk), count, then key / value pairs. Items are {Key, Value} structs.
+PropValue ReadMap(const Package& pkg, Reader& r, size_t end) {
+    if (r.I32() != 0) throw ParseError("map with removed keys");
+    i32 n = r.I32();
+    if (n < 0 || (size_t)n > end - r.Pos()) throw ParseError("bad map count");
+    size_t start = r.Pos();
+    for (MapKind kk : kMapKinds)
+        for (MapKind vk : kMapKinds) {
+            PropValue m;
+            m.type = PropType::Map;
+            r.Seek(start);
+            try {
+                for (i32 i = 0; i < n; i++) {
+                    PropValue e;
+                    e.type = PropType::Struct;
+                    e.fields = std::make_shared<PropertyList>();
+                    AddField(*e.fields, "Key", ReadMapElement(pkg, r, kk, end));
+                    AddField(*e.fields, "Value", ReadMapElement(pkg, r, vk, end));
+                    m.items.push_back(std::move(e));
+                }
+            } catch (const std::exception&) { continue; }
+            if (r.Pos() == end) return m;
+        }
+    throw ParseError("cannot decode map");
+}
+
 PropValue ReadValue(const Package& pkg, Reader& r, const TagInfo& tag, size_t end) {
     if (tag.type == "BoolProperty") { PropValue v; v.type = PropType::Bool; v.b = tag.boolVal != 0; return v; }
     if (tag.type == "StructProperty") return ReadStructValue(pkg, r, tag.structName, end);
     if (tag.type == "ArrayProperty") return ReadArray(pkg, r, tag, end);
-    if (tag.type == "MapProperty") throw ParseError("map");
+    if (tag.type == "MapProperty") return ReadMap(pkg, r, end);
     if (tag.type == "ByteProperty") return ReadSimple(pkg, r, tag.type, (size_t)tag.size, tag.enumName);
     if (tag.type == "MulticastDelegateProperty") {
         PropValue v;
