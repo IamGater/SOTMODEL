@@ -130,7 +130,7 @@ or `/Game/Models/Props/Common/cmn_barrel_debris_02_a.cmn_barrel_debris_02_a`.
 | `list_shaders` | compiled D3D11 (SM5) shaders of a material's shader maps or of `Engine/Content/GlobalShaderCache-PCD3D_SM5.bin`: index, stage, shader type, vertex factory, instructions, uniform buffers (`stage` / `type` / `vertex_factory` filters) |
 | `decompile_shader` | one shader (`index`) as readable HLSL, `hlsl_exact` (raw uint4 lanes), `asm` (D3D disassembly), `reflection`, or raw `dxbc` with `save_to`; material shaders get their Material uniform buffer reads named (`cb1[19].x = ScalarParameter "Damage_Tiling"`) plus a register legend (`annotate=false` to skip) |
 | `get_material_uniforms` | a material's uniform expression sets (one per shader map): each Material uniform buffer register as the parameter / folded expression it holds (vectors first, then scalars 4 per register), 2D / cube texture slots, which cb slot the shaders bind it to |
-| `get_material_hlsl` | a material's node graph as readable HLSL (UE 4.10 translator style): parameters with values, Custom nodes, material functions inlined, static switches resolved, connected attributes; instances use the master graph with their values; material functions translate on their own |
+| `get_material_hlsl` | a material's node graph as readable HLSL (UE 4.10 translator style): parameters with values, Custom nodes, material functions inlined, static switches resolved, connected attributes; instances use the master graph with their values; material functions translate on their own (unbound texture inputs become texture parameters). Every node type used by the game's 569 materials is translated; SoT's own LumaAvg / CausticTexture / CausticTextureCoordinate become calls `AthenaLumaAvg()` etc. (engine-side values) |
 | `get_material_graph` | the expression nodes of a material / function: type, caption, position (auto-laid out: cooked packages strip editor positions) and input links |
 | `search_localization` | the game's translated strings (.locres) by text / key in any shipped language (en, de-DE, ru-RU, zh-CN, ...) |
 | `get_localized_text` | one FText (namespace + key) in every language |
@@ -148,10 +148,18 @@ Typical flow: `search` → `get_package` → `get_properties` / `preview_*` → 
 ## Notes on the data
 
 - FText values in package JSON carry `LocalizedString` in the configured language (`Language=` in Settings.ini, default en).
+  Every 4.10 text history is read: generated texts (NamedFormat / OrderedFormat / ArgumentFormat, AsNumber / Percent /
+  Currency, AsDate / Time / DateTime, Transform) carry `History` and their parts, and `SourceString` is the text
+  rebuilt from them (format arguments substituted, numbers / dates printed).
 
 - Packages are legacy single-file `.uasset`/`.umap` (no `.uexp`/`.ubulk`); UE4 object version 483.
 - 4.10 property tags do not name the element struct of arrays or the key/value types of maps. SOTModel guesses
-  arrays of structs (tagged bags, or native layouts by element size) and shows maps as `UndecodedType` hex.
+  arrays of structs (tagged bags whose tags are all `*Property`, StringAssetReference FStrings, or native layouts by
+  element size). Maps (NumKeysToRemove 0, count, pairs) try key x value layouts (FName, FString, tagged struct, 4-byte
+  int / object / float, Vector, Guid, byte) and keep the first that ends exactly at the property's end; they come out
+  as `[{"Key": ..., "Value": ...}]`. Lazy object pointers are their GUID string.
+- Dev reports: `--cli scan <substring>` ends with `undecoded <type> <count> e.g. <package> <class>.<property>` for
+  values still shown as hex; `--cli materials [substring]` lists material node types the HLSL translator leaves at 0.
 - Shader code in shader maps is LZ4-compressed (Sea of Thieves addition, uncompressed size after the resource).
   Reflection names are stripped: constant buffers, textures and samplers keep their register numbers (`cb1_cb[42]`,
   `t3`, `s5`); inputs / outputs keep their semantics. The decompiled HLSL recompiles with fxc for almost every
