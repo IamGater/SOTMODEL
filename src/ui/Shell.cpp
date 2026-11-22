@@ -757,10 +757,11 @@ void App::DrawArchivesTab() {
         auto& pk = *m_api->vfs.Paks()[m_selPak];
         InfoRows({{pk.mountPoint.empty() ? "/" : pk.mountPoint, "Mount Point"},
                   {Fmt("%u Files", pk.fileCount), "File Count"},
-                  {pk.keyIndex >= 0 ? "True" : "False", "Is Encrypted"},
-                  {"00000000000000000000000000000000", "Global Unique Identifier"}});
+                  {Fmt("PAK v%u", pk.version), "Archive Version"},
+                  // the key is only found on the first encrypted read
+                  {pk.keyIndex >= 0 ? Fmt("Key #%d", pk.keyIndex.load()) : std::string("Not read yet"), "AES Key"}});
     } else {
-        InfoRows({{"/", "Mount Point"}, {"0 Files", "File Count"}, {"False", "Is Encrypted"}, {"00000000000000000000000000000000", "Global Unique Identifier"}});
+        InfoRows({{"-", "Mount Point"}, {"-", "File Count"}, {"-", "Archive Version"}, {"-", "AES Key"}});
     }
 }
 
