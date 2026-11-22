@@ -2009,45 +2009,82 @@ void App::DrawTablePanel(Document& d) {
     ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(kTextDim), "%s%s / %zu rows / %zu columns", t.curves ? "CurveTable" : "DataTable",
                        t.rowStruct.empty() ? "" : (" of " + t.rowStruct).c_str(), t.rows.size(), t.columns.size());
     ImGui::PopFont();
-    float bw = Dip(110);
-    SearchBox("##tf", d.tableFilter, sizeof(d.tableFilter), "Filter rows...", ImGui::GetContentRegionAvail().x - bw - Dip(6), false);
-    ImGui::SameLine(0, Dip(6));
-    if (Button("Export CSV", ImVec2(bw, 0))) {
-        std::string csv = TableToCsv(t);
-        std::string rel = m_settings.exportKeepDirectories ? d.gamePath : d.gamePath.substr(d.gamePath.rfind('/') + 1);
-        std::wstring out = m_settings.outputDir + L"\\" + Widen(rel.substr(0, rel.rfind('.')) + ".csv");
-        for (auto& c : out) if (c == L'/') c = L'\\';
-        CreateDirectories(out.substr(0, out.find_last_of(L'\\')));
-        if (WriteWholeFile(out, csv.data(), csv.size())) LOGI("table -> %s", Narrow(out).c_str());
-        else LOGW("could not write %s", Narrow(out).c_str());
-    }
-    // rows filtered by any cell, sorted by the clicked column
+    int cols = (int)t.columns.size() + 1, tcols = std::min(cols, 500);   // imgui tables hold up to 512 columns
+    if ((int)d.tableColFilters.size() != tcols) d.tableColFilters.assign(tcols, {});
+    // a column filter: >x <x >=x <=x =x (numbers compare as numbers), !x (does not contain), else a substring
+    auto cellPasses = [](const std::string& cell, const char* f) {
+        if (!*f) return true;
+        std::string op, arg = f;
+        for (const char* o : {">=", "<=", ">", "<", "=", "!"})
+            if (arg.rfind(o, 0) == 0) { op = o; arg = arg.substr(strlen(o)); break; }
+        while (!arg.empty() && arg[0] == ' ') arg.erase(0, 1);
+        if (op.empty()) return ToLower(cell).find(ToLower(arg)) != std::string::npos;
+        if (op == "!") return arg.empty() || ToLower(cell).find(ToLower(arg)) == std::string::npos;
+        char *ec = nullptr, *ea = nullptr;
+        double c = strtod(cell.c_str(), &ec), a = strtod(arg.c_str(), &ea);
+        bool numeric = !cell.empty() && !arg.empty() && ec && !*ec && ea && !*ea;
+        if (op == "=") return numeric ? c == a : IEquals(cell, arg);
+        if (!numeric) {
+            int r = ToLower(cell).compare(ToLower(arg));
+            return op == ">" ? r > 0 : op == "<" ? r < 0 : op == ">=" ? r >= 0 : r <= 0;
+        }
+        return op == ">" ? c > a : op == "<" ? c < a : op == ">=" ? c >= a : c <= a;
+    };
+    // rows (indices into t.cells) passing the row filter and every column filter
     std::string filter = ToLower(d.tableFilter);
-    int cols = (int)t.columns.size() + 1;
-    std::vector<std::vector<std::string>> cells;
-    cells.reserve(t.cells.size());
-    for (auto& c : t.cells) {
+    std::vector<int> rows;
+    rows.reserve(t.cells.size());
+    for (int r = 0; r < (int)t.cells.size(); r++) {
+        const auto& c = t.cells[r];
         if (!filter.empty()) {
             bool hit = false;
             for (auto& s : c) if (ToLower(s).find(filter) != std::string::npos) { hit = true; break; }
             if (!hit) continue;
         }
-        cells.push_back(std::move(c));
+        bool ok = true;
+        for (int k = 0; k < tcols && ok; k++) ok = cellPasses(k < (int)c.size() ? c[k] : std::string(), d.tableColFilters[k].data());
+        if (ok) rows.push_back(r);
     }
-    int tcols = std::min(cols, 64);
+    bool filtered = rows.size() != t.cells.size();
+    float bw = Dip(150);
+    SearchBox("##tf", d.tableFilter, sizeof(d.tableFilter), "Filter rows (any cell)...", ImGui::GetContentRegionAvail().x - bw * 2 - Dip(12), false);
+    ImGui::SameLine(0, Dip(6));
+    if (Button("Clear column filters", ImVec2(bw, 0), filtered)) {
+        for (auto& f : d.tableColFilters) f[0] = 0;
+        d.tableFilter[0] = 0;
+    }
+    ImGui::SameLine(0, Dip(6));
+    bool exportCsv = Button(filtered ? Fmt("Export CSV (%zu rows)", rows.size()).c_str() : "Export CSV", ImVec2(bw, 0));
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip(filtered ? "The rows shown, in the shown order" : "Every row");
+    ImGui::PushFont(nullptr, FontDip(11));
+    ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(kTextDim), "showing %zu of %zu rows%s | column filters: text, >5, <=10, =x, !x | double-click a /Game/ path to open it",
+                       rows.size(), t.cells.size(), cols > tcols ? Fmt(" | first %d of %d columns", tcols, cols).c_str() : "");
+    ImGui::PopFont();
     ImGuiTableFlags fl = ImGuiTableFlags_ScrollX | ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_Resizable |
                          ImGuiTableFlags_Sortable | ImGuiTableFlags_Reorderable | ImGuiTableFlags_Hideable;
     ImGui::PushStyleColor(ImGuiCol_TableHeaderBg, kField);
     if (ImGui::BeginTable("##grid", tcols, fl)) {
-        ImGui::TableSetupScrollFreeze(1, 1);
+        ImGui::TableSetupScrollFreeze(1, 2);
         ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_DefaultSort, Dip(140));
         for (int c = 1; c < tcols; c++) ImGui::TableSetupColumn(t.columns[c - 1].c_str(), ImGuiTableColumnFlags_WidthFixed, Dip(130));
         ImGui::TableHeadersRow();
+        ImGui::TableNextRow();   // the column filters, frozen under the headers
+        for (int c = 0; c < tcols; c++) {
+            ImGui::TableNextColumn();
+            ImGui::PushID(c);
+            ImGui::SetNextItemWidth(-FLT_MIN);
+            PushFieldStyle();
+            ImGui::InputTextWithHint("##cf", "filter", d.tableColFilters[c].data(), d.tableColFilters[c].size());
+            PopFieldStyle();
+            ImGui::PopID();
+        }
         if (ImGuiTableSortSpecs* ss = ImGui::TableGetSortSpecs(); ss && ss->SpecsCount > 0) {
             int sc = ss->Specs[0].ColumnIndex;
             bool asc = ss->Specs[0].SortDirection == ImGuiSortDirection_Ascending;
-            std::stable_sort(cells.begin(), cells.end(), [&](auto& a, auto& b) {
-                const std::string &x = a[sc], &y = b[sc];
+            std::stable_sort(rows.begin(), rows.end(), [&](int ra, int rb) {
+                const auto &a = t.cells[ra], &b = t.cells[rb];
+                static const std::string none;
+                const std::string &x = sc < (int)a.size() ? a[sc] : none, &y = sc < (int)b.size() ? b[sc] : none;
                 char* ex = nullptr;
                 char* ey = nullptr;
                 double nx = strtod(x.c_str(), &ex), ny = strtod(y.c_str(), &ey);
@@ -2057,21 +2094,30 @@ void App::DrawTablePanel(Document& d) {
             });
         }
         ImGuiListClipper clip;
-        clip.Begin((int)cells.size());
+        clip.Begin((int)rows.size());
         while (clip.Step())
             for (int i = clip.DisplayStart; i < clip.DisplayEnd; i++) {
+                const auto& row = t.cells[rows[i]];
                 ImGui::TableNextRow();
                 for (int c = 0; c < tcols; c++) {
                     ImGui::TableNextColumn();
-                    const std::string& s = cells[i][c];
+                    static const std::string none;
+                    const std::string& s = c < (int)row.size() ? row[c] : none;
                     ImGui::PushID(i * 97 + c);
                     if (c == 0) ImGui::PushFont(boldFont, 0);
                     ImGui::TextUnformatted(s.c_str());
                     if (c == 0) ImGui::PopFont();
-                    if (ImGui::IsItemHovered() && s.size() > 24) ImGui::SetTooltip("%s", s.c_str());
+                    bool asset = s.find("/Game/") != std::string::npos;
+                    if (ImGui::IsItemHovered() && (s.size() > 24 || asset)) ImGui::SetTooltip("%s%s", s.c_str(), asset ? "\n(double-click to open)" : "");
+                    if (asset && ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(0)) {
+                        size_t a = s.find("/Game/"), b = s.find_first_of("'\" ,)", a);
+                        i64 e = m_api->ResolveFile(s.substr(a, b == std::string::npos ? std::string::npos : b - a));
+                        if (e >= 0) OpenFile((u32)e, true);
+                    }
                     if (ImGui::BeginPopupContextItem("##cell")) {
                         if (ImGui::MenuItem("Copy Value")) CopyToClipboard(s);
-                        if (ImGui::MenuItem("Copy Row Name")) CopyToClipboard(cells[i][0]);
+                        if (ImGui::MenuItem("Copy Row Name")) CopyToClipboard(row.empty() ? std::string() : row[0]);
+                        if (ImGui::MenuItem("Filter this column by this value") && c < tcols) snprintf(d.tableColFilters[c].data(), 64, "=%s", s.c_str());
                         ImGui::EndPopup();
                     }
                     ImGui::PopID();
@@ -2080,8 +2126,21 @@ void App::DrawTablePanel(Document& d) {
         ImGui::EndTable();
     }
     ImGui::PopStyleColor();
+    if (exportCsv) {   // the shown rows in the shown order (every row when nothing filters)
+        TableData view;
+        view.columns = t.columns;
+        view.rowStruct = t.rowStruct;
+        view.curves = t.curves;
+        for (int r : rows) view.cells.push_back(t.cells[r]);
+        std::string csv = TableToCsv(view);
+        std::string rel = m_settings.exportKeepDirectories ? d.gamePath : d.gamePath.substr(d.gamePath.rfind('/') + 1);
+        std::wstring out = m_settings.outputDir + L"\\" + Widen(rel.substr(0, rel.rfind('.')) + (filtered ? "_filtered" : "") + ".csv");
+        for (auto& c : out) if (c == L'/') c = L'\\';
+        CreateDirectories(out.substr(0, out.find_last_of(L'\\')));
+        if (WriteWholeFile(out, csv.data(), csv.size())) LOGI("table (%zu rows) -> %s", rows.size(), Narrow(out).c_str());
+        else LOGW("could not write %s", Narrow(out).c_str());
+    }
 }
-
 // ================================================================== audio player (own design)
 
 void App::DrawAudioPanel(Document& d) {

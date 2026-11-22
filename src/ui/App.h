@@ -228,6 +228,7 @@ struct Document {
     // DataTable / CurveTable rows
     std::shared_ptr<TableData> table;
     char tableFilter[128] = {};
+    std::vector<std::array<char, 64>> tableColFilters;   // per column: substring, or >x <x >=x <=x =x !x
 
     // compiled shaders (Decompile Shaders): the list in the side panel, the selected one as text in the editor
     std::shared_ptr<std::vector<ShaderEntry>> shaders;

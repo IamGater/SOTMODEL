@@ -68,6 +68,8 @@ Blueprints add what native classes build at runtime: ship masts (`MastIntactMesh
 "Export glTF" in the map / Blueprint toolbar writes what the view shows as one .glb: the assembled Blueprint, the whole
 loaded map or only the part within a radius of the view target (optionally only the outliner's mesh filter), moved to
 the origin (`WorldExportOptions::clip` / `recenter` / `meshFilter`; the landscape is reloaded, the viewer frees its CPU copy).
+DataTable / CurveTable tabs show a sortable table with a filter per column (`>x`, `<=x`, `=x`, `!x` or a substring);
+"Export CSV" writes the rows shown, in the shown order, and double-clicking a `/Game/` path opens that asset.
 
 ## Configuration
 
