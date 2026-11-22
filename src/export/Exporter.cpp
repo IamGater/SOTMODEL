@@ -37,6 +37,7 @@ static Bytes MakeDds(const TextureInfo& t, const Bytes& data, int w, int h) {
     else if (f == "PF_BC4") dxgi = 80;
     else if (f == "PF_BC5" || f == "PF_ATI2") dxgi = 83;
     else if (f == "PF_BC6H") dxgi = 95;
+    else if (f == "PF_BC6H_SF16") dxgi = 96;
     else if (f == "PF_BC7") dxgi = srgb ? 99 : 98;
     else if (f == "PF_B8G8R8A8") dxgi = srgb ? 91 : 87;
     else if (f == "PF_R8G8B8A8") dxgi = srgb ? 29 : 28;

@@ -1,6 +1,9 @@
 #include "ue/TextureDecode.h"
 #include "ue/Texture.h"
 #include <cmath>
+#define BCDEC_IMPLEMENTATION
+#define BCDEC_STATIC
+#include "../third_party/bcdec/bcdec.h"
 
 static inline void Rgb565(u16 c, u8* o) {
     int r = (c >> 11) & 31, g = (c >> 5) & 63, b = c & 31;
@@ -96,7 +99,7 @@ namespace {
 struct FormatInfo { const char* name; int blockW, blockBytes; };   // blockW 1 = uncompressed
 const FormatInfo g_formats[] = {
     {"PF_DXT1", 4, 8}, {"PF_DXT3", 4, 16}, {"PF_DXT5", 4, 16}, {"PF_BC4", 4, 8}, {"PF_BC5", 4, 16}, {"PF_ATI2", 4, 16},
-    {"PF_BC6H", 4, 16}, {"PF_BC7", 4, 16},
+    {"PF_BC6H", 4, 16}, {"PF_BC6H_SF16", 4, 16}, {"PF_BC7", 4, 16},
     {"PF_B8G8R8A8", 1, 4}, {"PF_R8G8B8A8", 1, 4}, {"PF_A8R8G8B8", 1, 4}, {"PF_G8", 1, 1}, {"PF_A8", 1, 1}, {"PF_L8", 1, 1},
     {"PF_G16", 1, 2}, {"PF_V8U8", 1, 2}, {"PF_FloatRGBA", 1, 8}, {"PF_FloatRGB", 1, 6}, {"PF_A32B32G32R32F", 1, 16},
     {"PF_R16F", 1, 2}, {"PF_R32_FLOAT", 1, 4}, {"PF_G16R16", 1, 4}, {"PF_G16R16F", 1, 4}, {"PF_A2B10G10R10", 1, 4}, {"PF_R5G6B5_UNORM", 1, 2},
@@ -129,7 +132,6 @@ bool DecodePixels(const std::string& pf, const u8* data, size_t size, int w, int
         const u8* src = data + sl * sliceSize;
         u8* dst = out.rgba.data() + (size_t)sl * w * h * 4;
         if (f->blockW == 4) {
-            if (pf == "PF_BC6H") { if (error) *error = pf + " decoding is not implemented"; return false; }
             int bw = (w + 3) / 4, bh = (h + 3) / 4;
             u8 block[64];
             for (int by = 0; by < bh; by++) for (int bx = 0; bx < bw; bx++) {
@@ -138,6 +140,11 @@ bool DecodePixels(const std::string& pf, const u8* data, size_t size, int w, int
                 else if (pf == "PF_DXT3") DecodeBC2Block(b, block);
                 else if (pf == "PF_DXT5") DecodeBC3Block(b, block);
                 else if (pf == "PF_BC7") DecodeBC7Block(b, block);
+                else if (pf == "PF_BC6H" || pf == "PF_BC6H_SF16") {   // HDR: float RGB, tone mapped like the float formats
+                    float rgb[48];
+                    bcdec_bc6h_float(b, rgb, 4 * 3, pf == "PF_BC6H_SF16");
+                    for (int i = 0; i < 16; i++) { for (int k = 0; k < 3; k++) block[i * 4 + k] = ToneMap(rgb[i * 3 + k]); block[i * 4 + 3] = 255; }
+                }
                 else if (pf == "PF_BC4") {
                     DecodeBC4Block(b, block, 4);
                     for (int i = 0; i < 16; i++) { block[i * 4 + 1] = block[i * 4 + 2] = block[i * 4]; block[i * 4 + 3] = 255; }
