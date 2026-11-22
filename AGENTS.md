@@ -182,7 +182,18 @@ Typical flow: `search` → `get_package` → `get_properties` / `preview_*` → 
   overrides (ignored), Lifetime 0 = lives until the emitter dies with relative time looping over Required `LoopTime`,
   SubImageIndex runs past the grid (wraps), VFX textures are often masks without alpha (brightness used as alpha).
   The preview simulation covers spawn / bursts / lifetime / size / color / velocity / cone / acceleration / drag /
-  sphere + cylinder location / rotation / subUV; other modules are listed as not previewed.
+  sphere + cylinder location / rotation / mesh rotation (+ rate) / subUV; other modules are listed as not previewed.
+  Drawing: `PivotOffset` moves the quad ((0, -0.5) = bottom edge on the particle), velocity-aligned sprites put the
+  texture top along the velocity, SubImageIndex tables spanning more than two grids (SoT keys 0..1279 over the life)
+  play at 30 fps instead of over the life, `*_Blend` SubUV cross-fades frames, "Desaturate" materials grey the texture
+  and tint it with `EmissiveColourMultiply`, mesh emitters (TypeDataMesh) draw their mesh per particle (size = scale).
+  SoT has no Beam / Ribbon emitters (a scan of all ~920 systems): only sprites, GPU sprites, meshes and 2 AnimTrails
+  (weapon swing trails, not drawn). No soft-particle depth fade.
+- Explorer thumbnails (`App::Thumbnail`, async, 160 px): textures, meshes (headless render, LOD 1), materials (main
+  texture), particle systems (software sprite render ~2 s in), .wem (waveform), Blueprint classes (assembled actor,
+  no water / fog).
+- Settings: `AccentColor=RRGGBB` (Settings window presets + picker; `ApplyAccent` in Shell.cpp updates `kAccent` and
+  the ImGui style), `WindowPlacement=x,y,w,h,maximized` (saved on exit; first start uses ~90% of the work area).
 - Material uniform buffer (ue/Shaders.cpp): each shader map's FUniformExpressionSet (UE 4.10 order: vector, scalar,
   2D texture, cube texture expressions, parameter collection guids, 4 per-frame arrays; each expression = type FName +
   fields) is found by scanning for count + known expression FName. Layout: one float4 per vector expression, then the
