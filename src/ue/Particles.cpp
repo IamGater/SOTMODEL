@@ -686,6 +686,21 @@ bool LoadParticleTexture(PackageCache& cache, const std::string& material, int m
     // VFX masks usually have no alpha: use the brightness as coverage and let the particle colour tint it
     bool opaque = true;
     for (size_t i = 3; i < out.rgba.size() && opaque; i += 4) opaque = out.rgba[i] >= 250;
+    // "Desaturate" VFX materials (e.g. the green ghost fire) grey the texture and colour it with EmissiveColourMultiply
+    MaterialInfo mi;
+    if (!opaque && ReadMaterial(cache, material, mi) &&
+        std::find(mi.staticSwitches.begin(), mi.staticSwitches.end(), "Desaturate=true") != mi.staticSwitches.end()) {
+        float tint[3] = {1, 1, 1};
+        for (auto& v : mi.vectors)
+            if (v.name == "EmissiveColourMultiply") {
+                float m = std::max({v.r, v.g, v.b});
+                if (m > 1e-4f) tint[0] = v.r / m, tint[1] = v.g / m, tint[2] = v.b / m;
+            }
+        for (size_t i = 0; i + 3 < out.rgba.size(); i += 4) {
+            float l = 0.3f * out.rgba[i] + 0.59f * out.rgba[i + 1] + 0.11f * out.rgba[i + 2];
+            for (int k = 0; k < 3; k++) out.rgba[i + k] = (u8)std::clamp(l * tint[k], 0.f, 255.f);
+        }
+    }
     if (opaque)
         for (size_t i = 0; i + 3 < out.rgba.size(); i += 4) {
             u8 l = std::max({out.rgba[i], out.rgba[i + 1], out.rgba[i + 2]});
