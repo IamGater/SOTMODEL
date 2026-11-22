@@ -128,6 +128,7 @@ App::App() { m_settings.Load(); }
 App::~App() {
     m_exportCancel = true;
     m_shutdown = true;   // stops the reference indexer
+    if (m_contentJob) m_contentJob->cancel = true;
     for (auto& t : m_refThreads) t.join();
     m_classes.Stop();   // saves Classes.bin while the archives are still mounted
     m_jobs.reset();   // joins workers before the renderer / api go away
@@ -217,6 +218,24 @@ void App::StartMount() {
             }
             if (m_folder) SelectFolder(m_folder);
             for (auto& p0 : openOnStart) {
+                if (p0.rfind("content:", 0) == 0) {   // --content "uses=path;class=X;...": the search window's Content tab
+                    std::string q = p0.substr(8);
+                    for (size_t s = 0; s <= q.size();) {
+                        size_t e = std::min(q.find(';', s), q.size()), eq = q.find('=', s);
+                        if (eq < e) {
+                            std::string k = q.substr(s, eq - s), v = q.substr(eq + 1, e - eq - 1);
+                            char* dst = k == "class" ? m_csClass : k == "uses" ? m_csUses : k == "property" ? m_csProp : k == "value" ? m_csValue
+                                        : k == "name" ? m_csName : k == "folder" ? m_csFolder : nullptr;
+                            size_t cap = k == "class" || k == "property" ? 128 : k == "value" || k == "name" ? 256 : 512;
+                            if (dst) snprintf(dst, cap, "%s", v.c_str());
+                        }
+                        s = e + 1;
+                    }
+                    m_showSearch = true;
+                    m_searchTab = 3;
+                    StartContentSearch();
+                    continue;
+                }
                 bool shaders = p0.rfind("shaders:", 0) == 0;   // --shaders <path>: open its compiled shaders
                 bool hlsl = p0.rfind("hlsl:", 0) == 0;         // --material-hlsl <path>: its graph as HLSL
                 bool refs = p0.rfind("refs:", 0) == 0;         // --references <path>: its dependency graph
@@ -249,8 +268,10 @@ void App::ReloadArchives() {
     m_exportCancel = true;
     CloseDocument(0);   // cancels map loads so WaitIdle does not block on them
     m_shutdown = true;  // the reference indexer reads the archives too
+    if (m_contentJob) m_contentJob->cancel = true;
     for (auto& t : m_refThreads) t.join();
     m_refThreads.clear();
+    m_contentJob.reset();   // its entries index the old archives
     m_shutdown = false;
     m_api->references.reset();
     m_refReady = m_refBuilding = false;

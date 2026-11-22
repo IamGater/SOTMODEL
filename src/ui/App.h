@@ -379,7 +379,22 @@ private:
     i64 m_selected = -1;            // selected package (Packages list / explorer)
     u32 m_selFolder = UINT32_MAX;   // folder card selected in the explorer
     bool m_showSearch = false, m_focusGlobalSearch = false;   // Packages > Search window
-    int m_searchTab = 0;                       // 0 search, 1 references, 2 localization
+    int m_searchTab = 0;                       // 0 search, 1 references, 2 localization, 3 content
+    // Content tab (SearchContent): runs on its own thread, the table shows the last finished search
+    struct ContentJob {
+        ContentQuery query;
+        std::atomic<bool> cancel{false}, done{false};
+        std::atomic<int> progress{0}, total{0};
+        ContentSearchResult result;
+        std::string error;
+        bool ok = false;
+    };
+    std::shared_ptr<ContentJob> m_contentJob;
+    char m_csClass[128] = {}, m_csUses[512] = {}, m_csProp[128] = {}, m_csValue[256] = {}, m_csName[256] = {}, m_csFolder[512] = {};
+    bool m_csExact = false, m_csPendingIndex = false;
+    int m_csSelected = -1;
+    void DrawContentTab();
+    void StartContentSearch();
     char m_locQuery[256] = {};
     std::string m_locLast;
     std::vector<const LocEntry*> m_locResults;

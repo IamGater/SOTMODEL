@@ -82,5 +82,26 @@ private:
     friend void RegisterMeshTools(Api&);
 };
 
+// Content search (search_content tool and the UI's Content tab): every given filter must match.
+struct ContentQuery {
+    std::string cls, uses, prop, value, name, folder;   // class / imported asset / property path / value / path substring / folder
+    bool exact = false;
+    int limit = 100, scanLimit = 20000;
+};
+struct ContentHit {
+    u32 entry = 0;
+    std::string cls;
+    std::vector<std::string> matches;
+};
+struct ContentSearchResult {
+    std::vector<ContentHit> hits;
+    size_t candidates = 0;
+    int scanned = 0;
+    bool truncated = false, cancelled = false;
+};
+// progress/total count candidates; cancel stops early. False + error on bad filters (the index must exist for 'uses' when !buildIndex).
+bool SearchContent(Api& a, const ContentQuery& q, ContentSearchResult& out, std::string* error, const std::atomic<bool>* cancel = nullptr,
+                   std::atomic<int>* progress = nullptr, std::atomic<int>* total = nullptr, bool buildIndex = true);
+
 std::string Base64(const u8* data, size_t size);
 bool WildcardMatch(std::string_view pattern, std::string_view text);   // case-insensitive, * and ?

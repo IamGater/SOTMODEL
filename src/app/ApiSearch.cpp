@@ -122,94 +122,114 @@ void RegisterSearchTools(Api& api) {
                   R"({"type":"object","properties":{"folder":{"type":"string"},"class":{"type":"string"},"uses":{"type":"string"},"property":{"type":"string"},"value":{"type":"string"},"value_exact":{"type":"boolean","default":false},"name":{"type":"string"},"limit":{"type":"integer","default":100},"scan_limit":{"type":"integer","default":20000}}})",
                   "folder",
                   [](Api& a, const JsonValue& args) {
-                      std::string cls = args.GetStr("class"), uses = args.GetStr("uses"), prop = args.GetStr("property"), value = args.GetStr("value");
-                      std::string name = ToLower(args.GetStr("name")), folder = ToLower(Vfs::NormalizePath(args.GetStr("folder")));
-                      bool exact = args.GetBool("value_exact", false);
-                      int limit = (int)args.GetNum("limit", 100), scanLimit = (int)args.GetNum("scan_limit", 20000);
-                      if (cls.empty() && uses.empty() && prop.empty() && value.empty() && name.empty()) return ApiResult::Error("give at least one filter");
-                      if (!folder.empty() && folder.back() != '/') folder += '/';
-                      // candidates
-                      std::vector<u32> cand;
-                      std::string err, usesPkg;
-                      if (!uses.empty()) {
-                          i64 t = a.ResolveFile(uses);
-                          if (t < 0) return ApiResult::Error("not found: " + uses);
-                          ReferenceIndex* idx = a.EnsureReferences(true, &err);
-                          if (!idx) return ApiResult::Error(err);
-                          if (auto* r = idx->Referencers((u32)t)) cand = *r;
-                      } else {
-                          if (folder.empty() && (!prop.empty() || !value.empty() || !cls.empty()))
-                              return ApiResult::Error("restrict 'folder' (or use 'uses') - reading every package of the game takes long");
-                          for (u32 i = 0; i < a.vfs.FileCount(); i++) {
-                              std::string p = ToLower(a.vfs.Path(i));
-                              if (!IEndsWith(p, ".uasset") && !IEndsWith(p, ".umap")) continue;
-                              if (!folder.empty() && p.rfind(folder, 0) != 0) continue;
-                              cand.push_back(i);
-                          }
-                      }
+                      ContentQuery q;
+                      q.cls = args.GetStr("class");
+                      q.uses = args.GetStr("uses");
+                      q.prop = args.GetStr("property");
+                      q.value = args.GetStr("value");
+                      q.name = args.GetStr("name");
+                      q.folder = args.GetStr("folder");
+                      q.exact = args.GetBool("value_exact", false);
+                      q.limit = (int)args.GetNum("limit", 100);
+                      q.scanLimit = (int)args.GetNum("scan_limit", 20000);
+                      ContentSearchResult res;
+                      std::string err;
+                      if (!SearchContent(a, q, res, &err)) return ApiResult::Error(err);
                       JsonWriter w;
                       w.BeginObject();
                       w.Key("results");
                       w.BeginArray();
-                      int found = 0, scanned = 0;
-                      bool truncated = false;
-                      for (u32 e : cand) {
-                          std::string path(a.vfs.Path(e)), low = ToLower(path);
-                          if (!folder.empty() && low.rfind(folder, 0) != 0) continue;
-                          if (!name.empty() && low.find(name) == std::string::npos) continue;
-                          if (cls.empty() && prop.empty() && value.empty()) {   // path-only filters: no need to read the package
-                              w.BeginObject();
-                              w.KV("path", path);
-                              w.EndObject();
-                              if (++found >= limit) { truncated = true; break; }
-                              continue;
-                          }
-                          if (++scanned > scanLimit) { truncated = true; break; }
-                          auto pkg = a.cache->Load(e, &err);
-                          if (!pkg) continue;
-                          i32 main = pkg->MainExport();
-                          std::string mainCls = main ? pkg->ExportClass(main - 1) : "";
-                          if (!cls.empty() && !IEquals(mainCls, cls)) continue;
-                          std::vector<std::string> hits;
-                          if (!prop.empty() || !value.empty()) {
-                              for (size_t x = 0; x < pkg->Exports().size() && hits.size() < 20; x++) {
-                                  std::string perr;
-                                  PropertyList props = pkg->ReadProperties(x, nullptr, &perr);
-                                  std::vector<std::string> h;
-                                  MatchProps(props, "", prop, value, exact, h);
-                                  for (auto& s : h) hits.push_back(pkg->Exports()[x].objectName + ": " + s);
-                                  if (IsTableClass(pkg->ExportClass(x))) {   // DataTable rows count as properties too
-                                      TableData t;
-                                      if (ReadTable(*pkg, x, t))
-                                          for (auto& row : t.rows) {
-                                              std::vector<std::string> rh;
-                                              MatchProps(row.fields, "", prop, value, exact, rh);
-                                              for (auto& s : rh) hits.push_back("Rows." + row.name + ": " + s);
-                                          }
-                                  }
-                              }
-                              if (hits.empty()) continue;
-                          }
+                      for (auto& h : res.hits) {
                           w.BeginObject();
-                          w.KV("path", path);
-                          w.KV("class", mainCls);
-                          if (!hits.empty()) {
+                          w.KV("path", std::string(a.vfs.Path(h.entry)));
+                          if (!h.cls.empty()) w.KV("class", h.cls);
+                          if (!h.matches.empty()) {
                               w.Key("matches");
                               w.BeginArray();
-                              for (size_t i = 0; i < hits.size() && i < 10; i++) w.Str(hits[i]);
+                              for (size_t i = 0; i < h.matches.size() && i < 10; i++) w.Str(h.matches[i]);
                               w.EndArray();
                           }
                           w.EndObject();
-                          if (++found >= limit) { truncated = true; break; }
                       }
                       w.EndArray();
-                      w.KV("found", found);
-                      w.KV("candidates", (i64)cand.size());
-                      w.KV("scanned", scanned);
-                      if (truncated) w.KV("truncated", true);
+                      w.KV("found", (i64)res.hits.size());
+                      w.KV("candidates", (i64)res.candidates);
+                      w.KV("scanned", res.scanned);
+                      if (res.truncated) w.KV("truncated", true);
                       w.EndObject();
                       ApiResult r;
                       r.json = w.Take();
                       return r;
                   }});
+}
+
+bool SearchContent(Api& a, const ContentQuery& q, ContentSearchResult& out, std::string* error, const std::atomic<bool>* cancel,
+                   std::atomic<int>* progress, std::atomic<int>* total, bool buildIndex) {
+    auto fail = [&](const std::string& m) { if (error) *error = m; return false; };
+    std::string name = ToLower(q.name), folder = ToLower(Vfs::NormalizePath(q.folder));
+    if (q.cls.empty() && q.uses.empty() && q.prop.empty() && q.value.empty() && name.empty()) return fail("give at least one filter");
+    if (!folder.empty() && folder.back() != '/') folder += '/';
+    // candidates
+    std::vector<u32> cand;
+    std::string err;
+    if (!q.uses.empty()) {
+        i64 t = a.ResolveFile(q.uses);
+        if (t < 0) return fail("not found: " + q.uses);
+        ReferenceIndex* idx = a.EnsureReferences(buildIndex, &err);
+        if (!idx) return fail(err.empty() ? "the reference index is not ready" : err);
+        if (auto* r = idx->Referencers((u32)t)) cand = *r;
+    } else {
+        if (folder.empty() && (!q.prop.empty() || !q.value.empty() || !q.cls.empty()))
+            return fail("restrict 'folder' (or use 'uses') - reading every package of the game takes long");
+        for (u32 i = 0; i < a.vfs.FileCount(); i++) {
+            std::string p = ToLower(a.vfs.Path(i));
+            if (!IEndsWith(p, ".uasset") && !IEndsWith(p, ".umap")) continue;
+            if (!folder.empty() && p.rfind(folder, 0) != 0) continue;
+            cand.push_back(i);
+        }
+    }
+    out = {};
+    out.candidates = cand.size();
+    if (total) *total = (int)cand.size();
+    int done = 0;
+    for (u32 e : cand) {
+        if (progress) *progress = ++done;
+        if (cancel && *cancel) { out.cancelled = true; break; }
+        std::string low = ToLower(a.vfs.Path(e));
+        if (!folder.empty() && low.rfind(folder, 0) != 0) continue;
+        if (!name.empty() && low.find(name) == std::string::npos) continue;
+        ContentHit hit;
+        hit.entry = e;
+        if (!q.cls.empty() || !q.prop.empty() || !q.value.empty()) {   // path-only filters don't need to read the package
+            if (++out.scanned > q.scanLimit) { out.truncated = true; break; }
+            auto pkg = a.cache->Load(e, &err);
+            if (!pkg) continue;
+            i32 main = pkg->MainExport();
+            hit.cls = main ? pkg->ExportClass(main - 1) : "";
+            if (!q.cls.empty() && !IEquals(hit.cls, q.cls)) continue;
+            auto& hits = hit.matches;
+            if (!q.prop.empty() || !q.value.empty()) {
+                for (size_t x = 0; x < pkg->Exports().size() && hits.size() < 20; x++) {
+                    std::string perr;
+                    PropertyList props = pkg->ReadProperties(x, nullptr, &perr);
+                    std::vector<std::string> h;
+                    MatchProps(props, "", q.prop, q.value, q.exact, h);
+                    for (auto& s : h) hits.push_back(pkg->Exports()[x].objectName + ": " + s);
+                    if (IsTableClass(pkg->ExportClass(x))) {   // DataTable rows count as properties too
+                        TableData t;
+                        if (ReadTable(*pkg, x, t))
+                            for (auto& row : t.rows) {
+                                std::vector<std::string> rh;
+                                MatchProps(row.fields, "", q.prop, q.value, q.exact, rh);
+                                for (auto& s : rh) hits.push_back("Rows." + row.name + ": " + s);
+                            }
+                    }
+                }
+                if (hits.empty()) continue;
+            }
+        }
+        out.hits.push_back(std::move(hit));
+        if ((int)out.hits.size() >= q.limit) { out.truncated = true; break; }
+    }
+    return true;
 }

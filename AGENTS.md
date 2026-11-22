@@ -42,7 +42,8 @@ renders the window off-screen-safe (from the app's own back buffer), saves it on
 handy for checking what the viewer shows without screen capture. `--shaders <path>` opens the compiled shaders
 of a material package or of `Engine/Content/GlobalShaderCache-PCD3D_SM5.bin` instead; `--material-hlsl <path>`
 opens a material's graph translated to HLSL next to its node graph; `--references <path>` opens the References tab
-on the package's dependency graph; 3D views open in a separate viewer window that follows the active tab
+on the package's dependency graph; `--content "uses=<path>;class=<class>;property=..;value=..;name=..;folder=.."`
+runs the search window's Content tab (the GUI face of `search_content`, same filters, results open on double-click); 3D views open in a separate viewer window that follows the active tab
 (`ViewerWindow=0` in Settings.ini / "Back to tab" keeps them inside the tabs; `--popout` forces the window for one run);
 `--screenshot` saves that window's back buffer next to the main one as `<file>.viewer.png`.
 More automation for the 3D views: `--pick u,v` clicks a map's viewport once at that fraction of its size (the pick is

@@ -2725,10 +2725,10 @@ void App::DrawSearchWindow() {
     // Search / References (FModel SearchView tabs)
     {
         ImDrawList* dl = ImGui::GetWindowDrawList();
-        const char* names[3] = {"Search", "References", "Localization"};
+        const char* names[4] = {"Search", "References", "Localization", "Content"};
         float tw = Dip(120), th = Dip(24);
         ImVec2 p = ImGui::GetCursorScreenPos();
-        for (int i = 0; i < 3; i++) {
+        for (int i = 0; i < 4; i++) {
             ImGui::SetCursorScreenPos(ImVec2(p.x + tw * i, p.y));
             ImGui::PushID(i);
             if (ImGui::InvisibleButton("##stab", ImVec2(tw, th))) m_searchTab = i;
@@ -2742,9 +2742,10 @@ void App::DrawSearchWindow() {
         dl->AddRectFilled(ImVec2(p.x, p.y + th), ImVec2(p.x + w, p.y + th + Dip(4)), kTabSel);
         ImGui::SetCursorScreenPos(ImVec2(p.x, p.y + th + Dip(10)));
     }
-    if (m_searchTab == 1 || m_searchTab == 2) {
+    if (m_searchTab >= 1 && m_searchTab <= 3) {
         if (m_searchTab == 1) DrawReferencesTab();
-        else DrawLocalizationTab();
+        else if (m_searchTab == 2) DrawLocalizationTab();
+        else DrawContentTab();
         ImGui::End();
         ImGui::PopStyleColor(3);
         return;
@@ -2870,6 +2871,181 @@ void App::DrawLocalizationTab() {
     }
 }
 
+// Content tab: packages by class, imported asset ("uses"), property value and path (SearchContent, like the search_content tool)
+void App::StartContentSearch() {
+    if (m_mountState != MountState::Ready) return;
+    ContentQuery q;
+    q.cls = m_csClass;
+    q.uses = m_csUses;
+    q.prop = m_csProp;
+    q.value = m_csValue;
+    q.name = m_csName;
+    q.folder = m_csFolder;
+    q.exact = m_csExact;
+    q.limit = 5000;
+    if (!q.uses.empty() && !m_refReady) {   // 'uses' reads the reference index: build it first, the search starts once it is ready
+        StartReferenceIndex();
+        m_csPendingIndex = true;
+        return;
+    }
+    m_csPendingIndex = false;
+    if (m_contentJob && !m_contentJob->done) m_contentJob->cancel = true;
+    auto job = std::make_shared<ContentJob>();
+    job->query = q;
+    m_contentJob = job;
+    m_csSelected = -1;
+    m_refThreads.emplace_back([this, job] {
+        job->ok = SearchContent(*m_api, job->query, job->result, &job->error, &job->cancel, &job->progress, &job->total, false);
+        job->done = true;
+        Post([] {});
+    });
+}
+
+void App::DrawContentTab() {
+    const Vfs& vfs = m_api->vfs;
+    bool go = false;
+    float gap = Dip(6), labelW = Dip(78), half = (ImGui::GetContentRegionAvail().x - gap * 3) * 0.5f;
+    auto field = [&](const char* label, const char* id, char* buf, size_t size, const char* hint, float w) {
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted(label);
+        ImGui::SameLine(0, 0);
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + std::max(0.f, labelW - ImGui::CalcTextSize(label).x));
+        ImGui::SetNextItemWidth(w);
+        PushFieldStyle();
+        if (ImGui::InputTextWithHint(id, hint, buf, size, ImGuiInputTextFlags_EnterReturnsTrue)) go = true;
+        PopFieldStyle();
+    };
+    float btnW = Dip(92);
+    bool selPkg = m_selected >= 0 && (size_t)m_selected < vfs.FileCount() && IsPackageFile(vfs.Path((u32)m_selected));
+    // row 1: uses (+ selected package) | class (+ common classes)
+    field("Uses", "##csuses", m_csUses, sizeof(m_csUses), "imports this asset (path)", half - labelW - btnW - gap);
+    ImGui::SameLine(0, gap);
+    PushFieldStyle();
+    ImGui::BeginDisabled(!selPkg);
+    if (ImGui::Button("Selected##csu", ImVec2(btnW, FieldH()))) snprintf(m_csUses, sizeof(m_csUses), "%s", std::string(vfs.Path((u32)m_selected)).c_str());
+    ImGui::EndDisabled();
+    PopFieldStyle();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Use the package selected in the explorer");
+    ImGui::SameLine(0, gap * 2);
+    field("Class", "##cscls", m_csClass, sizeof(m_csClass), "main asset class", half - labelW - FieldH() - gap);
+    ImGui::SameLine(0, 0);
+    PushFieldStyle();
+    if (ImGui::Button("##csclsm", ImVec2(FieldH(), FieldH()))) ImGui::OpenPopup("##csclasses");
+    PopFieldStyle();
+    {
+        ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
+        IconChevron(ImGui::GetWindowDrawList(), ImVec2((a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f), Dip(14), kPi * 0.5f, kText);
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Common classes");
+    if (ImGui::BeginPopup("##csclasses")) {
+        static const char* kClasses[] = {"BlueprintGeneratedClass", "StaticMesh", "SkeletalMesh", "Material", "MaterialInstanceConstant", "Texture2D",
+                                         "AnimSequence", "AnimMontage", "ParticleSystem", "AkAudioEvent", "SoundWave", "DataTable", "CurveFloat", "World"};
+        for (const char* c : kClasses)
+            if (ImGui::Selectable(c)) snprintf(m_csClass, sizeof(m_csClass), "%s", c);
+        ImGui::EndPopup();
+    }
+    // row 2: property | value (+ exact)
+    field("Property", "##csprop", m_csProp, sizeof(m_csProp), "name or dotted path", half - labelW);
+    ImGui::SameLine(0, gap * 2);
+    float exactW = ImGui::CalcTextSize("Exact").x + ImGui::GetFrameHeight() + Dip(8);
+    field("Value", "##csval", m_csValue, sizeof(m_csValue), "value contains", half - labelW - exactW - gap);
+    ImGui::SameLine(0, gap);
+    ImGui::Checkbox("Exact", &m_csExact);
+    // row 3: folder (+ current folder) | path contains
+    field("Folder", "##csfold", m_csFolder, sizeof(m_csFolder), "restricts the packages read", half - labelW - btnW - gap);
+    ImGui::SameLine(0, gap);
+    PushFieldStyle();
+    if (ImGui::Button("Current##csf", ImVec2(btnW, FieldH()))) snprintf(m_csFolder, sizeof(m_csFolder), "%s", FolderPath(vfs.Folders(), m_folder).c_str());
+    PopFieldStyle();
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Use the folder open in the explorer");
+    ImGui::SameLine(0, gap * 2);
+    field("Name", "##csname", m_csName, sizeof(m_csName), "path contains", half - labelW);
+
+    bool running = m_contentJob && !m_contentJob->done;
+    if (Button("Search", ImVec2(Dip(100), 0)) || go) StartContentSearch();
+    ImGui::SameLine(0, gap);
+    if (running || m_csPendingIndex) {
+        if (Button("Cancel", ImVec2(Dip(100), 0))) {
+            if (m_contentJob) m_contentJob->cancel = true;
+            m_csPendingIndex = false;
+        }
+        ImGui::SameLine(0, gap);
+    }
+    if (m_csPendingIndex) {
+        if (m_refReady) StartContentSearch();
+        int done = m_refDone, total = std::max(1, m_refTotal.load());
+        ImGui::ProgressBar((float)done / total, ImVec2(-FLT_MIN, 0), Fmt("Indexing package imports %d / %d", done, total).c_str());
+        m_busyFrames = 3;
+    } else if (running) {
+        int done = m_contentJob->progress, total = std::max(1, m_contentJob->total.load());
+        ImGui::ProgressBar((float)done / total, ImVec2(-FLT_MIN, 0), Fmt("Reading %d / %d", done, total).c_str());
+        m_busyFrames = 3;
+    } else if (!m_contentJob) {
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextDisabled("Every filter given must match. 'Uses' searches the whole game; without it, give a folder.");
+    } else if (!m_contentJob->ok) {
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(kError), "%s", m_contentJob->error.c_str());
+    } else {
+        auto& r = m_contentJob->result;
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextDisabled("%zu result(s) of %zu candidate(s)%s%s", r.hits.size(), r.candidates, r.cancelled ? " (cancelled)" : "",
+                            r.truncated ? " (truncated)" : "");
+    }
+    if (!m_contentJob || !m_contentJob->done || !m_contentJob->ok) return;
+    auto job = m_contentJob;   // the table keeps it alive while drawing
+    auto& hits = job->result.hits;
+    ImGui::Dummy(ImVec2(0, Dip(2)));
+    if (ImGui::BeginTable("##csres", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable | ImGuiTableFlags_BordersInnerV)) {
+        ImGui::TableSetupScrollFreeze(0, 1);
+        ImGui::TableSetupColumn("Path", ImGuiTableColumnFlags_WidthStretch, 3);
+        ImGui::TableSetupColumn("Class", ImGuiTableColumnFlags_WidthFixed, Dip(170));
+        ImGui::TableSetupColumn("Match", ImGuiTableColumnFlags_WidthStretch, 2);
+        ImGui::TableHeadersRow();
+        ImGuiListClipper clip;
+        clip.Begin((int)hits.size(), RowPitch(ImGui::GetTextLineHeight()));
+        while (clip.Step())
+            for (int i = clip.DisplayStart; i < clip.DisplayEnd; i++) {
+                const ContentHit& h = hits[i];
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::PushID(i);
+                std::string path(vfs.Path(h.entry));
+                if (ImGui::Selectable(path.c_str(), m_csSelected == i, ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowDoubleClick)) {
+                    m_csSelected = i;
+                    m_selected = h.entry;
+                    if (ImGui::IsMouseDoubleClicked(0)) {
+                        SelectFolder(FolderByPath(path.substr(0, path.rfind('/'))));
+                        m_selected = h.entry;
+                        OpenFile(h.entry);
+                    }
+                }
+                if (ImGui::IsItemHovered()) {   // the columns cut long paths and matches
+                    std::string tip = path + (h.matches.empty() ? "" : "\n\n");
+                    for (size_t k = 0; k < h.matches.size() && k < 12; k++) tip += h.matches[k] + "\n";
+                    if (h.matches.size() > 12) tip += "...";
+                    ImGui::SetTooltip("%s", tip.c_str());
+                }
+                if (ImGui::BeginPopupContextItem("##csctx")) {
+                    DrawFileMenu(h.entry);
+                    ImGui::EndPopup();
+                }
+                ImGui::TableNextColumn();
+                std::string cls = h.cls.empty() ? m_classes.Get(h.entry) : h.cls;   // path-only searches do not read the package
+                ImGui::TextDisabled("%s", cls.empty() ? "-" : cls.c_str());
+                ImGui::TableNextColumn();
+                if (!h.matches.empty()) {
+                    ImGui::TextDisabled("%s", h.matches[0].c_str());
+                    if (h.matches.size() > 1) {
+                        ImGui::SameLine();
+                        ImGui::TextDisabled("(+%zu)", h.matches.size() - 1);
+                    }
+                }
+                ImGui::PopID();
+            }
+        ImGui::EndTable();
+    }
+}
 // ================================================================== file context menu (FModel FileContextMenu)
 
 void App::DrawFileMenu(u32 e) {
@@ -2880,6 +3056,11 @@ void App::DrawFileMenu(u32 e) {
     if (MenuItemIcon("Extract in New Tab", nullptr, IconExportBox)) OpenFile(e, true);
     if (MenuItemIcon("Show Metadata", nullptr, IconInfo, pkg)) ShowMetadata(e, true);
     if (MenuItemIcon("Find References", nullptr, IconSearch, pkg)) FindReferences(e);
+    if (MenuItemIcon("Search Content Using It", nullptr, IconSearch, pkg)) {   // Content tab with "uses" filled in
+        snprintf(m_csUses, sizeof(m_csUses), "%s", path.c_str());
+        m_showSearch = true;
+        m_searchTab = 3;
+    }
     if (MenuItemIcon("Decompile Blueprint", nullptr, IconCube, pkg)) DecompileBlueprintTab(e);
     if (MenuItemIcon("Decompile Shaders", nullptr, IconCube, pkg || IsShaderCacheFile(path))) DecompileShadersTab(e);
     if (MenuItemIcon("Material HLSL", nullptr, IconCube, pkg)) MaterialHlslTab(e);
