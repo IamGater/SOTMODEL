@@ -1281,6 +1281,12 @@ void App::DrawWorldExport(Document& d) {
         inst += n;
         meshes += n > 0;
     }
+    for (auto& s : w.splines) {   // bent meshes: one each
+        Vec3 p = s.transform.Translation() - c;
+        if ((filtered && ToLower(s.mesh).find(filter) == std::string::npos) || (part && Dot(p, p) > r2)) continue;
+        inst++;
+        meshes++;
+    }
     ImGui::TextDisabled("%zu instances of %zu meshes", inst, meshes);
     if (d.worldFilter[0]) ImGui::Checkbox(Fmt("Only meshes matching \"%s\"", d.worldFilter).c_str(), &d.expFiltered);
     if (!d.worldBlueprint) {

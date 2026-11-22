@@ -154,3 +154,5 @@ private:
 };
 
 bool IsWorldClass(std::string_view cls);
+// Bends a mesh LOD along a spline mesh component's curve (positions / normals into component space; tangents dropped).
+void DeformSplineMesh(MeshLod& lod, const Vec3& boundsMin, const Vec3& boundsMax, const SplineMeshParams& p);

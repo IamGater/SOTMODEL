@@ -18,50 +18,6 @@ static std::shared_ptr<GpuMesh> WithMaterials(GpuAssets& assets, const std::shar
     return copy;
 }
 
-void DeformSplineMesh(MeshLod& lod, const Vec3& bmin, const Vec3& bmax, const SplineMeshParams& p) {
-    int ax = std::clamp(p.forwardAxis, 0, 2);
-    auto get = [](const Vec3& v, int a) { return a == 0 ? v.x : a == 1 ? v.y : v.z; };
-    float lo = get(bmin, ax), hi = get(bmax, ax);
-    float len = hi - lo;
-    if (len < 1e-4f) len = 1;
-    auto hermite = [&](float t) {
-        float t2 = t * t, t3 = t2 * t;
-        return p.startPos * (2 * t3 - 3 * t2 + 1) + p.startTangent * (t3 - 2 * t2 + t) + p.endPos * (-2 * t3 + 3 * t2) + p.endTangent * (t3 - t2);
-    };
-    auto hermiteDir = [&](float t) {
-        float t2 = t * t;
-        Vec3 d = p.startPos * (6 * t2 - 6 * t) + p.startTangent * (3 * t2 - 4 * t + 1) + p.endPos * (-6 * t2 + 6 * t) + p.endTangent * (3 * t2 - 2 * t);
-        return Length(d) < 1e-6f ? Normalize(p.endPos - p.startPos) : Normalize(d);
-    };
-    for (size_t i = 0; i < lod.positions.size(); i++) {
-        Vec3 v = lod.positions[i];
-        float t = (get(v, ax) - lo) / len;
-        Vec3 pos = hermite(t), dir = hermiteDir(t);
-        Vec3 bx = Normalize(Cross(p.upDir, dir)), by = Normalize(Cross(dir, bx));
-        Vec2 off{p.startOffset.x + (p.endOffset.x - p.startOffset.x) * t, p.startOffset.y + (p.endOffset.y - p.startOffset.y) * t};
-        pos = pos + bx * off.x + by * off.y;
-        float roll = p.startRoll + (p.endRoll - p.startRoll) * t;
-        float c = cosf(roll), s = sinf(roll);
-        Vec3 xv = bx * c - by * s, yv = by * c + bx * s;
-        Vec2 sc{p.startScale.x + (p.endScale.x - p.startScale.x) * t, p.startScale.y + (p.endScale.y - p.startScale.y) * t};
-        // the two cross-section axes of the mesh, per forward axis (USplineMeshComponent::CalcSliceTransform)
-        float a, b;
-        if (ax == 0) { a = v.y; b = v.z; }
-        else if (ax == 1) { a = v.z; b = v.x; }
-        else { a = v.x; b = v.y; }
-        lod.positions[i] = pos + xv * (a * sc.x) + yv * (b * sc.y);
-        if (i < lod.normals.size()) {
-            Vec3 n = lod.normals[i];
-            float nf = get(n, ax), na, nb;
-            if (ax == 0) { na = n.y; nb = n.z; }
-            else if (ax == 1) { na = n.z; nb = n.x; }
-            else { na = n.x; nb = n.y; }
-            lod.normals[i] = Normalize(dir * nf + xv * na + yv * nb);
-        }
-    }
-    lod.tangents.clear();   // no longer valid; the shader skips normal mapping without tangents
-}
-
 void WorldScene::Build(const WorldData& wd, const std::function<bool()>& cancel, const std::function<void(int, int)>& progress) {
     m_items.clear();
     m_pickMeshes.clear();

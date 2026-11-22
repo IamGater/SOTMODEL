@@ -89,4 +89,3 @@ private:
 };
 
 // CPU deformation of a mesh LOD along a SplineMeshComponent's Hermite curve (component space).
-void DeformSplineMesh(MeshLod& lod, const Vec3& boundsMin, const Vec3& boundsMax, const SplineMeshParams& p);

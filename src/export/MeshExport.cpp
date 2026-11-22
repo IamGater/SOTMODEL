@@ -262,6 +262,12 @@ static WorldData ClipWorld(const WorldData& w, const WorldExportOptions& wo) {
             }
         if (!ng.instances.empty()) o.groups.push_back(std::move(ng));
     }
+    for (auto& s : w.splines)
+        if (inside(s.transform.Translation()) && (filter.empty() || ToLower(s.mesh).find(filter) != std::string::npos)) {
+            WorldSpline ns = s;
+            ns.transform = shift(s.transform);
+            o.splines.push_back(std::move(ns));
+        }
     for (auto& l : w.landscapes) {   // patches touching the sphere
         Vec3 q = VMax(l.boundsMin, VMin(c, l.boundsMax));
         if (wo.clip && Dot(q - c, q - c) > r2) continue;
@@ -297,7 +303,7 @@ bool ExportWorldGlb(PackageCache& cache, const WorldData& world, const WorldExpo
     bool part = wo.clip || wo.recenter || !wo.meshFilter.empty();
     if (part) clipped = ClipWorld(world, wo);
     const WorldData& w = part ? clipped : world;
-    if (part && w.groups.empty() && w.landscapes.empty()) { if (error) *error = "nothing matches (radius / mesh filter)"; return false; }
+    if (part && w.groups.empty() && w.landscapes.empty() && w.splines.empty()) { if (error) *error = "nothing matches (radius / mesh filter)"; return false; }
     GltfBuilder g;
     MeshExportOptions mo;
     mo.embedTextures = wo.textures;
@@ -311,7 +317,7 @@ bool ExportWorldGlb(PackageCache& cache, const WorldData& world, const WorldExpo
         levelNodes.push_back(g.AddNode(name.substr(0, name.rfind('.')), -1));
     }
     if (levelNodes.empty()) levelNodes.push_back(g.AddNode("World", -1));
-    int done = 0, total = (int)w.groups.size() + (wo.landscape ? 1 : 0), meshes = 0;
+    int done = 0, total = (int)w.groups.size() + (int)w.splines.size() + (wo.landscape ? 1 : 0), meshes = 0;
     for (auto& grp : w.groups) {
         if (progress) progress(done, total);
         done++;
@@ -334,6 +340,33 @@ bool ExportWorldGlb(PackageCache& cache, const WorldData& world, const WorldExpo
             GltfBuilder::ConvertMatrix(&inst.transform.m[0][0], m);
             g.AddNode(shortName, meshIdx, m, levelNodes[std::min<size_t>(inst.level, levelNodes.size() - 1)]);
         }
+    }
+    // spline meshes (pipes, ropes, fences): each one bent along its curve into its own glTF mesh
+    for (auto& s : w.splines) {
+        if (progress) progress(done, total);
+        done++;
+        std::string err;
+        auto pkg = cache.LoadPath(s.mesh, &err);
+        size_t dot = s.mesh.rfind('.');
+        i32 ex = pkg ? pkg->FindExport(dot == std::string::npos ? std::string_view{} : std::string_view(s.mesh).substr(dot + 1)) : 0;
+        if (pkg && !ex) ex = pkg->MainExport();
+        MeshData mesh;
+        if (!ex || !ReadMesh(*pkg, ex - 1, mesh, &err) || mesh.lods.empty()) {
+            LOGW("map export: spline %s: %s", s.mesh.c_str(), err.c_str());
+            continue;
+        }
+        int lod = std::clamp(wo.lod, 0, (int)mesh.lods.size() - 1);
+        MeshLod bent = mesh.lods[lod];
+        DeformSplineMesh(bent, mesh.boundsMin, mesh.boundsMax, s.params);
+        mesh.lods = {std::move(bent)};
+        for (size_t k = 0; k < s.materials.size() && k < mesh.materials.size(); k++)
+            if (!s.materials[k].empty()) mesh.materials[k].materialPath = s.materials[k];
+        std::vector<int> map = mats.ResolveAll(mesh);
+        int meshIdx = g.AddMesh(mesh, 0, map, false);
+        meshes++;
+        float m[16];
+        GltfBuilder::ConvertMatrix(&s.transform.m[0][0], m);
+        g.AddNode("Spline_" + s.mesh.substr(s.mesh.rfind('.') + 1), meshIdx, m, levelNodes[std::min<size_t>(s.level, levelNodes.size() - 1)]);
     }
     if (wo.landscape && !w.landscapes.empty()) {
         // terrain patches are already in world space; vertex colours carry the paint layers
