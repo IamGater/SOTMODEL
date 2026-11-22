@@ -504,8 +504,23 @@ void App::LoadDocument(std::shared_ptr<Document> d) {
                     d->psLength = std::max(d->psLength, e.delay + e.duration);
                 }
                 d->psLength = std::min(d->psLength, 10.f);
+                d->psMeshes = LoadParticleMeshes(*ps);
                 d->psVisible.assign(ps->emitters.size(), 1);
                 ParticleFrame(*ps, d->psLength, d->psCentre, d->psDist);
+                // mesh emitters: their size is a scale on the mesh, so frame the scaled mesh too
+                for (size_t i = 0; i < ps->emitters.size() && i < d->psMeshes.size(); i++) {
+                    if (!d->psMeshes[i]) continue;
+                    float scale = 1;
+                    for (auto& m : ps->emitters[i].modules)
+                        if (m.enabled && m.cls == "ParticleModuleSize")
+                            if (auto c = m.Curve("StartSize"))
+                                for (int ch = 0; ch < c->dims; ch++) {
+                                    float mn, mx;
+                                    c->Range(ch, mn, mx);
+                                    scale = std::max(scale, std::max(fabsf(mn), fabsf(mx)));
+                                }
+                    d->psDist = std::max(d->psDist, d->psMeshes[i]->radius * scale * 3.f);
+                }
                 d->camera.target = d->psCentre;
                 d->camera.distance = d->psDist;
                 d->camera.yaw = d->psYaw;
@@ -843,6 +858,22 @@ void App::PlaceAttachments(Document& d, const std::vector<Mat4>* boneWorld) {
     }
 }
 
+// Worker thread: the meshes of mesh emitters (TypeDataMesh), one per emitter (null for sprite emitters or when unreadable).
+std::vector<std::shared_ptr<GpuMesh>> App::LoadParticleMeshes(const ParticleSystemInfo& ps) {
+    std::vector<std::shared_ptr<GpuMesh>> out(ps.emitters.size());
+    for (size_t i = 0; i < ps.emitters.size(); i++) {
+        const std::string& path = ps.emitters[i].mesh;
+        if (path.empty()) continue;
+        std::string err;
+        auto pkg = m_api->cache->LoadPath(path, &err);
+        i32 main = pkg ? pkg->MainExport() : 0;
+        MeshData m;
+        if (main && ReadMesh(*pkg, main - 1, m, &err)) out[i] = m_assets->Mesh(m, 0);
+        if (!out[i]) Log(LogLevel::Warn, "particle mesh %s: %s", path.c_str(), err.empty() ? "no geometry" : err.c_str());
+    }
+    return out;
+}
+
 // Worker thread: a particle system with its emitter textures and a simulation, ready to draw at a socket.
 bool App::LoadParticleEffect(const Package& pkg, Document::Attachment& at, std::string* error) {
     auto ps = std::make_shared<ParticleSystemInfo>();
@@ -855,7 +886,7 @@ bool App::LoadParticleEffect(const Package& pkg, Document::Attachment& at, std::
         at.psLength = std::max(at.psLength, e.delay + e.duration);
     }
     at.psLength = std::min(at.psLength, 10.f);
-    at.looks = ParticleLooks(*ps, tex);
+    at.looks = ParticleLooks(*ps, tex, LoadParticleMeshes(*ps));
     at.sim = std::make_shared<ParticleSim>();
     at.sim->Init(*ps);
     at.ps = ps;

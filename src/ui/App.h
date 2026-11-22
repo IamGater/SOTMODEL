@@ -113,6 +113,7 @@ struct Document {
     std::shared_ptr<ParticleSystemInfo> particles;
     std::shared_ptr<ParticleSim> psim;
     std::vector<std::shared_ptr<GpuTexture>> psTextures;   // per emitter (material's texture, masks as alpha)
+    std::vector<std::shared_ptr<GpuMesh>> psMeshes;        // per emitter: the TypeDataMesh mesh (null for sprites)
     std::vector<char> psVisible;
     float psTime = 0, psSpeed = 1, psLength = 1, psYaw = -135, psPitch = -15, psDist = 300;
     Vec3 psCentre;
@@ -360,6 +361,7 @@ private:
     void DrawAttachControls(Document& d);   // attach a mesh to one of the shown mesh's sockets
     void AttachMesh(std::shared_ptr<Document> d, std::string meshPath, std::string socket);   // loads in the background (mesh or particle system)
     bool LoadParticleEffect(const Package& pkg, Document::Attachment& at, std::string* error);
+    std::vector<std::shared_ptr<GpuMesh>> LoadParticleMeshes(const ParticleSystemInfo& ps);   // worker thread
     void PlaceAttachments(Document& d, const std::vector<Mat4>* boneWorld);   // null: reference pose; steps attached particles
     void RequestGraphShaders(Document& d);   // compiles the graph shaders of the shown mesh's materials in the background
     void DrawWorld(Document& d);

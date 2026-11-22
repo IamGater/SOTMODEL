@@ -2,12 +2,14 @@
 #include <algorithm>
 #include <cmath>
 
-std::vector<ParticleLook> ParticleLooks(const ParticleSystemInfo& ps, const std::vector<std::shared_ptr<GpuTexture>>& textures) {
+std::vector<ParticleLook> ParticleLooks(const ParticleSystemInfo& ps, const std::vector<std::shared_ptr<GpuTexture>>& textures,
+                                        const std::vector<std::shared_ptr<GpuMesh>>& meshes) {
     std::vector<ParticleLook> looks(ps.emitters.size());
     for (size_t i = 0; i < ps.emitters.size(); i++) {
         auto& e = ps.emitters[i];
         auto& l = looks[i];
         l.texture = i < textures.size() ? textures[i] : nullptr;
+        l.mesh = i < meshes.size() ? meshes[i] : nullptr;
         l.additive = e.blendMode.find("Additive") != std::string::npos;
         l.velocityAligned = e.screenAlignment.find("Velocity") != std::string::npos;
         l.subH = std::max(1, e.subH);
@@ -23,12 +25,27 @@ int DrawParticleSprites(Renderer& r, const Camera& cam, const std::vector<Partic
     Vec3 eye = cam.Eye(), fwd = Normalize(cam.target - eye);
     Vec3 right = Normalize(Cross({0, 0, 1}, fwd)), up = Cross(fwd, right);   // screen axes (as Renderer::BeginFrame)
     float scale = Length(toWorld.TransformDir({1, 0, 0}));
+    // mesh emitters first (opaque or masked meshes under the translucent sprites): an instance per particle,
+    // scaled by its size and turned by ParticleModuleMeshRotation (roll / pitch / yaw in turns)
+    int drawnMeshes = 0;
+    std::vector<Mat4> inst;
+    for (size_t e = 0; e < looks.size(); e++) {
+        if (!looks[e].mesh || !looks[e].visible) continue;
+        inst.clear();
+        for (auto& s : sprites)
+            if (s.emitter == (int)e) {
+                Vec4 q = RotatorToQuat(s.meshRot.y * 360.f, s.meshRot.z * 360.f, s.meshRot.x * 360.f);
+                inst.push_back(Mat4::FromTRS(s.pos, q, {s.size.x, s.size.y, s.sizeZ}) * toWorld);
+            }
+        if (!inst.empty()) r.DrawMesh(*looks[e].mesh, inst.data(), (u32)inst.size());
+        drawnMeshes += (int)inst.size();
+    }
     struct Item { float depth; size_t i; Vec3 pos; };
     std::vector<Item> items;
     items.reserve(sprites.size());
     for (size_t i = 0; i < sprites.size(); i++) {
         int e = sprites[i].emitter;
-        if (e < 0 || e >= (int)looks.size() || !looks[e].visible) continue;
+        if (e < 0 || e >= (int)looks.size() || !looks[e].visible || looks[e].mesh) continue;
         Vec3 p = toWorld.TransformPoint(sprites[i].pos);
         items.push_back({Dot(p - eye, fwd), i, p});
     }
@@ -74,5 +91,5 @@ int DrawParticleSprites(Renderer& r, const Camera& cam, const std::vector<Partic
                              {uv[k][0] + nu, uv[k][1] + nv, blend}});
     }
     flush();
-    return (int)items.size();
+    return (int)items.size() + drawnMeshes;
 }

@@ -68,6 +68,8 @@ struct ParticleSprite {
     Vec4 color;     // rgb + alpha
     float rotation = 0;   // radians
     float subImage = 0;
+    Vec3 meshRot;         // mesh emitters: roll, pitch, yaw in turns (ParticleModuleMeshRotation / RotationRate)
+    float sizeZ = 1;      // mesh emitters: the third scale axis
     int emitter = 0;
 };
 
@@ -84,7 +86,7 @@ public:
 
 private:
     struct Particle {
-        Vec3 pos, vel, accel;
+        Vec3 pos, vel, accel, meshRot, meshRotRate;
         Vec3 baseSize, baseColor;
         float baseAlpha = 1, age = 0, life = 1, loopTime = 0, subLoopTime = 0, rot = 0, rotRate = 0, subRnd = 0, drag = 0, rnd = 0.5f;
     };

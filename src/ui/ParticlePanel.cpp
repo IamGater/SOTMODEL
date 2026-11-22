@@ -34,7 +34,7 @@ void App::DrawParticlePanel(Document& d) {
     ImVec2 p = ImGui::GetCursorScreenPos();
     std::vector<ParticleSprite> sprites;
     sim.Sprites(sprites);
-    std::vector<ParticleLook> looks = ParticleLooks(ps, d.psTextures);
+    std::vector<ParticleLook> looks = ParticleLooks(ps, d.psTextures, d.psMeshes);
     for (size_t e = 0; e < looks.size(); e++)
         looks[e].visible = (e >= d.psVisible.size() || d.psVisible[e]) && !(d.psSel >= 0 && d.psSolo && (int)e != d.psSel);
     int drawn = 0;

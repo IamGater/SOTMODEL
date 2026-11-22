@@ -180,7 +180,7 @@ const char* kSimulated[] = {"ParticleModuleRequired", "ParticleModuleSpawn", "Pa
                             "ParticleModuleVelocity", "ParticleModuleVelocityCone", "ParticleModuleAcceleration", "ParticleModuleAccelerationConstant",
                             "ParticleModuleAccelerationDrag", "ParticleModuleLocation", "ParticleModuleLocationPrimitiveSphere",
                             "ParticleModuleLocationPrimitiveCylinder", "ParticleModuleRotation", "ParticleModuleRotationRate", "ParticleModuleSubUV",
-                            "ParticleModuleMeshRotation", "ParticleModuleTypeDataGpu", "ParticleModuleTypeDataMesh"};
+                            "ParticleModuleMeshRotation", "ParticleModuleMeshRotationRate", "ParticleModuleTypeDataGpu", "ParticleModuleTypeDataMesh"};
 
 ParticleModuleInfo ReadModule(const Package& pkg, i32 obj) {
     ParticleModuleInfo m;
@@ -473,6 +473,10 @@ void ParticleSim::Spawn(Emitter& em, float et, int n) {
                 if (auto x = cv("StartRotation")) p.rot = x->Eval(et, 0, Rnd()) * 2 * kPi;   // turns
             } else if (c == "ParticleModuleRotationRate") {
                 if (auto x = cv("StartRotationRate")) p.rotRate = x->Eval(et, 0, Rnd()) * 2 * kPi;
+            } else if (c == "ParticleModuleMeshRotation") {
+                if (auto x = cv("StartRotation")) p.meshRot = x->Eval3(et, Rnd());   // turns
+            } else if (c == "ParticleModuleMeshRotationRate") {
+                if (auto x = cv("StartRotationRate")) p.meshRotRate = x->Eval3(et, Rnd());
             }
         }
         em.parts.push_back(p);
@@ -492,6 +496,7 @@ void ParticleSim::Step(float dt) {
             if (p.drag > 0) p.vel = p.vel * std::max(0.f, 1 - p.drag * dt);
             p.pos = p.pos + p.vel * dt;
             p.rot += p.rotRate * dt;
+            p.meshRot = p.meshRot + p.meshRotRate * dt;
             i++;
         }
         if (em.done) continue;
@@ -577,6 +582,8 @@ void ParticleSim::Sprites(std::vector<ParticleSprite>& out) const {
             s.size = {fabsf(size.x), fabsf(size.y) > 0 ? fabsf(size.y) : fabsf(size.x)};
             s.color = {std::max(0.f, col.x), std::max(0.f, col.y), std::max(0.f, col.z), std::clamp(alpha, 0.f, 1.f)};
             s.rotation = p.rot;
+            s.meshRot = p.meshRot;
+            s.sizeZ = fabsf(size.z);
             s.subImage = e.subUVMethod == "PSUVIM_Random" || e.subUVMethod == "PSUVIM_Random_Blend" ? floorf(p.subRnd * e.subH * e.subV) : sub;
             s.emitter = (int)ei;
             out.push_back(s);
