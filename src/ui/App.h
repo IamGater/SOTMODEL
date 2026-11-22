@@ -440,6 +440,7 @@ private:
     bool m_csExact = false, m_csPendingIndex = false;
     int m_csSelected = -1;
     void DrawContentTab();
+    void DrawExportResultsMenu(const std::vector<u32>& entries);   // inside a popup: export a result list
     void StartContentSearch();
     char m_locQuery[256] = {};
     std::string m_locLast;

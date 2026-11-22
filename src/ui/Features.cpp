@@ -318,6 +318,15 @@ void App::DrawReferencesTab() {
     const std::vector<u32>* found = m_api->references ? m_api->references->Referencers(m_refTarget) : nullptr;
     const std::vector<u32>& refs = found ? *found : none;
     ImGui::TextDisabled("%zu package(s) reference it", refs.size());
+    if (!refs.empty()) {
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Export...")) ImGui::OpenPopup("##refexp");
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Export every referencing package (choose what)");
+        if (ImGui::BeginPopup("##refexp")) {
+            DrawExportResultsMenu(refs);
+            ImGui::EndPopup();
+        }
+    }
     if (ImGui::BeginTable("##refs", 2, ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable | ImGuiTableFlags_BordersInnerV)) {
         ImGui::TableSetupScrollFreeze(0, 1);
         ImGui::TableSetupColumn("Path", ImGuiTableColumnFlags_WidthStretch);

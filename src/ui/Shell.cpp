@@ -2708,8 +2708,17 @@ void App::DrawStatusBar() {
     ImGui::Dummy(ImVec2(w, h));
 }
 
-// ================================================================== Packages > Search window
+// "Export results" button: the listed packages through the same exporters as the file context menu
+static bool ExportResultsButton(const char* id, size_t count) {
+    ImGui::BeginDisabled(count == 0);
+    bool open = Button(Fmt("Export %zu...%s", count, id).c_str(), ImVec2(Dip(110), 0));
+    ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Export every result (choose what)");
+    if (open) ImGui::OpenPopup(id);
+    return ImGui::BeginPopup(id);
+}
 
+// ================================================================== Packages > Search window
 void App::DrawSearchWindow() {
     ImGuiViewport* vp = ImGui::GetMainViewport();
     ImGui::SetNextWindowSize(ImVec2(vp->WorkSize.x * 0.55f, vp->WorkSize.y * 0.6f), ImGuiCond_FirstUseEver);
@@ -2757,6 +2766,11 @@ void App::DrawSearchWindow() {
     ImGui::SameLine();
     ImGui::Checkbox("Regex", &m_searchRegex);
     UpdateSearch();
+    if (ExportResultsButton("##sexp", m_searchResults.size())) {
+        DrawExportResultsMenu(m_searchResults);
+        ImGui::EndPopup();
+    }
+    ImGui::SameLine();
     if (!m_searchError.empty()) ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(kError), "%s", m_searchError.c_str());
     else ImGui::TextDisabled("%zu result(s)%s", m_searchResults.size(), m_searchTruncated ? " (truncated)" : "");
     auto& vfs = m_api->vfs;
@@ -2991,6 +3005,13 @@ void App::DrawContentTab() {
         ImGui::AlignTextToFramePadding();
         ImGui::TextDisabled("%zu result(s) of %zu candidate(s)%s%s", r.hits.size(), r.candidates, r.cancelled ? " (cancelled)" : "",
                             r.truncated ? " (truncated)" : "");
+        ImGui::SameLine(0, gap);
+        if (ExportResultsButton("##csexp", r.hits.size())) {
+            std::vector<u32> entries;
+            for (auto& h : r.hits) entries.push_back(h.entry);
+            DrawExportResultsMenu(entries);
+            ImGui::EndPopup();
+        }
     }
     if (!m_contentJob || !m_contentJob->done || !m_contentJob->ok) return;
     auto job = m_contentJob;   // the table keeps it alive while drawing
@@ -3047,6 +3068,19 @@ void App::DrawContentTab() {
     }
 }
 // ================================================================== file context menu (FModel FileContextMenu)
+
+void App::DrawExportResultsMenu(const std::vector<u32>& entries) {
+    if (ImGui::MenuItem("By type (textures, models, animations, audio)")) ExportFiles(entries, 0, 0);
+    ImGui::Separator();
+    if (ImGui::MenuItem("Textures only")) ExportFiles(entries, 0, 1);
+    if (ImGui::MenuItem("Models only")) ExportFiles(entries, 0, 2);
+    if (ImGui::MenuItem("Animations only (one .glb per skeleton)")) ExportFiles(entries, 0, 4);
+    if (ImGui::MenuItem("Maps / worlds only")) ExportFiles(entries, 0, 3);
+    if (ImGui::MenuItem("Audio only")) ExportFiles(entries, 0, 5);
+    ImGui::Separator();
+    if (ImGui::MenuItem("Properties (.json)")) ExportFiles(entries, 2);
+    if (ImGui::MenuItem("Raw data (.uasset)")) ExportFiles(entries, 1);
+}
 
 void App::DrawFileMenu(u32 e) {
     const Vfs& vfs = m_api->vfs;
