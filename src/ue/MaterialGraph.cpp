@@ -679,6 +679,18 @@ Val Translator::Eval(const Graph* g, int c, const std::string& t, const JsonValu
         Val uv = A(g, c, p, "Coordinates");
         return Val::F("SceneTextureLookup(" + (Has(uv) ? Cast(uv, 2) : std::string("GetDefaultSceneTextureUV(Parameters)")) + ", " + StrOf(p, "SceneTextureId", "PPI_SceneColor") + ")", 4);
     }
+    if (t == "EyeAdaptation") return Val::F("EyeAdaptationLookup()", 1);
+    if (t == "SpeedTree")   // UE 4.10: world position offset from the SpeedTree wind / LOD system
+        return Val::F(Fmt("GetSpeedTreeVertexOffset(Parameters, %s, %s, %s, %s, %s)", StrOf(p, "GeometryType", "STG_Branch").c_str(),
+                          StrOf(p, "WindType", "STW_None").c_str(), StrOf(p, "LODType", "STLOD_Pop").c_str(),
+                          Num(NumOf(p, "BillboardThreshold", 0.9)).c_str(), BoolOf(p, "bAccurateWindVelocities", false) ? "true" : "false"), 3);
+    // Athena (SoT) engine nodes: values the renderer provides; their HLSL lives in the game's shaders
+    if (t == "LumaAvg") return Val::F("AthenaLumaAvg()   /* SoT: average scene luminance */", 1);
+    if (t == "CausticTextureCoordinate") return Val::F("AthenaCausticTextureCoordinate(Parameters)   /* SoT */", 2);
+    if (t == "CausticTexture") {
+        Val uv = A(g, c, p, "Coordinates");
+        return Val::F("AthenaCausticTexture(" + (Has(uv) ? Cast(uv, 2) : std::string("AthenaCausticTextureCoordinate(Parameters)")) + ")   /* SoT: underwater caustics */", 3);
+    }
     if (t == "Noise") {
         Val pos = A(g, c, p, "Position"), fw = A(g, c, p, "FilterWidth", 0.0);
         static const std::map<std::string, int> fns = {{"NOISEFUNCTION_Simplex", 0}, {"NOISEFUNCTION_Perlin", 1}, {"NOISEFUNCTION_Gradient", 2}, {"NOISEFUNCTION_FastGradient", 3}};
@@ -884,7 +896,14 @@ Val Translator::Eval(const Graph* g, int c, const std::string& t, const JsonValu
         Val pv = A(g, c, p, "Preview");
         if (Has(pv)) return pv;
         if (it == "FunctionInput_StaticBool") { Val v; v.kind = Val::Static; v.code = "false"; return v; }
-        if (it == "FunctionInput_Texture2D" || it == "FunctionInput_TextureCube") return Unsupported("unbound texture input " + name);
+        if (it == "FunctionInput_Texture2D" || it == "FunctionInput_TextureCube") {   // unbound: a texture parameter of the function
+            std::string type = it == "FunctionInput_TextureCube" ? "TextureCube" : "Texture2D";
+            Val v;
+            v.kind = Val::Tex;
+            v.code = ParamIdent("input", name, type, "", "function input \"" + name + "\" (no texture bound)");
+            v.texType = "SAMPLERTYPE_Color";
+            return v;
+        }
         if (it == "FunctionInput_MaterialAttributes") { Val v; v.kind = Val::Attrs; return v; }
         const JsonValue* pvv = P(p, "PreviewValue");
         std::string s = width == 1 ? Num(NumOf(pvv, "X", 0)) : Ty(width) + "(";
