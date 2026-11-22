@@ -962,8 +962,10 @@ void App::DrawGraphParams(GpuMaterial& mat) {
         ImGui::PushID((int)i);
         bool edited = memcmp(v, p.value, sizeof(float) * p.components) != 0;
         if (edited) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 0.8f, 0.35f, 1));
-        ImGui::TextUnformatted(p.name.c_str());
-        if (edited) ImGui::PopStyleColor();
+        bool unnamed = p.name.empty() || p.name == "None";   // cooked expressions may keep no parameter name
+        if (unnamed && !edited) ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+        ImGui::TextUnformatted(unnamed ? "(unnamed parameter)" : p.name.c_str());
+        if (edited || unnamed) ImGui::PopStyleColor();
         if (edited && ImGui::IsItemHovered()) ImGui::SetTooltip("changed; material value %g %g %g %g (right-click to restore)", p.value[0], p.value[1], p.value[2], p.value[3]);
         if (ImGui::IsItemClicked(1)) {
             memcpy(v, p.value, sizeof(float) * 4);
