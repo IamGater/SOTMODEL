@@ -344,7 +344,10 @@ int RunGui(const std::vector<std::string>& args) {
     for (size_t i = 0; i < args.size(); i++) {
         if (args[i] == "--screenshot" && i + 1 < args.size()) screenshot = Widen(args[++i]);
         else if (args[i] == "--size" && i + 1 < args.size()) sscanf(args[++i].c_str(), "%dx%d", &forceW, &forceH);
-        else if (args[i] == "--tab" && i + 1 < args.size()) startTab = atoi(args[++i].c_str());
+        else if (args[i] == "--tab" && i + 1 < args.size()) {   // a number or archives / folders / packages
+            const std::string& t = args[++i];
+            startTab = t == "archives" ? 0 : t == "folders" ? 1 : t == "packages" ? 2 : atoi(t.c_str());
+        }
         else if (args[i] == "--folder" && i + 1 < args.size()) startFolder = args[++i];
         else if (args[i] == "--delay" && i + 1 < args.size()) delay = atof(args[++i].c_str());
         else if (args[i] == "--popout") popout = true;
