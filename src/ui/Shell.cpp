@@ -1730,7 +1730,9 @@ void App::DrawDocTabs(float height) {
     float width = ImGui::GetContentRegionAvail().x - Dip(3);
     ImDrawList* dl = ImGui::GetWindowDrawList();
     // header: wrap panel of tabs (6 per row), "+" on the right, highlight strip below
-    float tabH = Dip(23.2f), plusW = 0.f;   // no "+" button (Ctrl+T still adds a tab)
+    // no "+" button (Ctrl+T still adds a tab); the right end holds the button that hides / shows the preview column
+    Document* active = ActiveDoc();
+    float tabH = Dip(23.2f), plusW = active && active->hasSide ? Dip(26) : 0.f;
     float textW = std::max(Dip(40), (width - plusW) / 6 - Dip(8));
     float tabW = Dip(6) + textW + Dip(10) + Dip(11) + Dip(4);
     int perRow = std::max(1, (int)((width - plusW) / tabW));
@@ -1820,6 +1822,20 @@ void App::DrawDocTabs(float height) {
         ImGui::PopID();
     }
 
+    if (plusW > 0) {
+        ImVec2 a(p.x + width - plusW, p.y), b(p.x + width, p.y + tabH);
+        ImGui::SetCursorScreenPos(a);
+        if (ImGui::InvisibleButton("##sidetoggle", ImVec2(plusW, tabH))) active->sideHidden = !active->sideHidden;
+        bool hov = ImGui::IsItemHovered();
+        float ht = HoverAnim();
+        dl->AddRectFilled(ImVec2(a.x + Dip(2), a.y + Dip(2)), ImVec2(b.x - Dip(1), b.y - Dip(2)), Alpha(kHover, ht), Dip(4));
+        ImU32 col = Mix(kTextDim, kText, ht);
+        ImVec2 c((a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f);
+        if (active->sideHidden) IconChevron(dl, c, Dip(13), 3.14159265f, col);
+        else IconClose(dl, c, Dip(10), col);
+        if (hov) Tip(active->sideHidden ? "Show the preview panel" : "Hide the preview panel");
+    }
+
     float stripY = p.y + headerH;
     dl->AddRectFilled(ImVec2(p.x, stripY), ImVec2(p.x + width, stripY + Dip(4)), kTabSel);
 
@@ -1851,6 +1867,8 @@ void App::DrawDocContent(Document& d) {
     bool hasSm = !d.loading && d.animBp != nullptr;
     bool hasParticles = !d.loading && d.particles != nullptr;
     bool side = hasParticles || hasSm || has3d || hasImage || hasAudio || hasTable || hasShaders || hasGraph;
+    d.hasSide = side;
+    if (d.sideHidden) side = false;   // closed with the button at the right of the tab strip: the JSON takes the width
     float splitW = Dip(4);
     if (side && d.sideW <= 0) d.sideW = hasGraph || hasSm || hasParticles ? avail.x * 0.6f : hasShaders ? std::min(avail.x * 0.4f, Dip(520)) : has3d || hasTable ? avail.x * 0.6f : std::min(avail.x * 0.45f, Dip(400) + avail.x * 0.1f);
     float sideW = side ? std::clamp(d.sideW, Dip(160), std::max(Dip(160), avail.x - Dip(200))) : 0;

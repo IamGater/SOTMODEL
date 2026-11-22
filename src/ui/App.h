@@ -72,6 +72,8 @@ struct Document {
     char find[256] = {};
     int scrollToLine = -1;
     float sideW = 0;          // preview column width (0 = default)
+    bool hasSide = false;     // has a preview column (set while drawing)
+    bool sideHidden = false;  // preview column closed with the button at the right of the tab strip
     int imagePage = 0;        // material textures shown one at a time
 
     // texture
