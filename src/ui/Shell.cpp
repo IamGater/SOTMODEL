@@ -928,7 +928,7 @@ void App::DrawFoldersTab() {
     ImGui::EndChild();
 
     SeparatorTag("INFORMATION");
-    std::string archive = "None", mount = "/", version = "VER_UE4_LATEST";
+    std::string archive = "-", mount = "-", version = "-";   // a folder without packages has no archive
     if (!cur.files.empty()) {
         const VfsEntry& e = vfs.Entry(cur.files[0]);
         auto& pk = *vfs.Paks()[e.pak];
@@ -1068,7 +1068,7 @@ void App::DrawPackagesTab() {
                   {e.encrypted ? "True" : "False", "Is Encrypted"},
                   {vfs.Paks()[e.pak]->name, "Included In Archive"}});
     } else {
-        InfoRows({{"0x0", "Offset"}, {"0 B", "Size"}, {"Unknown", "Compression Method"}, {"False", "Is Encrypted"}, {"None", "Included In Archive"}});
+        InfoRows({{"-", "Offset"}, {"-", "Size"}, {"-", "Compression Method"}, {"-", "Is Encrypted"}, {"-", "Included In Archive"}});
     }
 }
 
