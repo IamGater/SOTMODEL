@@ -2143,6 +2143,8 @@ void App::DrawAudioPanel(Document& d) {
     ImGui::PopFont();
     dl->AddLine(ImVec2(p.x, p.y + headH), ImVec2(p.x + w, p.y + headH), kSeparator);
     float y = p.y + headH + Dip(8), m = Dip(8);
+    // under the waveform: play / stop row, then volume + export row
+    float transportH = Dip(10) + Dip(30) + Dip(10) + ImGui::GetFrameHeight() + Dip(8), minWaveH = Dip(60);
 
     // bank media list (an event: the sounds it can play); a bank also lists its events
     if (d.isBank) {
@@ -2173,6 +2175,8 @@ void App::DrawAudioPanel(Document& d) {
             y = ImGui::GetCursorScreenPos().y + Dip(4);
             listH -= ImGui::GetFrameHeightWithSpacing();
         } else d.bankTab = 0;
+        if (pcm)   // leave room for the waveform and the transport below
+            listH = std::max(Dip(66), std::min(listH, p.y + h - y - Dip(8) - minWaveH - transportH));
         ImGui::SetCursorScreenPos(ImVec2(p.x + m, y));
         ImGui::BeginChild("##bankmedia", ImVec2(w - m * 2, listH), ImGuiChildFlags_None);
         ImDrawList* ldl = ImGui::GetWindowDrawList();
@@ -2231,7 +2235,7 @@ void App::DrawAudioPanel(Document& d) {
     }
 
     // waveform (min / max per pixel column, channels mixed) with the playhead; click to seek
-    float waveH = std::max(Dip(60), std::min(Dip(160), p.y + h - y - Dip(60)));
+    float waveH = std::max(minWaveH, std::min(Dip(160), p.y + h - y - transportH));
     ImVec2 wa(p.x + m, y), wb(p.x + w - m, y + waveH);
     int cols = std::max(1, (int)(wb.x - wa.x));
     if (d.peaksFor != pcm.get() || d.peaksWidth != cols) {
