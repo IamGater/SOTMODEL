@@ -425,7 +425,6 @@ private:
 
     u32 m_folder = 0;                       // selected folder (0 = root)
     std::unordered_set<u32> m_expanded;     // open folders in the tree
-    std::unordered_map<u32, double> m_expandedAt;   // when a folder was opened (its rows fade in)
     u32 m_scrollTreeTo = UINT32_MAX;        // tree row to bring into view next frame
     int m_leftTab = 0;   // 0 archives, 1 folders, 2 packages
     int m_selPak = -1;

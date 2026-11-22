@@ -1071,11 +1071,8 @@ void App::DrawFoldersTab() {
             for (auto it = folders[r.f].folders.rbegin(); it != folders[r.f].folders.rend(); ++it) stack.push_back({*it, r.depth + 1, me});
     }
     auto expand = [&](u32 f, bool on) {
-        if (on) {
-            m_expanded.insert(f);
-            m_expandedAt[f] = ImGui::GetTime();
-        } else
-            m_expanded.erase(f);
+        if (on) m_expanded.insert(f);
+        else m_expanded.erase(f);
     };
 
     float infoH = (ImGui::GetTextLineHeight() * 1.25f) * 5 + FontDip(11) + Dip(16) + Dip(6);
@@ -1128,7 +1125,7 @@ void App::DrawFoldersTab() {
                 ImGui::EndPopup();
             }
             float cy = p.y + rowH * 0.5f;
-            if (hasKids) IconChevron(dl, ImVec2(x + Dip(10), cy), Dip(16), Glide(ImGui::GetID("##chev"), open ? kPi * 0.5f : 0.f, 0.15f, 0.01f), kText);
+            if (hasKids) IconChevron(dl, ImVec2(x + Dip(10), cy), Dip(16), open ? kPi * 0.5f : 0.f, kText);
             float ix = x + Dip(20);
             IconFolder(dl, ImVec2(ix, cy - Dip(8)), Dip(16), open || sel, f.name);
             float tx = ix + Dip(16) + Dip(6);   // names line up whatever the icon
@@ -1140,20 +1137,6 @@ void App::DrawFoldersTab() {
                 ImGui::PopFont();
             }
             if (sel) selIndex = i;
-            // rows of a folder just opened fade in one after another from under it
-            if (r.parentRow >= 0 && g_uiAnim) {
-                auto ex = m_expandedAt.find(rows[r.parentRow].f);
-                if (ex != m_expandedAt.end()) {
-                    float t = (float)((ImGui::GetTime() - ex->second - std::min(i - r.parentRow - 1, 12) * 0.018) / 0.16);
-                    if (t < 1.f) {
-                        t = std::max(0.f, t);
-                        float e = t * t * (3 - 2 * t);
-                        dl->AddRectFilled(p, ImVec2(p.x + std::max(rw, x - p.x + Dip(250)), p.y + rowH), Alpha(kPanel, 1.f - e));
-                        g_animating = true;
-                    } else if (t > 4.f)
-                        m_expandedAt.erase(ex);
-                }
-            }
             ImGui::PopID();
         }
     if (selIndex < 0)
