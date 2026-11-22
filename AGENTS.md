@@ -109,7 +109,7 @@ or `/Game/Models/Props/Common/cmn_barrel_debris_02_a.cmn_barrel_debris_02_a`.
 | `get_properties` | full FModel-style JSON (optionally one export) |
 | `preview_texture` | decoded texture as a PNG image + format info |
 | `get_mesh_info` | LODs, sections, material slots, bounds (and bones for skeletal meshes). Includes the simple collision: BodySetup (static) or PhysicsAsset (skeletal) box / sphere / capsule / convex counts, sockets (mesh + skeleton: bone, relative and mesh-space transform) and morph targets (vertices per LOD) |
-| `preview_mesh` | renders a mesh with its textures to a PNG (`yaw`/`pitch` orbit, `wireframe`, `lod`). `collision=true` overlays the simple collision as green wireframe, `sockets=true` draws socket axes, `morphs={"Name":1}` applies morph target weights; `lod` picks the LOD |
+| `preview_mesh` | renders a mesh with its textures to a PNG (`yaw`/`pitch` orbit, `wireframe`, `lod`). `collision=true` overlays the simple collision as green wireframe, `sockets=true` draws socket axes, `morphs={"Name":1}` applies morph target / body patch weights (the reply lists `morphsApplied`); `lod` picks the LOD |
 | `get_animation_info` | AnimSequence: frames, length, fps, compression, skeleton, animated bones (+ a mesh that can show it) |
 | `preview_animation` | contact sheet PNG of an animation posed on a skeletal mesh (found automatically or `mesh=`) |
 | `get_anim_asset_info` | AnimMontage (sections, slot segments, notifies with times), BlendSpace / 1D / AimOffset (axes, samples; `x=`/`y=` adds the sample weights there), animation blueprint (baked state machines, transitions with crossfade, sequence / blend space players, notify events); plain sequences list their notifies |
@@ -204,8 +204,13 @@ Typical flow: `search` → `get_package` → `get_properties` / `preview_*` → 
   referencer's main export). GUI: References tab > Graph (referencers left, references right, Depth 1-3); click a node
   to centre on it (Back returns), double-click opens it, right-click for the file menu, right / middle drag pans.
 - Morph targets (UMorphTarget): after the tagged properties a 4-byte object-guid flag, the strip flags (2 bytes), then per
-  LOD `{PositionDelta, TangentZDelta, SourceIdx}` (28 bytes, SourceIdx = render vertex). SoT's `MeshPatchAsset` exports
-  in the same packages are a different (custom) thing.
+  LOD `{PositionDelta, TangentZDelta, SourceIdx}` (28 bytes, SourceIdx = render vertex).
+- Body-shape patches (SoT `MeshPatchAsset`, listed in a wardrobe mesh's `MeshPatchAssets`: Female_C ... Male_W): after
+  the properties the guid flag, strip flags, a LOD count, then per LOD a bulk array (u32 count, u32 element size 24,
+  u32 count) of `{half3 position delta, half3 normal delta, u16 x2, u32 0, u32 index}` plus a u32. The index is the
+  imported vertex: the skeletal LOD's `MeshToImportVertexMap` (kept in cooked SoT meshes, now in
+  `MeshLod::importVertex`) maps render vertices to it, so one entry moves every split vertex at that point. They are
+  returned as morph targets (`bodyPatch: true` in get_mesh_info) and drive the same sliders / `preview_mesh` `morphs`.
 - Lights / decals / fog: UE 4.10 decals are a unit box scaled by the component (no DecalSize yet). Point / spot lights with
   inverse-squared falloff are in lumens (glTF candela = lumens / 4pi). The open world's sun, sky light and the two
   ExponentialHeightFog components (above / under water) are in `wsp_common/wsp_lighting`, the FFT water in `wsp_water`;

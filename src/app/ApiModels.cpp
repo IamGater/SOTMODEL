@@ -322,7 +322,7 @@ void RegisterMeshTools(Api& api) {
                       }
                       if (m.skeletal) {
                           std::vector<MorphTarget> morphs;
-                          ReadMorphTargets(*pkg, main - 1, morphs);
+                          ReadMorphTargets(*pkg, main - 1, morphs, nullptr, &m);
                           if (!morphs.empty()) {
                               w.Key("morphTargets");
                               w.BeginArray();
@@ -331,6 +331,7 @@ void RegisterMeshTools(Api& api) {
                                   w.KV("name", mt.name);
                                   w.KV("lod0Vertices", (i64)(mt.lods.empty() ? 0 : mt.lods[0].size()));
                                   w.KV("lods", (i64)mt.lods.size());
+                                  if (mt.bodyPatch) w.KV("bodyPatch", true);   // MeshPatchAsset (wardrobe body shape)
                                   w.EndObject();
                               }
                               w.EndArray();
@@ -400,7 +401,7 @@ void RegisterMeshTools(Api& api) {
                       std::vector<std::string> applied;
                       if (const JsonValue* mw = args.Get("morphs"); mw && !mw->obj.empty() && m.skeletal) {
                           std::vector<MorphTarget> morphs;
-                          ReadMorphTargets(*pkg, main - 1, morphs);
+                          ReadMorphTargets(*pkg, main - 1, morphs, nullptr, &m);
                           std::vector<float> weights(morphs.size(), 0.f);
                           for (auto& [k, v] : mw->obj)
                               for (size_t i = 0; i < morphs.size(); i++)
@@ -425,6 +426,12 @@ void RegisterMeshTools(Api& api) {
                       w.KV("lodCount", (i64)m.lods.size());
                       w.KV("triangles", (i64)(m.lods[std::clamp(req.lod, 0, (int)m.lods.size() - 1)].indices.size() / 3));
                       w.KV("sizeCm", Fmt("%.1f x %.1f x %.1f", m.boundsMax.x - m.boundsMin.x, m.boundsMax.y - m.boundsMin.y, m.boundsMax.z - m.boundsMin.z));
+                      if (!applied.empty()) {
+                          w.Key("morphsApplied");
+                          w.BeginArray();
+                          for (auto& n : applied) w.Str(n);
+                          w.EndArray();
+                      }
                       if (!save.empty()) w.KV("savedTo", save);
                       w.EndObject();
                       r.json = w.Take();

@@ -1,4 +1,5 @@
 #include "ue/MeshExtras.h"
+#include "ue/TextureDecode.h"
 
 namespace {
 
@@ -60,8 +61,60 @@ bool ReadMeshSockets(PackageCache& cache, const Package& pkg, size_t meshExport,
     return !out.empty();
 }
 
-bool ReadMorphTargets(const Package& pkg, size_t meshExport, std::vector<MorphTarget>& out, std::string* error) {
+namespace {
+// One MeshPatchAsset export as a morph target on `mesh` (false when its layout does not fit the mesh).
+bool ReadMeshPatch(const Package& pkg, size_t exp, const MeshData& mesh, MorphTarget& mt, std::string* error) {
+    mt.name = pkg.Exports()[exp].objectName;
+    mt.bodyPatch = true;
+    size_t end = 0;
+    pkg.ReadProperties(exp, &end);
+    Reader r = pkg.ExportReader(exp);
+    r.Seek(end);
+    if (r.U32()) r.Skip(16);   // object guid
+    r.Skip(2);                  // strip flags
+    i32 nl = r.Count(16);
+    for (i32 l = 0; l < nl; l++) {
+        u32 count = r.U32();
+        u32 elem = r.U32(), n = r.U32();
+        if (elem != 24 || n != count) { if (error) *error = Fmt("%s: unexpected LOD %d layout (%u x %u)", mt.name.c_str(), l, elem, n); return false; }
+        // entry i moves every render vertex whose imported vertex is i
+        const MeshLod* lod = l < (i32)mesh.lods.size() ? &mesh.lods[l] : nullptr;
+        if (!lod || lod->importVertex.size() != lod->positions.size() || lod->maxImportVertex + 1 != (i32)n) {
+            if (error) *error = Fmt("%s: LOD %d has %u entries but the mesh has no matching import vertex map", mt.name.c_str(), l, n);
+            return false;
+        }
+        std::vector<std::vector<u32>> groups(n);
+        for (u32 v = 0; v < (u32)lod->importVertex.size(); v++)
+            if (lod->importVertex[v] >= 0 && (u32)lod->importVertex[v] < n) groups[lod->importVertex[v]].push_back(v);
+        std::vector<MorphDelta> d;
+        d.reserve(n);
+        for (u32 i = 0; i < n; i++) {
+            Vec3 pos{HalfToFloat(r.U16()), HalfToFloat(r.U16()), HalfToFloat(r.U16())};
+            Vec3 nrm{HalfToFloat(r.U16()), HalfToFloat(r.U16()), HalfToFloat(r.U16())};
+            r.Skip(8);   // two u16 (their sum is constant per patch), u32 0
+            u32 idx = r.U32();
+            if (idx >= groups.size()) continue;
+            for (u32 v : groups[idx]) d.push_back({v, pos, nrm});
+        }
+        r.U32();
+        mt.lods.push_back(std::move(d));
+    }
+    return !mt.lods.empty();
+}
+}   // namespace
+
+bool ReadMorphTargets(const Package& pkg, size_t meshExport, std::vector<MorphTarget>& out, std::string* error, const MeshData* mesh) {
     out.clear();
+    if (mesh)
+        for (size_t i = 0; i < pkg.Exports().size(); i++) {
+            if (pkg.ExportClass(i) != "MeshPatchAsset") continue;
+            MorphTarget mt;
+            try {
+                if (ReadMeshPatch(pkg, i, *mesh, mt, error)) out.push_back(std::move(mt));
+            } catch (const std::exception& e) {
+                if (error) *error = mt.name + ": " + e.what();
+            }
+        }
     PropertyList mp = pkg.ReadProperties(meshExport);
     const PropValue* arr = FindValue(mp, "MorphTargets");
     std::vector<i32> exports;

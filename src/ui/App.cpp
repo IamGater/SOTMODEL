@@ -1067,7 +1067,7 @@ void App::DrawModel(Document& d) {
                 float size = std::max(2.f, Length(m.boundsMax - m.boundsMin) * 0.05f);
                 SocketAxes(d.sockets, size, d.socketLines[0], d.socketLines[1], d.socketLines[2]);
             }
-            if (m.skeletal && ReadMorphTargets(*pkg, pkg->MainExport() - 1, d.morphs)) d.morphWeights.assign(d.morphs.size(), 0.f);
+            if (m.skeletal && ReadMorphTargets(*pkg, pkg->MainExport() - 1, d.morphs, nullptr, &m)) d.morphWeights.assign(d.morphs.size(), 0.f);
         }
     }
     if (d.morphDirty && !d.morphs.empty()) {   // morphs need the dynamic (CPU written) vertex buffer

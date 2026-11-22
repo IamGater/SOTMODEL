@@ -34,6 +34,9 @@ struct MeshLod {
     int influences = 0;
     std::vector<u16> boneIndices;          // vertex * influences, already mapped to skeleton bone index
     std::vector<u8> boneWeights;           // vertex * influences, sum 255
+    // skeletal: render vertex -> vertex of the imported (DCC) mesh, when the cook kept it (MeshToImportVertexMap)
+    std::vector<i32> importVertex;
+    i32 maxImportVertex = -1;
     u32 VertexCount() const { return (u32)positions.size(); }
 };
 

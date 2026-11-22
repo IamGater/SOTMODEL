@@ -92,8 +92,10 @@ void ReadLod(Reader& r, MeshLod& lod, bool hasVertexColors, bool filterEditorOnl
     i32 numVertices = sf.AVStripped() ? 0 : r.I32();
     SkipArray<i16>(r);   // required bones
     if (!sf.EditorStripped()) throw ParseError("skeletal LOD has raw point indices (uncooked)");
-    SkipArray<i32>(r);   // MeshToImportVertexMap
-    r.I32();             // MaxImportVertex
+    i32 nImport = r.Count(4);   // MeshToImportVertexMap
+    lod.importVertex.resize((size_t)nImport);
+    for (auto& v : lod.importVertex) v = r.I32();
+    lod.maxImportVertex = r.I32();
     if (sf.AVStripped()) return;
     i32 numTexCoords = r.I32();
 
