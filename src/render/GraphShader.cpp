@@ -184,6 +184,7 @@ float MaterialExpressionNoise(float3 pos, float scale, int quality, int func, bo
 const char* kMain = R"HLSL(
 struct GraphPSIn {
     float4 pos : SV_Position; float3 wpos : WPOS; float3 nrm : NORMAL; float4 tan : TANGENT; float2 uv : TEXCOORD0; float4 col : COLOR0;
+    float2 uv1 : TEXCOORD1;
 };
 float4 GraphPSMain(GraphPSIn i, bool front : SV_IsFrontFace) : SV_Target {
     View = (FViewStub)0;
@@ -206,6 +207,7 @@ float4 GraphPSMain(GraphPSIn i, bool front : SV_IsFrontFace) : SV_Target {
 
     FMaterialPixelParameters Parameters = (FMaterialPixelParameters)0;
     [unroll] for (int k = 0; k < 8; k++) Parameters.TexCoords[k] = i.uv;
+    Parameters.TexCoords[1] = i.uv1;   // second UV set (liveries, lightmap-style masks); later sets are not uploaded
     Parameters.VertexColor = i.col;
     float3 n = normalize(i.nrm);
     if (!front) n = -n;

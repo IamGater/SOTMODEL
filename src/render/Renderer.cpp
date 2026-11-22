@@ -25,11 +25,12 @@ Texture2D NormalTex : register(t1);
 SamplerState Samp : register(s0);
 
 struct VSIn {
-    float3 pos : POSITION; float3 nrm : NORMAL; float4 tan : TANGENT; float2 uv : TEXCOORD0; float4 col : COLOR0;
+    float3 pos : POSITION; float3 nrm : NORMAL; float4 tan : TANGENT; float2 uv : TEXCOORD0; float4 col : COLOR0; float2 uv1 : TEXCOORD1;
     float4 r0 : WORLD0; float4 r1 : WORLD1; float4 r2 : WORLD2; float4 r3 : WORLD3;
 };
-struct PSIn {
+struct PSIn {   // the graph shaders' GraphPSIn matches this
     float4 pos : SV_Position; float3 wpos : WPOS; float3 nrm : NORMAL; float4 tan : TANGENT; float2 uv : TEXCOORD0; float4 col : COLOR0;
+    float2 uv1 : TEXCOORD1;
 };
 PSIn VSMain(VSIn i) {
     float4x4 W = float4x4(i.r0, i.r1, i.r2, i.r3);
@@ -41,6 +42,7 @@ PSIn VSMain(VSIn i) {
     o.tan = float4(mul(float4(i.tan.xyz, 0), W).xyz, i.tan.w);
     o.uv = i.uv;
     o.col = i.col;
+    o.uv1 = i.uv1;
     return o;
 }
 float4 PSMain(PSIn i, bool front : SV_IsFrontFace) : SV_Target {
@@ -141,6 +143,7 @@ float4 PSMain(PSIn i) : SV_Target {
 struct MeshVertex {
     float pos[3], nrm[3], tan[4], uv[2];
     u32 color;
+    float uv1[2];   // second UV set (= uv when the mesh has one)
 };
 struct LineVertex {
     float pos[3];
@@ -198,12 +201,13 @@ bool Renderer::Init(ID3D11Device* device, ID3D11DeviceContext* ctx, std::string*
         {"TANGENT", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 24, D3D11_INPUT_PER_VERTEX_DATA, 0},
         {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 40, D3D11_INPUT_PER_VERTEX_DATA, 0},
         {"COLOR", 0, DXGI_FORMAT_R8G8B8A8_UNORM, 0, 48, D3D11_INPUT_PER_VERTEX_DATA, 0},
+        {"TEXCOORD", 1, DXGI_FORMAT_R32G32_FLOAT, 0, 52, D3D11_INPUT_PER_VERTEX_DATA, 0},
         {"WORLD", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 1, 0, D3D11_INPUT_PER_INSTANCE_DATA, 1},
         {"WORLD", 1, DXGI_FORMAT_R32G32B32A32_FLOAT, 1, 16, D3D11_INPUT_PER_INSTANCE_DATA, 1},
         {"WORLD", 2, DXGI_FORMAT_R32G32B32A32_FLOAT, 1, 32, D3D11_INPUT_PER_INSTANCE_DATA, 1},
         {"WORLD", 3, DXGI_FORMAT_R32G32B32A32_FLOAT, 1, 48, D3D11_INPUT_PER_INSTANCE_DATA, 1},
     };
-    if (FAILED(m_dev->CreateInputLayout(meshEl, 9, vs->GetBufferPointer(), vs->GetBufferSize(), &m_meshLayout))) { if (error) *error = "mesh input layout"; return false; }
+    if (FAILED(m_dev->CreateInputLayout(meshEl, 10, vs->GetBufferPointer(), vs->GetBufferSize(), &m_meshLayout))) { if (error) *error = "mesh input layout"; return false; }
     D3D11_INPUT_ELEMENT_DESC lineEl[] = {
         {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0},
         {"COLOR", 0, DXGI_FORMAT_R8G8B8A8_UNORM, 0, 12, D3D11_INPUT_PER_VERTEX_DATA, 0},
@@ -368,6 +372,9 @@ std::shared_ptr<GpuMesh> Renderer::CreateMesh(const MeshLod& lod, const Vec3& bm
         o.tan[0] = t.x; o.tan[1] = t.y; o.tan[2] = t.z; o.tan[3] = t.w;
         if (lod.numUVs) { o.uv[0] = lod.uvs[(size_t)i * lod.numUVs].x; o.uv[1] = lod.uvs[(size_t)i * lod.numUVs].y; }
         else o.uv[0] = o.uv[1] = 0;
+        size_t uv1 = (size_t)i * lod.numUVs + (lod.numUVs > 1 ? 1 : 0);
+        o.uv1[0] = lod.numUVs ? lod.uvs[uv1].x : 0;
+        o.uv1[1] = lod.numUVs ? lod.uvs[uv1].y : 0;
         o.color = i < lod.colors.size() ? lod.colors[i] : 0xffffffffu;
     }
     auto m = std::make_shared<GpuMesh>();
