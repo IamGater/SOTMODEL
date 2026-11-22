@@ -64,6 +64,7 @@ system at their socket (a bone missing on the preview mesh falls back to its nea
 stays where it spawned); cosmetic item notifies (`SpawnCosmeticItem` / `Destroy` / `SwitchCosmeticItemAttachment` /
 `SetCosmeticItemVisibility`) put the item Blueprint's meshes in the hand prop sockets, reset when the clip loops and
 replayed silently when scrubbing. A marker strip under the frame slider shows every notify (blue sound, orange effect, green item, grey event; click to jump). Exporting an animation or montage (GUI or `export`, `animation_sounds`, Settings "AnimationSounds") also writes its notify sounds as `<name>_sounds/*.wav` (every variant), `<name>.mix.wav` (all of them at their times, one track) and `<name>.notifies.json` (the timeline). `get_anim_asset_info` lists each notify's `sound` / `particle` / `socket` / `itemAction`.
+Blueprints add what native classes build at runtime: ship masts (`MastIntactMesh`, and per `Sail Parameters` entry the yard and the skeletal sail at their heights). Ship Blueprints (paths with `/Ships/`) open on the sea with the day cycle ("Sea & sky" toggle; water line at the actor origin).
 "Export glTF" in the map / Blueprint toolbar writes what the view shows as one .glb: the assembled Blueprint, the whole
 loaded map or only the part within a radius of the view target (optionally only the outliner's mesh filter), moved to
 the origin (`WorldExportOptions::clip` / `recenter` / `meshFilter`; the landscape is reloaded, the viewer frees its CPU copy).

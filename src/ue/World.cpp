@@ -925,6 +925,62 @@ bool WorldLoader::AddBlueprint(std::string_view classPackage, const Mat4& transf
             }
             add(m->Group(out, mesh, mats, skeletal), w);
         }
+        // ship masts (native AMast): the mast mesh, and per "Sail Parameters" entry a yard and its sail (a skeletal mesh), built
+        // at runtime from the class defaults rather than from components
+        for (const BpTemplates* tt = t.get(); tt; tt = tt->parent.get()) {
+            if (tt->pkgs.empty()) continue;
+            const Package& pkg = *tt->pkgs[0];
+            const auto& exps = pkg.Exports();
+            PropertyList cdo;
+            for (size_t i = 0; i < exps.size(); i++)
+                if (exps[i].objectFlags & RF_ClassDefaultObject) { cdo = pkg.ReadProperties(i); break; }
+            const PropValue* sails = FindValue(cdo, "Sail Parameters");
+            const PropValue* mastMesh = FindValue(cdo, "MastIntactMesh");
+            if (!sails && !mastMesh) continue;
+            auto field = [](const PropValue& s, const char* prefix) -> const PropValue* {   // BP struct members carry a GUID suffix
+                if (!s.Fields()) return nullptr;
+                for (auto& f : *s.Fields())
+                    if (IStartsWith(f.name, prefix)) return &f.value;
+                return nullptr;
+            };
+            auto vec = [](const PropValue* v, Vec3 def) {
+                if (!v || !v->Fields()) return def;
+                Vec3 r = def;
+                for (auto& f : *v->Fields()) {
+                    if (f.name == "X") r.x = (float)f.value.AsFloat(r.x);
+                    else if (f.name == "Y") r.y = (float)f.value.AsFloat(r.y);
+                    else if (f.name == "Z") r.z = (float)f.value.AsFloat(r.z);
+                }
+                return r;
+            };
+            Mat4 mastWorld = t->vars.count("mastmovingattachcomponent") ? World("mastmovingattachcomponent") : actorWorld;
+            Mat4 sailWorld = t->vars.count("sailanglepivot") ? World("sailanglepivot") : mastWorld;
+            if (mastMesh) {
+                std::string mp = ObjectPathOf(pkg, *mastMesh);
+                bool have = false;   // some masts also place it as a component
+                for (auto& g : out.groups)
+                    if (IEquals(g.mesh, mp))
+                        for (auto& in : g.instances) have |= in.actor == actorId;
+                if (!mp.empty() && !have) add(m->Group(out, mp, {}, false), mastWorld);
+            }
+            if (sails && sails->type == PropType::Array)
+                for (auto& s : sails->items) {
+                    const PropValue* fh = field(s, "YardHeight");
+                    float yh = fh ? (float)fh->AsFloat(0) : 0;
+                    if (const PropValue* ym = field(s, "YardMesh")) {
+                        std::string mp = ObjectPathOf(pkg, *ym);
+                        if (!mp.empty()) add(m->Group(out, mp, {}, false), Mat4::FromTRS({0, 0, yh}, {0, 0, 0, 1}, vec(field(s, "YardScale"), {1, 1, 1})) * sailWorld);
+                    }
+                    if (const PropValue* sm = field(s, "SailMesh"); sm && opt.skeletal) {
+                        std::string mp = ObjectPathOf(pkg, *sm);
+                        const PropValue* sh = field(s, "SailHeight");
+                        const PropValue* so = field(s, "SailForwardOffset");
+                        Vec3 at{so ? (float)so->AsFloat(0) : 0, 0, yh + (sh ? (float)sh->AsFloat(0) : 0)};
+                        if (!mp.empty()) add(m->Group(out, mp, {}, true), Mat4::FromTRS(at, {0, 0, 0, 1}, vec(field(s, "SailScale"), {1, 1, 1})) * sailWorld);
+                    }
+                }
+            break;   // the most derived class with mast data wins
+        }
     };
     Actor(cp, transform, 0);
     if (out.InstanceCount() == 0 && error) *error = "the Blueprint has no visible mesh components";

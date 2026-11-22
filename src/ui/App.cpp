@@ -592,10 +592,11 @@ void App::LoadWorld(std::shared_ptr<Document> d) {
             if (!ok) { d->error = "world: " + err; return; }
             d->world = world;
             d->worldScene = scene;
-            if (scene && d->worldBlueprint) {   // one actor: frame all of it, viewer lighting, no sea
+            if (scene && d->worldBlueprint) {   // one actor: frame all of it; ships float on the sea under the day cycle, others get the viewer light
                 d->camera.Frame(scene->BoundsMin(), scene->BoundsMax());
                 d->camera.flySpeed = std::max(100.f, Length(scene->BoundsMax() - scene->BoundsMin()));
-                d->worldDraw.water = d->worldDraw.fog = d->worldDraw.lights = false;
+                d->bpEnv = ToLower(d->gamePath).find("/ships/") != std::string::npos;
+                d->worldDraw.water = d->worldDraw.fog = d->worldDraw.lights = d->bpEnv;
             } else if (scene) {
                 d->camera.Frame(scene->FocusMin(), scene->FocusMax());
                 d->camera.yaw = -135;
@@ -1581,6 +1582,14 @@ void App::DrawWorld(Document& d) {
         FlowToggle("Gizmos", &d.worldDraw.gizmos);
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Light ranges / spot cones (yellow) and decal boxes (blue) within 300 m");
         DrawTimeOfDayControls(d);
+    } else {   // a Blueprint: optionally on the sea (its origin at the water line) under the day cycle
+        if (FlowToggle("Sea & sky", &d.bpEnv)) d.worldDraw.water = d.worldDraw.fog = d.worldDraw.lights = d.bpEnv;
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("The actor on the sea (water line at its origin) with the day cycle's sun, sky dome and fog");
+        if (d.bpEnv) {
+            FlowToggle("Water", &d.worldDraw.water);
+            FlowToggle("Fog", &d.worldDraw.fog);
+            DrawTimeOfDayControls(d);
+        }
     }
     if (!w.emitters.empty()) {
         FlowToggle("Particles", &d.worldParticles);
@@ -1625,12 +1634,12 @@ void App::DrawWorld(Document& d) {
     Camera& cam = d.camera;
     UpdateWorldParticles(d);
     d.worldDraw.timeOfDay = nullptr;
-    if (d.todEnabled && d.tod && !d.worldBlueprint) {
+    if (d.todEnabled && d.tod && (!d.worldBlueprint || d.bpEnv)) {
         d.todLight = EvaluateTimeOfDay(*d.tod, d.todHour);
         d.worldDraw.timeOfDay = &d.todLight;
     }
     sc.Lighting(cam, d.worldDraw, d.worldLighting);
-    d.draw.lighting = d.worldBlueprint ? nullptr : &d.worldLighting;   // a lone actor: the viewer's key light
+    d.draw.lighting = d.worldBlueprint && !d.bpEnv ? nullptr : &d.worldLighting;   // a lone actor: the viewer's key light
     ImVec2 vp0 = ImGui::GetCursorScreenPos(), vsize(side > 0 ? avail.x - side - ImGui::GetStyle().ItemSpacing.x : avail.x, avail.y);
     DrawViewportScene(
         *m_renderer, cam, d.draw, vsize, true, frameWorld,

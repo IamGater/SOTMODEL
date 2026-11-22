@@ -177,6 +177,7 @@ struct Document {
     int worldOutliner = 0;   // 0 meshes, 1 levels
     bool worldSea = false;        // sot_world_layout_2: the whole open world
     bool worldBlueprint = false;  // a Blueprint actor class assembled from its components (shown through the world view)
+    bool bpEnv = false;           // Blueprint: sea plane, day cycle sky and fog around it (on for ships)
     bool worldParticles = true;   // simulate the ParticleSystemComponents near the camera
     // day cycle: the region's lighting curves evaluated at todHour
     bool todEnabled = true;
