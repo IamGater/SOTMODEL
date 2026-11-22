@@ -2131,6 +2131,24 @@ void App::DrawSettings() {
     ImGui::Checkbox("Animations: also export notify sounds (.wav) and their timeline (.notifies.json)", &m_settings.exportAnimSounds);
     row("");
     ImGui::Checkbox("Interface animations (sliding tab marks, fades, spinners)", &m_settings.uiAnimations);
+    row("Accent colour");
+    {   // presets + free pick; applied live (Shell.cpp reads it every frame)
+        static const u32 presets[] = {0x206BD4, 0x7B5CD6, 0xC2408A, 0xD0453A, 0xD98A1E, 0x3C9A4E, 0x169C9C, 0x5A6478};
+        for (int i = 0; i < (int)(sizeof(presets) / sizeof(presets[0])); i++) {
+            u32 c = presets[i];
+            ImGui::PushID(i);
+            ImVec4 v((c >> 16 & 255) / 255.f, (c >> 8 & 255) / 255.f, (c & 255) / 255.f, 1);
+            if (ImGui::ColorButton("##preset", v, ImGuiColorEditFlags_NoTooltip | ImGuiColorEditFlags_NoBorder, ImVec2(ImGui::GetFrameHeight(), ImGui::GetFrameHeight())))
+                m_settings.accentColor = c;
+            if (m_settings.accentColor == c) ImGui::GetWindowDrawList()->AddRect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), IM_COL32_WHITE, 3.f, 0, 2.f);
+            ImGui::PopID();
+            ImGui::SameLine();
+        }
+        u32 a = m_settings.accentColor;
+        float f[3] = {(a >> 16 & 255) / 255.f, (a >> 8 & 255) / 255.f, (a & 255) / 255.f};
+        if (ImGui::ColorEdit3("##accent", f, ImGuiColorEditFlags_NoInputs))
+            m_settings.accentColor = (u32)(f[0] * 255 + 0.5f) << 16 | (u32)(f[1] * 255 + 0.5f) << 8 | (u32)(f[2] * 255 + 0.5f);
+    }
     row("");
     ImGui::Checkbox("Show grid in model viewer", &m_settings.showGrid);
     row("Game language");

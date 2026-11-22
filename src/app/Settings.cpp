@@ -53,6 +53,7 @@ void Settings::Load() {
             else if (k == "PreviewTextures") previewTextures = v == "1";
             else if (k == "ViewerWindow") viewerWindow = v == "1";
             else if (k == "Language") { if (!v.empty()) language = v; }
+            else if (k == "AccentColor") accentColor = (u32)strtoul(v.c_str(), nullptr, 16) & 0xFFFFFF;
             else if (k == "FavoriteDir") { if (!v.empty()) favoriteDirs.push_back(v); }
         }
     }
@@ -83,6 +84,7 @@ bool Settings::Save() const {
     s += std::string("PreviewTextures=") + (previewTextures ? "1" : "0") + "\n";
     s += std::string("ViewerWindow=") + (viewerWindow ? "1" : "0") + "\n";
     s += "Language=" + language + "\n";
+    s += Fmt("AccentColor=%06X\n", accentColor & 0xFFFFFF);
     for (auto& f : favoriteDirs) s += "FavoriteDir=" + f + "\n";
     std::wstring p = Path();
     CreateDirectories(p.substr(0, p.find_last_of(L'\\')));

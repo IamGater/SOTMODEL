@@ -21,6 +21,7 @@ struct Settings {
     float leftPanelWidth = 0;      // 0 = automatic
     bool previewTextures = true;   // thumbnails on explorer cards (textures, models, materials)
     bool viewerWindow = true;      // 3D views open in the separate viewer window (else inside the tab)
+    u32 accentColor = 0x206BD4;    // interface accent (0xRRGGBB): selections, status bar, checkboxes
     std::string language = "en";  // culture of the localised strings shown for FText (Localisation/<target>/<culture>)
     std::vector<std::string> favoriteDirs;   // Packages > Favorite Directories (game folder paths)
 

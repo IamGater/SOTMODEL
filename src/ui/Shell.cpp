@@ -25,7 +25,7 @@ constexpr ImU32 kHover = IM_COL32(54, 56, 70, 255);
 constexpr ImU32 kField = IM_COL32(50, 51, 65, 255);      // text boxes, combo boxes, buttons
 constexpr ImU32 kFieldBorder = IM_COL32(65, 66, 85, 255);
 constexpr ImU32 kSeparator = IM_COL32(74, 74, 94, 255);
-constexpr ImU32 kAccent = IM_COL32(32, 107, 212, 255);   // #206BD4
+ImU32 kAccent = IM_COL32(32, 107, 212, 255);             // Settings::accentColor (default #206BD4), see ApplyAccent
 constexpr ImU32 kAlert = IM_COL32(212, 146, 32, 255);    // #D49220
 constexpr ImU32 kError = IM_COL32(194, 43, 43, 255);     // #C22B2B
 constexpr ImU32 kText = IM_COL32(240, 240, 240, 255);
@@ -49,6 +49,22 @@ ImU32 Shade(ImU32 c, float k) {
 std::unordered_map<ImGuiID, float> g_anim;
 bool g_animating = false;
 bool g_uiAnim = true;   // Settings::uiAnimations (set every frame): off = every transition jumps to its end
+
+// Settings::accentColor (0xRRGGBB, checked every frame): kAccent and the ImGui style slots that use the accent
+void ApplyAccent(u32 rgb) {
+    static u32 applied = 0xFFFFFFFFu;
+    if (rgb == applied) return;
+    applied = rgb;
+    int r = rgb >> 16 & 255, g = rgb >> 8 & 255, b = rgb & 255;
+    kAccent = IM_COL32(r, g, b, 255);
+    ImVec4 v(r / 255.f, g / 255.f, b / 255.f, 1), hi(std::min(1.f, v.x * 1.2f + 0.05f), std::min(1.f, v.y * 1.2f + 0.05f), std::min(1.f, v.z * 1.2f + 0.05f), 1);
+    ImVec4* c = ImGui::GetStyle().Colors;
+    for (ImGuiCol k : {ImGuiCol_ScrollbarGrabActive, ImGuiCol_CheckMark, ImGuiCol_SliderGrab, ImGuiCol_ButtonActive, ImGuiCol_Header, ImGuiCol_HeaderActive,
+                       ImGuiCol_SeparatorHovered, ImGuiCol_SeparatorActive, ImGuiCol_TabSelectedOverline})
+        c[k] = v;
+    c[ImGuiCol_SliderGrabActive] = hi;
+    c[ImGuiCol_TextSelectedBg] = ImVec4(v.x, v.y, v.z, 0.45f);
+}
 float Anim(ImGuiID id, bool on, float seconds = 0.12f) {
     if (!g_uiAnim) {
         g_anim.erase(id);
@@ -718,6 +734,7 @@ void App::Frame() {
     SyncPopoutDoc();
     g_animating = false;
     g_uiAnim = m_settings.uiAnimations;
+    ApplyAccent(m_settings.accentColor & 0xFFFFFF);
     GImGuiItemColorHook = g_uiAnim ? EaseItemColor : nullptr;
 
     const ImGuiViewport* vp = ImGui::GetMainViewport();
