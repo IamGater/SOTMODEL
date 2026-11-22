@@ -31,6 +31,19 @@ std::string Ident(const std::string& s) {
     return r;
 }
 
+// Global parameter names: HLSL keywords / intrinsics / prelude globals a parameter may be named after get a _
+std::string ParamName(const std::string& s) {
+    std::string r = Ident(s);
+    static const char* const reserved[] = {"abs", "min", "max", "clamp", "lerp", "saturate", "pow", "exp", "log", "sin", "cos", "tan",
+                                           "dot", "cross", "length", "normalize", "frac", "floor", "ceil", "round", "sign", "step",
+                                           "smoothstep", "distance", "reflect", "sqrt", "rsqrt", "fmod", "mul", "float", "int", "bool",
+                                           "half", "uint", "true", "false", "in", "out", "inout", "return", "if", "else", "for", "while",
+                                           "static", "const", "struct", "Texture", "Texture2D", "TextureCube", "SamplerState", "View",
+                                           "Primitive", "Parameters", "Material", "Rope", "register", "sampler", "texture", "matrix", "vector"};
+    for (auto w : reserved) if (r == w) return r + "_";
+    return r;
+}
+
 std::string Ty(int n) { return n <= 1 ? "float" : Fmt("float%d", n); }
 
 // "MaterialExpressionAdd'MaterialExpressionAdd_3'" -> MaterialExpressionAdd_3
@@ -206,7 +219,7 @@ public:
         auto it = paramIndex.find(key);
         if (it != paramIndex.end()) return params[it->second].ident;
         std::string prefix = kind == "texture" ? "Tex_" : kind == "landscape" ? "LayerWeight_" : "";
-        std::string id = prefix + Ident(name);
+        std::string id = prefix + ParamName(name);
         while (std::any_of(params.begin(), params.end(), [&](const Param& p) { return p.ident == id; })) id += "_";
         Param p{kind, name, id, declType + " " + id + (init.empty() ? "" : " = " + init) + ";", comment};
         paramIndex[key] = params.size();
@@ -533,7 +546,10 @@ Val Translator::Eval(const Graph* g, int c, const std::string& t, const JsonValu
     if (t == "AppendVector") {
         Val x = A(g, c, p, "A"), y = A(g, c, p, "B");
         int n = std::min(4, x.n + y.n);
-        return Val::F(Ty(n) + "(" + x.code + ", " + y.code + ")", n);
+        if (x.n >= 4) return Val::F(x.code, x.n);   // nothing fits (UE reports an error; keep A)
+        // more than 4 components (UE reports an error): keep what fits so the shader still compiles
+        std::string b = x.n + y.n > 4 ? "(" + y.code + ")." + std::string("xyzw").substr(0, 4 - x.n) : y.code;
+        return Val::F(Ty(n) + "(" + x.code + ", " + b + ")", n);
     }
     if (t == "ConstantBiasScale") {
         Val x = A(g, c, p, "Input");
@@ -542,6 +558,8 @@ Val Translator::Eval(const Graph* g, int c, const std::string& t, const JsonValu
     if (t == "If") {
         Val a = A(g, c, p, "A"), b = A(g, c, p, "B", NumOf(p, "ConstB", 0));
         Val gt = A(g, c, p, "AGreaterThanB"), lt = A(g, c, p, "ALessThanB"), eq = A(g, c, p, "AEqualsB");
+        if (a.n > 1) a = Val::F(Cast(a, 1), 1);   // UE compares scalars (wider inputs are truncated)
+        if (b.n > 1) b = Val::F(Cast(b, 1), 1);
         int n = std::max({gt.n, lt.n, Has(eq) ? eq.n : 1});
         if (!Has(eq)) return Val::F("((" + a.code + " >= " + b.code + ") ? " + Cast(gt, n) + " : " + Cast(lt, n) + ")", n);
         return Val::F("((abs(" + a.code + " - " + b.code + ") > " + Num(NumOf(p, "EqualsThreshold", 0.00001)) + ") ? ((" + a.code + " >= " + b.code + ") ? " +
@@ -738,11 +756,20 @@ Val Translator::Eval(const Graph* g, int c, const std::string& t, const JsonValu
     if (t == "ParticleSize") return Val::F("Parameters.Particle.Size", 2);
     if (t == "ParticleRadius") return Val::F("max(Parameters.Particle.PositionAndSize.w, 0.001)", 1);
     if (t == "CollectionParameter") {
-        std::string col = ObjPath(P(p, "Collection"));
-        col = col.substr(col.rfind('.') + 1);
+        std::string colPath = ObjPath(P(p, "Collection"));
+        std::string col = colPath.substr(colPath.rfind('.') + 1);
         std::string pn = StrOf(p, "ParameterName");
-        std::string id = ParamIdent("collection", col + "." + pn, "float4", "", "MaterialParameterCollection " + col + ", parameter \"" + pn + "\"");
-        return Val::F(id, 4);
+        // the collection lists it under ScalarParameters (float) or VectorParameters (float4)
+        bool scalar = false;
+        if (auto cp = m_cache.LoadPath(colPath))
+            if (i32 main = cp->MainExport()) {
+                PropertyList cprops = cp->ReadProperties((size_t)main - 1);
+                if (const PropValue* sp = FindValue(cprops, "ScalarParameters"))
+                    for (auto& it : sp->items)
+                        if (const PropValue* n = it.Field("ParameterName"); n && IEquals(n->str, pn)) scalar = true;
+            }
+        std::string id = ParamIdent("collection", col + "." + pn, scalar ? "float" : "float4", "", "MaterialParameterCollection " + col + ", parameter \"" + pn + "\"");
+        return Val::F(id, scalar ? 1 : 4);
     }
     // Sea of Thieves nodes
     if (t == "LocalDisturbanceTexture") {

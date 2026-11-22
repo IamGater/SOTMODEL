@@ -14,7 +14,7 @@ cbuffer Frame : register(b0) {
     float4 LightDir;
     float4 Flags;
     float4 SunColor;
-    float4 Ambient;
+    float4 FrameAmbient;
     float4 FogColor;
     float4 FogParams;
     float4 LightCount;
@@ -36,9 +36,18 @@ struct FViewStub {
     float2 RenderTargetSize;
     float4 DiffuseOverrideParameter, SpecularOverrideParameter;
     float UnlitViewmodeMask, OutOfBoundsMask;
+    float4 UserClipPlane, InvDeviceZToWorldZTransform;
+    float3 PrevViewOrigin, PrevPreViewTranslation, PrevWorldCameraOrigin;
+    float4x4 PrevTranslatedWorldToClip, PrevViewToClip, PrevClipToView;
 };
 static FViewStub View;
 #define ResolvedView View
+#define MaterialFloat float
+#define MaterialFloat2 float2
+#define MaterialFloat3 float3
+#define MaterialFloat4 float4
+#define MaterialFloat3x3 float3x3
+#define MaterialFloat4x4 float4x4
 struct FPrimitiveStub {
     float4x4 LocalToWorld, WorldToLocal;
     float4 ObjectWorldPositionAndRadius;
@@ -130,6 +139,44 @@ float4 SceneTextureLookup(float2 uv, int id) { return float4(0.05, 0.05, 0.06, 1
 float4 SampleLowResClouds(float2 uv) { return 0; }
 float4 SampleUnderwaterTranslucency(float2 uv) { return 0; }
 float GetDistanceCullFade() { return 1; }
+#define BRANCH [branch]
+#define FLATTEN [flatten]
+#define UNROLL [unroll]
+#define LOOP [loop]
+float3 ApplyColorVisionDeficiencyCorrection(float mode, float preview, float strength, float3 c) { return c; }
+float4 ApplyColorVisionDeficiencyCorrection(float mode, float preview, float strength, float4 c) { return c; }
+struct FGBuffersStub {   // the deferred G-buffer: unbound in the viewer (reads 0)
+    Texture2D GBufferATexture, GBufferBTexture, GBufferCTexture, GBufferDTexture, GBufferETexture, GBufferVelocityTexture;
+    SamplerState GBufferATextureSampler, GBufferBTextureSampler, GBufferCTextureSampler, GBufferDTextureSampler, GBufferETextureSampler, GBufferVelocityTextureSampler;
+};
+FGBuffersStub GBuffers;
+float3 ScaleSaturationByFactor(float3 c, float f) { float l = dot(c, float3(0.3, 0.59, 0.11)); return lerp(l.xxx, c, f); }
+#define GetMaterialSharedSampler(materialSampler, sharedSampler) sharedSampler
+struct FRopeStub { float3 Start, End, Roughness, Thickness, Length, Tension, Colour, Color; };   // RopeParameter (SoT)
+static FRopeStub Rope;
+Texture2D SceneDepthTexture;   // no scene depth in the viewer (unbound: reads 0)
+SamplerState SceneDepthTextureSampler;
+float ConvertFromDeviceZ(float d) { return 1e6; }
+float4 SceneTextureLookup(float2 uv, int id, bool filtered) { return float4(0.05, 0.05, 0.06, 1); }
+float CheaperSmoothStep(float a, float b, float x) { x = saturate((x - a) / (b - a)); return x * x * (3 - 2 * x); }
+float CheaperSmoothStep(float x) { x = saturate(x); return x * x * (3 - 2 * x); }
+float2 CheaperSmoothStep(float2 x) { x = saturate(x); return x * x * (3 - 2 * x); }
+float3 CheaperSmoothStep(float3 x) { x = saturate(x); return x * x * (3 - 2 * x); }
+float4 CheaperSmoothStep(float4 x) { x = saturate(x); return x * x * (3 - 2 * x); }
+float3 LinearToSRGB(float3 c) { return pow(saturate(c), 1 / 2.2); }
+float4 LinearToSRGB(float4 c) { return float4(pow(saturate(c.rgb), 1 / 2.2), c.a); }
+float3 SRGBToLinear(float3 c) { return pow(saturate(c), 2.2); }
+float4 SRGBToLinear(float4 c) { return float4(pow(saturate(c.rgb), 2.2), c.a); }
+float EyeAdaptationLookup() { return 1; }
+float AthenaLumaAvg() { return 0.18; }   // SoT engine nodes: neutral values in the viewer
+float2 AthenaCausticTextureCoordinate(FMaterialPixelParameters P) { return 0; }
+float2 AthenaCausticTextureCoordinate(FMaterialVertexParameters P) { return 0; }
+float3 AthenaCausticTexture(float2 uv) { return 0; }
+static const int STG_Branch = 0, STG_Frond = 1, STG_Leaf = 2, STG_FacingLeaf = 3, STG_Billboard = 4;
+static const int STW_None = 0, STW_Fastest = 1, STW_Fast = 2, STW_Better = 3, STW_Best = 4, STW_Palm = 5, STW_BestPlus = 6;
+static const int STLOD_Pop = 0, STLOD_Smooth = 1;
+float3 GetSpeedTreeVertexOffset(FMaterialVertexParameters P, int g, int w, int l, float t, bool a) { return 0; }   // no wind
+float3 GetSpeedTreeVertexOffset(FMaterialPixelParameters P, int g, int w, int l, float t, bool a) { return 0; }
 bool GetGIReplaceState() { return false; }
 bool IsShadowDepthShader() { return false; }
 float GetPerInstanceRandom(FMaterialPixelParameters P) { return P.PerInstanceRandom; }
@@ -147,6 +194,8 @@ float3 TransformLocalToTranslatedWorld(float3 p) { return p; }
 float CheaperSmoothStepIn01(float x) { return x * x * (3 - 2 * x); }
 half4 CalculateVertexHeightFog(float3 wp, float4 cam) { return half4(0, 0, 0, 1); }
 float3 TransformLocalToWorld(float3 p) { return p; }
+float3 TransformLocalPositionToWorld(FMaterialPixelParameters P, float3 p) { return p; }
+float3 TransformLocalPositionToWorld(FMaterialVertexParameters P, float3 p) { return p; }
 float3 TransformLocalVectorToWorld(FMaterialPixelParameters P, float3 v) { return v; }
 float3 TransformLocalVectorToWorld(FMaterialVertexParameters P, float3 v) { return v; }
 float3 TransformWorldVectorToLocal(float3 v) { return v; }
@@ -269,7 +318,7 @@ float4 GraphPSMain(GraphPSIn i, bool front : SV_IsFrontFace) : SV_Target {
     float3 specColor = lerp(0.08 * saturate(M.Specular).xxx, saturate(M.BaseColor), metal);
     float rough = clamp(M.Roughness, 0.05, 1);
     float hemi = 0.5 + 0.5 * wn.z;
-    float3 ambient = lerp(float3(0.16, 0.15, 0.14), float3(0.34, 0.37, 0.42), hemi) * Ambient.rgb * saturate(M.AmbientOcclusion);
+    float3 ambient = lerp(float3(0.16, 0.15, 0.14), float3(0.34, 0.37, 0.42), hemi) * FrameAmbient.rgb * saturate(M.AmbientOcclusion);
     float3 h = normalize(l + v);
     float ndl = saturate(dot(wn, l));
     float specPow = exp2(10 * (1 - rough) + 1);

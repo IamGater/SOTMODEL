@@ -141,6 +141,8 @@ std::shared_ptr<GpuGraphShader> GpuAssets::GraphShader(const std::string& path) 
     else if (!MaterialToHlsl(m_cache, path, hlsl, nullptr, &err)) g->error = "translate: " + err;
     else if (!BuildGraphShaderSource(hlsl, mi.blendMode, mi.shadingModel, src, &err)) g->error = err;
     else if (!m_r.CreatePixelShader(src.hlsl, "GraphPSMain", g->ps, &err)) {
+        if (const char* dump = getenv("SOTMODEL_DUMP_SHADER"); dump && *dump)   // debugging: the source fxc rejected
+            if (FILE* f = fopen(dump, "wb")) { fwrite(src.hlsl.data(), 1, src.hlsl.size(), f); fclose(f); }
         std::string errs;   // error lines only (drop warnings and the shader file prefix)
         size_t s = 0;
         while (s < err.size()) {
