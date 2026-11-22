@@ -250,3 +250,47 @@ void App::DrawNotifyToggle(Document& d) {
         ImGui::SetTooltip("%s", tip.c_str());
     }
 }
+
+// One row of markers lined up with the frame slider: sounds blue, effects orange, held items green, other events grey.
+// Hover lists the notifies under the mouse, a click jumps there (paused).
+void App::DrawNotifyStrip(Document& d, float x0, float x1) {
+    if (d.notifies.empty() || !d.anim) return;
+    const auto& a = *d.anim;
+    float fps = a.FrameRate(), last = (float)std::max(1, a.numFrames - 1);
+    // the slider's value range (imgui: 2 px padding, half a grab at each end)
+    float grab = ImGui::GetStyle().GrabMinSize, u0 = x0 + 2 + grab * 0.5f, u1 = x1 - 2 - grab * 0.5f;
+    auto xOf = [&](float t) { return u0 + std::clamp(t * fps / last, 0.f, 1.f) * (u1 - u0); };
+    float h = ImGui::GetFontSize() * 0.7f;
+    ImVec2 p(x0, ImGui::GetCursorScreenPos().y);
+    ImGui::SetCursorScreenPos(p);
+    ImGui::InvisibleButton("##nstrip", ImVec2(std::max(1.f, x1 - x0), h));
+    bool hovered = ImGui::IsItemHovered(), clicked = ImGui::IsItemClicked();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->AddRectFilled(p, ImVec2(x1, p.y + h), IM_COL32(255, 255, 255, 14), 2);
+    float mx = ImGui::GetIO().MousePos.x, best = 1e9f;
+    std::string tip;
+    const AnimNotifyInfo* nearest = nullptr;
+    for (auto& n : d.notifies) {
+        float x = xOf(n.time);
+        ImU32 col = !n.sound.empty()                            ? IM_COL32(90, 170, 255, 255)
+                    : !n.particle.empty()                       ? IM_COL32(255, 160, 60, 255)
+                    : n.itemAction != AnimNotifyInfo::NoItem    ? IM_COL32(110, 220, 110, 255)
+                                                                : IM_COL32(170, 170, 170, 200);
+        if (n.duration > 0) dl->AddRectFilled(ImVec2(x, p.y + h * 0.35f), ImVec2(std::max(x + 2, xOf(n.time + n.duration)), p.y + h * 0.65f), (col & 0x00ffffff) | 0x60000000);
+        dl->AddRectFilled(ImVec2(x - 1, p.y), ImVec2(x + 1, p.y + h), col);
+        if (hovered && fabsf(x - mx) <= 4) {
+            const std::string& what = !n.sound.empty() ? n.sound : !n.particle.empty() ? n.particle : !n.itemClass.empty() ? n.itemClass : n.cls;
+            tip += Fmt("%.2f s (frame %.0f)  %s", n.time, n.time * fps, n.name.c_str());
+            if (!what.empty() && what != n.name) tip += "  " + what.substr(what.rfind('.') + 1);
+            tip += "\n";
+        }
+        if (fabsf(x - mx) < best) { best = fabsf(x - mx); nearest = &n; }
+    }
+    float cx = xOf(d.animTime);   // playhead
+    dl->AddTriangleFilled(ImVec2(cx - 4, p.y), ImVec2(cx + 4, p.y), ImVec2(cx, p.y + h * 0.6f), IM_COL32(255, 255, 255, 200));
+    if (hovered) ImGui::SetTooltip("%s", tip.empty() ? "Notify markers: blue sound, orange effect, green held item, grey event. Click one to jump to it." : tip.c_str());
+    if (clicked && nearest && best <= 6) {
+        d.animTime = nearest->time;
+        d.animPlaying = false;
+    }
+}

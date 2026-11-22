@@ -363,6 +363,7 @@ private:
     void FireNotifies(Document& d, float from, float to, bool itemsOnly = false);   // notifies with from < time <= to (itemsOnly: held items, silently)
     void UpdateNotifyFx(Document& d, const std::vector<Mat4>* boneWorld);
     void DrawNotifyToggle(Document& d);
+    void DrawNotifyStrip(Document& d, float x0, float x1);   // notify markers under the frame slider (x0..x1 = its frame)
     void DrawWorldExport(Document& d);                      // toolbar button + options popup
     void ExportWorldDoc(std::shared_ptr<Document> d, WorldExportOptions wo);
     void LoadAnimationMesh(std::shared_ptr<Document> d, std::string meshPath);

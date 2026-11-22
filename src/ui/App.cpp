@@ -1186,6 +1186,7 @@ void App::DrawAnimation(Document& d) {
         d.animTime = frame / fps;
         d.animPlaying = false;
     }
+    ImVec2 sliderMin = ImGui::GetItemRectMin(), sliderMax = ImGui::GetItemRectMax();
     ImGui::SameLine();
     ImGui::SetNextItemWidth(90);
     ImGui::SliderFloat("##speed", &d.animSpeed, 0.05f, 2.f, "speed %.2fx");
@@ -1200,6 +1201,7 @@ void App::DrawAnimation(Document& d) {
     DrawNotifyToggle(d);
     ImGui::SameLine();
     PopoutButton(d, false);
+    DrawNotifyStrip(d, sliderMin.x, sliderMax.x);
     if (d.montage || d.blendSpace) DrawAnimAssetHeader(d);
     else
         ImGui::TextDisabled("%d frames, %.2f s, %.1f fps | %s | %zu tracks%s | skeleton %s", a.numFrames, a.length, fps, a.encoding.c_str(), a.tracks.size(),
