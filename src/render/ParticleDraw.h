@@ -7,6 +7,7 @@ struct ParticleLook {   // per emitter
     std::shared_ptr<GpuTexture> texture;   // null: soft dots
     bool additive = false, velocityAligned = false, visible = true;
     int subH = 1, subV = 1;
+    Vec2 pivot;   // ParticlePivot
 };
 std::vector<ParticleLook> ParticleLooks(const ParticleSystemInfo& ps, const std::vector<std::shared_ptr<GpuTexture>>& textures);
 

@@ -262,6 +262,16 @@ const ParticleCurve* ParticleModuleInfo::Curve(std::string_view n) const {
         if (c.first == n) return &c.second;
     return nullptr;
 }
+Vec2 ParticlePivot(const ParticleEmitterInfo& e) {
+    Vec2 p{0, 0};
+    for (auto& m : e.modules) {
+        if (!m.enabled || m.cls != "ParticleModulePivotOffset") continue;
+        float x = 0, y = 0, z = 0;
+        if (sscanf(m.Value("PivotOffset").c_str(), "(%f, %f, %f)", &x, &y, &z) >= 2) p = {p.x + x, p.y + y};
+    }
+    return p;
+}
+
 std::string ParticleModuleInfo::Value(std::string_view n) const {
     for (auto& v : values)
         if (v.first == n) return v.second;
@@ -601,7 +611,12 @@ void RenderParticleSprites(const std::vector<ParticleSprite>& sprites, const std
         float ax = cosf(s.rotation), ay = sinf(s.rotation);
         if (re && re->alignment.find("Velocity") != std::string::npos && Length(s.velocity) > 1e-3f) {
             float vx = Dot(s.velocity, right), vy = -Dot(s.velocity, up), l = sqrtf(vx * vx + vy * vy);
-            if (l > 1e-4f) { ax = vy / l; ay = -vx / l; }
+            if (l > 1e-4f) { ax = -vy / l; ay = vx / l; }   // texture top along the velocity (as UE's VelocityUp = -direction)
+        }
+        if (re) {   // pivot offset: move the quad centre along its own axes (screen y points down)
+            float ox = 2 * hx * re->pivot.x, oy = 2 * hy * re->pivot.y;
+            cx += ox * ax - oy * ay;
+            cy += ox * ay + oy * ax;
         }
         float r = sqrtf(hx * hx + hy * hy) + 1;
         int x0 = std::max(0, (int)(cx - r)), x1 = std::min(W - 1, (int)(cx + r)), y0 = std::max(0, (int)(cy - r)), y1 = std::min(H - 1, (int)(cy + r));

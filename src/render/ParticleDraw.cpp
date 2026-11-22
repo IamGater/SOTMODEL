@@ -12,6 +12,7 @@ std::vector<ParticleLook> ParticleLooks(const ParticleSystemInfo& ps, const std:
         l.velocityAligned = e.screenAlignment.find("Velocity") != std::string::npos;
         l.subH = std::max(1, e.subH);
         l.subV = std::max(1, e.subV);
+        l.pivot = ParticlePivot(e);
     }
     return looks;
 }
@@ -60,7 +61,8 @@ int DrawParticleSprites(Renderer& r, const Camera& cam, const std::vector<Partic
         int cells = l.subH * l.subV, cell = ((int)s.subImage % cells + cells) % cells;
         float u0 = (float)(cell % l.subH) / l.subH, v0 = (float)(cell / l.subH) / l.subV, du = 1.f / l.subH, dv = 1.f / l.subV;
         if (!l.texture) u0 = v0 = 0, du = dv = 1;
-        Vec3 c[4] = {it.pos - ux + uy, it.pos + ux + uy, it.pos + ux - uy, it.pos - ux - uy};   // top-left, top-right, bottom-right, bottom-left
+        Vec3 o = it.pos + ux * (2 * l.pivot.x) - uy * (2 * l.pivot.y);   // pivot offset: (0, -0.5) puts the bottom edge on the particle
+        Vec3 c[4] = {o - ux + uy, o + ux + uy, o + ux - uy, o - ux - uy};   // top-left, top-right, bottom-right, bottom-left
         float uv[4][2] = {{u0, v0}, {u0 + du, v0}, {u0 + du, v0 + dv}, {u0, v0 + dv}};
         static const int idx[6] = {0, 1, 2, 0, 2, 3};
         for (int k : idx)

@@ -59,6 +59,8 @@ struct ParticleSystemInfo {
     float warmup = 0;
 };
 bool ReadParticleSystem(PackageCache& cache, const Package& pkg, size_t exportIdx, ParticleSystemInfo& out, std::string* error = nullptr);
+// ParticleModulePivotOffset of an emitter (UV units added to the centred pivot; (0, -0.5) puts the sprite's bottom edge on the particle).
+Vec2 ParticlePivot(const ParticleEmitterInfo& e);
 
 struct ParticleSprite {
     Vec3 pos, velocity;
@@ -105,7 +107,7 @@ private:
 
 // Simple software render of sprites (textured, subUV, alpha or additive) for CLI previews.
 struct Image;
-struct ParticleRenderEmitter { const Image* texture = nullptr; int subH = 1, subV = 1; bool additive = false; std::string alignment; };
+struct ParticleRenderEmitter { const Image* texture = nullptr; int subH = 1, subV = 1; bool additive = false; std::string alignment; Vec2 pivot; };
 void RenderParticleSprites(const std::vector<ParticleSprite>& sprites, const std::vector<ParticleRenderEmitter>& emitters, Vec3 target, float distance,
                            float yawDeg, float pitchDeg, int width, int height, Image& out);
 // Camera basis shared by the GUI and the software renderer (UE axes: X forward, Y right, Z up).
