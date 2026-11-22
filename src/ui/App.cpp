@@ -259,6 +259,7 @@ ExportOptions App::MakeExportOptions() const {
     o.meshFormat = m_settings.meshFormat;
     o.textureFormat = m_settings.textureFormat;
     o.keepDirectories = m_settings.exportKeepDirectories;
+    o.animationSounds = m_settings.exportAnimSounds;
     o.json = false;
     return o;
 }
@@ -1888,6 +1889,11 @@ void App::ExportFiles(std::vector<u32> entries, int mode, int kind) {
                 for (auto& c : out) if (c == L'/') c = L'\\';
                 CreateDirectories(out.substr(0, out.find_last_of(L'\\')));
                 if (WriteWholeFile(out, glb.data(), glb.size())) { files++; LOGI("%s -> %s", note.c_str(), Narrow(out).c_str()); }
+                if (opt.animationSounds)   // each clip's notify sounds + timeline next to its own name
+                    for (auto& p : pkgs) {
+                        std::vector<std::string> w;
+                        ExportAnimationSounds(*m_api, *p, ExportPathFor(opt, *p, L""), w);
+                    }
             }
             LOGI("exported %zu animation set(s) from %zu skeleton(s)", files, bySkeleton.size());
             m_exporting = false;
@@ -1960,6 +1966,10 @@ void App::ExportFiles(std::vector<u32> entries, int mode, int kind) {
                     o.json = mode == 2;
                     o.worlds = kind == 3;   // Export > World: the whole map as .glb
                     ok = ExportPackage(*m_api->cache, *pkg, o, written, &err);
+                    if (ok && mode == 0 && o.animationSounds && pkg->MainExport()) {   // animations: notify sounds + timeline
+                        std::string cls = pkg->ExportClass(pkg->MainExport() - 1);
+                        if (IsAnimSequenceClass(cls) || cls == "AnimMontage") ExportAnimationSounds(*m_api, *pkg, ExportPathFor(o, *pkg, L""), written);
+                    }
                     if (ok && written.empty() && mode == 0 && entries.size() == 1) {
                         // nothing visual to export for this type: save its properties instead
                         o.json = true;
@@ -2073,6 +2083,7 @@ void App::DrawSettings() {
     ImGui::SliderInt("##pt", &m_settings.previewMaxTexture, 256, 8192, "max %d px", ImGuiSliderFlags_Logarithmic);
     row("");
     ImGui::Checkbox("Keep folder structure when exporting", &m_settings.exportKeepDirectories);
+    ImGui::Checkbox("Animations: also export notify sounds (.wav) and their timeline (.notifies.json)", &m_settings.exportAnimSounds);
     row("");
     ImGui::Checkbox("Show grid in model viewer", &m_settings.showGrid);
     row("Game language");

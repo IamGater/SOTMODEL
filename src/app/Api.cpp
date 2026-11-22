@@ -6,6 +6,7 @@
 #include "ue/NativeInfo.h"
 #include "ue/Texture.h"
 #include "export/Exporter.h"
+#include "ue/Animation.h"
 #include "export/Png.h"
 #include <windows.h>
 
@@ -398,7 +399,7 @@ void Api::RegisterAssetTools() {
     Register({"export",
               "Export a package to disk: textures -> PNG (or DDS), meshes -> glTF .glb (or OBJ), animations -> .glb, plus the JSON. "
               "Returns the written file paths. 'output_dir' defaults to the configured output directory.",
-              R"({"type":"object","properties":{"path":{"type":"string"},"output_dir":{"type":"string"},"texture_format":{"type":"string","enum":["png","dds"]},"mesh_format":{"type":"string","enum":["glb","obj"]},"json":{"type":"boolean","default":true},"raw":{"type":"boolean","default":false},"collision":{"type":"boolean","default":true,"description":"meshes as glb: simple collision as a separate Collision node"}},"required":["path"]})",
+              R"({"type":"object","properties":{"path":{"type":"string"},"output_dir":{"type":"string"},"texture_format":{"type":"string","enum":["png","dds"]},"mesh_format":{"type":"string","enum":["glb","obj"]},"json":{"type":"boolean","default":true},"raw":{"type":"boolean","default":false},"collision":{"type":"boolean","default":true,"description":"meshes as glb: simple collision as a separate Collision node"},"animation_sounds":{"type":"boolean","description":"animations / montages: notify sounds as .wav plus a .notifies.json timeline; default from Settings"}},"required":["path"]})",
               "path",
               [](Api& a, const JsonValue& args) {
                   std::string err;
@@ -438,6 +439,10 @@ void Api::RegisterAssetTools() {
                   opt.keepDirectories = a.settings.exportKeepDirectories;
                   std::vector<std::string> written;
                   bool ok = ExportPackage(*a.cache, *pkg, opt, written, &err);
+                  if (ok && args.GetBool("animation_sounds", a.settings.exportAnimSounds) && pkg->MainExport()) {   // notify sounds + timeline
+                      std::string cls = pkg->ExportClass(pkg->MainExport() - 1);
+                      if (IsAnimSequenceClass(cls) || cls == "AnimMontage") ExportAnimationSounds(a, *pkg, ExportPathFor(opt, *pkg, L""), written);
+                  }
                   JsonWriter w;
                   w.BeginObject();
                   w.KV("ok", ok);

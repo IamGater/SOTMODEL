@@ -6,6 +6,9 @@
 #include "ue/Mesh.h"
 #include "ue/DataTable.h"
 #include "ue/WorldLayout.h"
+#include "ue/AnimAssets.h"
+#include "app/WwiseEvents.h"
+#include "audio/Wwise.h"
 
 namespace {
 
@@ -34,6 +37,126 @@ ApiResult Written(const std::vector<std::string>& files, const std::string& note
 }
 
 }   // namespace
+
+bool ExportAnimationSounds(Api& a, const Package& pkg, const std::wstring& base, std::vector<std::string>& written, std::string* error) {
+    i32 main = pkg.MainExport();
+    if (!main) return false;
+    std::vector<AnimNotifyInfo> ns;
+    PropertyList props = pkg.ReadProperties(main - 1);
+    if (pkg.ExportClass(main - 1) == "AnimMontage") {
+        MontageInfo m;
+        if (ReadMontage(pkg, main - 1, m)) ns = m.notifies;
+    } else ReadAnimNotifies(pkg, props, ns);
+    if (ns.empty()) { if (error) *error = "no notifies"; return false; }
+    std::sort(ns.begin(), ns.end(), [](auto& x, auto& y) { return x.time < y.time; });
+    std::wstring dir = base + L"_sounds";
+    std::wstring dirName = dir.substr(dir.find_last_of(L'\\') + 1);
+    std::map<std::string, std::vector<std::string>> files;   // event path -> written .wav names (relative to the json)
+    std::map<std::string, std::vector<AudioPcm>> clips;      // event path -> decoded variants (for the mix)
+    for (auto& n : ns) {
+        if (n.sound.empty() || files.count(n.sound)) continue;
+        auto& out = files[n.sound];
+        WwiseEventInfo ev;
+        std::string err;
+        if (!LoadWwiseEvent(a, n.sound, ev, &err)) { LOGW("animation sounds: %s: %s", n.sound.c_str(), err.c_str()); continue; }
+        std::string name = n.sound.substr(n.sound.rfind('.') + 1);
+        int k = 0;
+        for (auto& m : ev.media) {   // every variant the event can pick
+            if (m.where == WwiseEventMedia::Missing || k >= 16) continue;
+            Bytes wem;
+            AudioPcm pcm;
+            if (!ReadEventMedia(a, ev, m, wem, &err) || !DecodeWem(wem.data(), wem.size(), pcm, &err)) continue;
+            Bytes wav = MakeWav(pcm);
+            std::string file = name + (k ? Fmt("_%d", k + 1) : "") + ".wav";
+            CreateDirectories(dir);
+            std::wstring path = dir + L"\\" + Widen(file);
+            if (!WriteWholeFile(path, wav.data(), wav.size())) continue;
+            written.push_back(Narrow(path));
+            out.push_back(Narrow(dirName) + "/" + file);
+            clips[n.sound].push_back(std::move(pcm));
+            k++;
+        }
+    }
+    // every sound at its time in one stereo 48 kHz track (variants taken in turn), ready for a video editor / Blender strip
+    std::string mixFile;
+    if (!clips.empty()) {
+        const int rate = 48000;
+        double end = PropFloat(props, "SequenceLength");
+        for (auto& n : ns)
+            if (auto it = clips.find(n.sound); it != clips.end())
+                for (auto& c : it->second) end = std::max(end, n.time + c.Seconds());
+        std::vector<float> mix((size_t)(end * rate + 1) * 2, 0.f);
+        std::map<std::string, size_t> turn;
+        for (auto& n : ns) {
+            auto it = clips.find(n.sound);
+            if (it == clips.end() || it->second.empty()) continue;
+            const AudioPcm& c = it->second[turn[n.sound]++ % it->second.size()];
+            if (!c.channels || !c.sampleRate) continue;
+            size_t start = (size_t)(std::max(0.f, n.time) * rate), frames = c.Frames();
+            double step = (double)c.sampleRate / rate;
+            for (size_t o = 0; start + o < mix.size() / 2; o++) {
+                size_t src = (size_t)(o * step);
+                if (src >= frames) break;
+                float l = c.samples[src * c.channels] / 32768.f, r = c.channels > 1 ? c.samples[src * c.channels + 1] / 32768.f : l;
+                mix[(start + o) * 2] += l;
+                mix[(start + o) * 2 + 1] += r;
+            }
+        }
+        AudioPcm out;
+        out.channels = 2;
+        out.sampleRate = rate;
+        out.samples.resize(mix.size());
+        for (size_t i = 0; i < mix.size(); i++) out.samples[i] = (i16)std::clamp(mix[i] * 32767.f, -32768.f, 32767.f);
+        Bytes wav = MakeWav(out);
+        std::wstring mp = base + L".mix.wav";
+        CreateDirectories(mp.substr(0, mp.find_last_of(L'\\')));
+        if (WriteWholeFile(mp, wav.data(), wav.size())) {
+            written.push_back(Narrow(mp));
+            mixFile = Narrow(mp.substr(mp.find_last_of(L'\\') + 1));
+        }
+    }
+    JsonWriter w;
+    w.BeginObject();
+    w.KV("animation", pkg.GamePath());
+    if (!mixFile.empty()) w.KV("mix", mixFile);
+    w.KV("length", PropFloat(props, "SequenceLength"));
+    w.Key("notifies");
+    w.BeginArray();
+    static const char* actions[] = {"", "spawn", "destroy", "switch", "visibility"};
+    for (auto& n : ns) {
+        w.BeginObject();
+        w.KV("time", (double)n.time);
+        w.KV("name", n.name);
+        if (!n.cls.empty()) w.KV("class", n.cls);
+        if (n.duration > 0) w.KV("duration", (double)n.duration);
+        if (!n.sound.empty()) {
+            w.KV("sound", n.sound);
+            w.Key("files");   // the game picks one of them at random
+            w.BeginArray();
+            for (auto& f : files[n.sound]) w.Str(f);
+            w.EndArray();
+        }
+        if (!n.particle.empty()) {
+            w.KV("particle", n.particle);
+            if (!n.socket.empty()) w.KV("socket", n.socket);
+            w.KV("attached", n.attached);
+        }
+        if (n.itemAction != AnimNotifyInfo::NoItem) {
+            w.KV("itemAction", actions[n.itemAction]);
+            if (!n.itemClass.empty()) w.KV("itemClass", n.itemClass);
+            w.KV("hand", n.itemHand ? "left" : "right");
+        }
+        w.EndObject();
+    }
+    w.EndArray();
+    w.EndObject();
+    std::string json = w.Take();
+    std::wstring jp = base + L".notifies.json";
+    CreateDirectories(jp.substr(0, jp.find_last_of(L'\\')));
+    if (!WriteWholeFile(jp, json.data(), json.size())) { if (error) *error = "could not write " + Narrow(jp); return false; }
+    written.push_back(Narrow(jp));
+    return true;
+}
 
 bool ExportAnimationSet(PackageCache& cache, const std::vector<std::shared_ptr<Package>>& animPkgs, const std::string& meshPath, Bytes& glb, std::string& note,
                         std::string* error) {
