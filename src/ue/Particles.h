@@ -87,6 +87,7 @@ public:
 private:
     struct Particle {
         Vec3 pos, vel, accel, meshRot, meshRotRate;
+        Vec3 orbitOffset, orbitRot, orbitRate;   // ParticleModuleOrbit: rendered offset, rotation (turns) and its rate
         Vec3 baseSize, baseColor;
         float baseAlpha = 1, age = 0, life = 1, loopTime = 0, subLoopTime = 0, rot = 0, rotRate = 0, subRnd = 0, drag = 0, rnd = 0.5f;
     };

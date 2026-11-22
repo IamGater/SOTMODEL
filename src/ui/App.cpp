@@ -512,7 +512,7 @@ void App::LoadDocument(std::shared_ptr<Document> d) {
                     if (!d->psMeshes[i]) continue;
                     float scale = 1;
                     for (auto& m : ps->emitters[i].modules)
-                        if (m.enabled && m.cls == "ParticleModuleSize")
+                        if (m.enabled && (m.cls == "ParticleModuleSize" || m.cls == "ParticleModuleSize_Seeded"))
                             if (auto c = m.Curve("StartSize"))
                                 for (int ch = 0; ch < c->dims; ch++) {
                                     float mn, mx;

@@ -180,13 +180,23 @@ const char* kSimulated[] = {"ParticleModuleRequired", "ParticleModuleSpawn", "Pa
                             "ParticleModuleVelocity", "ParticleModuleVelocityCone", "ParticleModuleAcceleration", "ParticleModuleAccelerationConstant",
                             "ParticleModuleAccelerationDrag", "ParticleModuleLocation", "ParticleModuleLocationPrimitiveSphere",
                             "ParticleModuleLocationPrimitiveCylinder", "ParticleModuleRotation", "ParticleModuleRotationRate", "ParticleModuleSubUV",
-                            "ParticleModuleMeshRotation", "ParticleModuleMeshRotationRate", "ParticleModuleTypeDataGpu", "ParticleModuleTypeDataMesh"};
+                            "ParticleModuleMeshRotation", "ParticleModuleMeshRotationRate", "ParticleModuleTypeDataGpu", "ParticleModuleTypeDataMesh",
+                            "ParticleModulePivotOffset", "ParticleModuleRotationRateMultiplyLife", "ParticleModuleAccelerationDragScaleOverLife",
+                            "ParticleModuleAttractorPointGravity", "ParticleModuleOrbit", "ParticleModuleSizeScaleBySpeed",
+                            "ParticleModuleLocationPrimitiveSphereSlice",
+                            // the preview emitter does not move: no parent velocity to inherit, no distance to spawn over
+                            "ParticleModuleVelocityInheritParent", "ParticleModuleSpawnPerUnit"};
+
+// ParticleModuleXxx_Seeded behaves like ParticleModuleXxx (it only fixes the random seed).
+std::string BaseModuleClass(const std::string& cls) {
+    return IEndsWith(cls, "_Seeded") ? cls.substr(0, cls.size() - 7) : cls;
+}
 
 ParticleModuleInfo ReadModule(const Package& pkg, i32 obj) {
     ParticleModuleInfo m;
     m.cls = pkg.ClassName(obj);
     m.name = obj > 0 ? pkg.Exports()[obj - 1].objectName : pkg.ObjectName(obj);
-    for (auto* s : kSimulated) m.simulated |= m.cls == s;
+    for (auto* s : kSimulated) m.simulated |= BaseModuleClass(m.cls) == s;
     if (obj <= 0) return m;
     for (auto& p : pkg.ReadProperties((size_t)obj - 1)) {
         std::string key = p.arrayIndex ? Fmt("%s[%d]", p.name.c_str(), p.arrayIndex) : p.name;
@@ -197,6 +207,11 @@ ParticleModuleInfo ReadModule(const Package& pkg, i32 obj) {
             ParticleCurve c;
             if (ReadCurve(pkg, p.value, c)) m.curves.push_back({key, std::move(c)});
             continue;
+        }
+        // a bare UDistribution object reference (GPU-only modules such as AttractorPointGravity use these)
+        if (p.value.type == PropType::Object && p.value.ObjIndex() != 0 && pkg.ClassName(p.value.ObjIndex()).rfind("Distribution", 0) == 0) {
+            ParticleCurve c;
+            if (CurveFromDistribution(pkg, p.value.ObjIndex(), c)) { m.curves.push_back({key, std::move(c)}); continue; }
         }
         m.values.push_back({key, SimpleValue(pkg, p.value)});
     }
@@ -408,7 +423,7 @@ void ParticleSim::Spawn(Emitter& em, float et, int n) {
         p.subLoopTime = p.loopTime;   // SubImageIndex tables run over the particle loop (indices past the grid wrap)
         for (auto& m : e.modules) {
             if (!m.enabled) continue;
-            const std::string& c = m.cls;
+            const std::string c = BaseModuleClass(m.cls);
             auto cv = [&](const char* name) { return m.Curve(name); };
             if (c == "ParticleModuleLifetime") {
                 if (auto x = cv("Lifetime")) {
@@ -449,7 +464,7 @@ void ParticleSim::Spawn(Emitter& em, float et, int n) {
                 else if (auto x2 = cv("DragCoefficient")) p.drag = x2->Eval(et, 0, Rnd());
             } else if (c == "ParticleModuleLocation") {
                 if (auto x = cv("StartLocation")) p.pos = p.pos + x->Eval3(et, Rnd());
-            } else if (c == "ParticleModuleLocationPrimitiveSphere" || c == "ParticleModuleLocationPrimitiveCylinder") {
+            } else if (c == "ParticleModuleLocationPrimitiveSphere" || c == "ParticleModuleLocationPrimitiveSphereSlice" || c == "ParticleModuleLocationPrimitiveCylinder") {
                 bool sphere = c.find("Sphere") != std::string::npos;
                 float r = cv("StartRadius") ? cv("StartRadius")->Eval(et, 0, Rnd()) : 50;
                 Vec3 off;
@@ -477,6 +492,10 @@ void ParticleSim::Spawn(Emitter& em, float et, int n) {
                 if (auto x = cv("StartRotation")) p.meshRot = x->Eval3(et, Rnd());   // turns
             } else if (c == "ParticleModuleMeshRotationRate") {
                 if (auto x = cv("StartRotationRate")) p.meshRotRate = x->Eval3(et, Rnd());
+            } else if (c == "ParticleModuleOrbit") {
+                if (auto x = cv("OffsetAmount")) p.orbitOffset = x->Eval3(et, Rnd());
+                if (auto x = cv("RotationAmount")) p.orbitRot = x->Eval3(et, Rnd());
+                if (auto x = cv("RotationRateAmount")) p.orbitRate = x->Eval3(et, Rnd());
             }
         }
         em.parts.push_back(p);
@@ -487,11 +506,35 @@ void ParticleSim::Step(float dt) {
     m_time += dt;
     for (auto& em : m_emitters) {
         const ParticleEmitterInfo& e = *em.info;
+        // over-life update modules (UE applies their scales to the running values every frame)
+        const ParticleCurve *rateLife = nullptr, *dragLife = nullptr, *attractStrength = nullptr;
+        Vec3 attractPos;
+        float attractRadius = 0;
+        for (auto& m : e.modules) {
+            if (!m.enabled) continue;
+            std::string c = BaseModuleClass(m.cls);
+            if (c == "ParticleModuleRotationRateMultiplyLife") rateLife = m.Curve("LifeMultiplier");
+            else if (c == "ParticleModuleAccelerationDragScaleOverLife") dragLife = m.Curve("DragScale");
+            else if (c == "ParticleModuleAttractorPointGravity") {   // GPU point attractor (approximation): Strength fading to 0 at Radius
+                attractStrength = m.Curve("Strength");
+                sscanf(m.Value("Position").c_str(), "(%f, %f, %f)", &attractPos.x, &attractPos.y, &attractPos.z);
+                attractRadius = (float)atof(m.Value("Radius").c_str());
+            }
+        }
+        float emitterT = e.duration > 0 ? fmodf(std::max(0.f, m_time - e.delay), e.duration) / e.duration : 0;
         // update particles
         for (size_t i = 0; i < em.parts.size();) {
             Particle& p = em.parts[i];
             p.age += dt;
             if (p.age >= p.life) { em.parts[i] = em.parts.back(); em.parts.pop_back(); continue; }
+            float rel = p.life < 1e8f ? p.age / p.life : 0;
+            if (rateLife) p.rotRate *= rateLife->Eval(rel, 0, p.rnd);
+            if (dragLife) p.drag *= dragLife->Eval(rel, 0, p.rnd);
+            if (attractStrength) {
+                Vec3 d = attractPos + e.origin - p.pos;
+                float dist = Length(d), fall = attractRadius > 0 ? std::clamp(1 - dist / attractRadius, 0.f, 1.f) : 1.f;
+                if (dist > 1e-3f) p.vel = p.vel + d * (attractStrength->Eval(emitterT, 0, p.rnd) * fall * dt / dist);
+            }
             p.vel = p.vel + p.accel * dt;
             if (p.drag > 0) p.vel = p.vel * std::max(0.f, 1 - p.drag * dt);
             p.pos = p.pos + p.vel * dt;
@@ -546,7 +589,7 @@ void ParticleSim::Sprites(std::vector<ParticleSprite>& out) const {
         // that is hundreds of frames a second. Such tables are run at a flipbook frame rate instead.
         float subFrames = 0;
         for (auto& m : e.modules)
-            if (m.enabled && m.cls == "ParticleModuleSubUV")
+            if (m.enabled && BaseModuleClass(m.cls) == "ParticleModuleSubUV")
                 if (auto x = m.Curve("SubImageIndex")) {
                     float mn, mx;
                     x->Range(0, mn, mx);
@@ -561,7 +604,7 @@ void ParticleSim::Sprites(std::vector<ParticleSprite>& out) const {
             float alpha = p.baseAlpha, sub = 0;
             for (auto& m : e.modules) {
                 if (!m.enabled) continue;
-                const std::string& c = m.cls;
+                const std::string c = BaseModuleClass(m.cls);
                 if (c == "ParticleModuleSizeScale") {
                     if (auto x = m.Curve("SizeScale")) { Vec3 s = x->Eval3(rel, p.rnd); size = {size.x * s.x, size.y * s.y, size.z * s.z}; }
                 } else if (c == "ParticleModuleSizeMultiplyLife") {
@@ -574,10 +617,24 @@ void ParticleSim::Sprites(std::vector<ParticleSprite>& out) const {
                     if (auto x = m.Curve("AlphaScaleOverLife")) alpha *= x->Eval(rel, 0, p.rnd);
                 } else if (c == "ParticleModuleSubUV") {
                     if (auto x = m.Curve("SubImageIndex")) sub = x->Eval(subRel, 0, p.subRnd);
+                } else if (c == "ParticleModuleSizeScaleBySpeed") {   // size x clamp(speed * SpeedScale, 1, MaxScale)
+                    float sx = 0, sy = 0, mx = 1, my = 1, z;
+                    sscanf(m.Value("SpeedScale").c_str(), "(%f, %f, %f)", &sx, &sy, &z);
+                    sscanf(m.Value("MaxScale").c_str(), "(%f, %f, %f)", &mx, &my, &z);
+                    float speed = Length(p.vel);
+                    size.x *= std::clamp(speed * sx, 1.f, std::max(1.f, mx));
+                    size.y *= std::clamp(speed * sy, 1.f, std::max(1.f, my));
                 }
             }
             ParticleSprite s;
             s.pos = p.pos;
+            if (Dot(p.orbitOffset, p.orbitOffset) > 0) {   // ParticleModuleOrbit: the offset turned about X, Y, Z (turns)
+                Vec3 r = (p.orbitRot + p.orbitRate * p.age) * (2 * kPi), o = p.orbitOffset;
+                o = {o.x, o.y * cosf(r.x) - o.z * sinf(r.x), o.y * sinf(r.x) + o.z * cosf(r.x)};
+                o = {o.x * cosf(r.y) + o.z * sinf(r.y), o.y, -o.x * sinf(r.y) + o.z * cosf(r.y)};
+                o = {o.x * cosf(r.z) - o.y * sinf(r.z), o.x * sinf(r.z) + o.y * cosf(r.z), o.z};
+                s.pos = s.pos + o;
+            }
             s.velocity = p.vel;
             s.size = {fabsf(size.x), fabsf(size.y) > 0 ? fabsf(size.y) : fabsf(size.x)};
             s.color = {std::max(0.f, col.x), std::max(0.f, col.y), std::max(0.f, col.z), std::clamp(alpha, 0.f, 1.f)};
