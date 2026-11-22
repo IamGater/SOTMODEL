@@ -49,7 +49,7 @@ runs the search window's Content tab (the GUI face of `search_content`, same fil
 More automation for the 3D views: `--pick u,v` clicks a map's viewport once at that fraction of its size (the pick is
 logged), `--attach <mesh or particle system>@<socket>` (repeatable; without `@<socket>` the default hand socket) attaches
 assets to the opened mesh / animation's sockets, `--tab` takes `archives` / `folders` / `packages` or 0-2,
-`--time <hour>` opens maps at that hour of the day cycle, `--graph` opens model tabs with Graph shader on and the material parameters expanded.
+`--variant <name>` switches a model tab's first matching material slot to that variant (the model view lists sibling material instances per slot: `name_01_a` -> `_01_b`, `_01_a_v02`, ...), `--time <hour>` opens maps at that hour of the day cycle, `--graph` opens model tabs with Graph shader on and the material parameters expanded.
 
 The viewer also opens `BlueprintGeneratedClass` packages as one assembled actor (component templates attached by the
 construction script tree, child actors included), draws particle systems with the 3D renderer (also on sockets and the

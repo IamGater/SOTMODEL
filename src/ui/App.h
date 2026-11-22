@@ -125,6 +125,10 @@ struct Document {
     std::vector<MeshSocket> sockets;
     std::vector<Vec3> socketLines[3];   // X / Y / Z axes
     std::vector<MorphTarget> morphs;
+    // material variants (skins): sibling material instances by name, per slot; overrides applied to a copy of gpuMesh
+    std::vector<std::vector<std::string>> matVariants;   // per slot: candidate material object paths (empty until listed)
+    std::vector<std::string> matOverrides;               // per slot: chosen variant ("" = the mesh's own)
+    bool matVariantsListed = false;
     std::vector<float> morphWeights;
     char morphFilter[64] = {};
     // meshes attached to sockets (a weapon in a hand); they follow the animation's pose
@@ -272,6 +276,7 @@ public:
     bool popoutOnStart = false;             // --popout: show the opened tab's 3D view in the separate window
     std::vector<std::string> attachOnStart; // --attach mesh@socket: attached to the opened tab's mesh once loaded (automation)
     bool graphOnStart = false;              // --graph: model tabs open with Graph shader on and the parameters expanded
+    std::string variantOnStart;             // --variant name: model tabs switch the first slot having it to that material variant
     float timeOnStart = -1;                 // --time h: maps open at this hour of the day cycle (automation)
 
 private:
@@ -351,6 +356,8 @@ private:
     void DrawWorldParticles(Document& d);     // inside the viewport scene
     static bool Has3dView(const Document& d);
     void LoadWorld(std::shared_ptr<Document> d);
+    void ListMaterialVariants(Document& d);
+    void ApplyMaterialVariants(std::shared_ptr<Document> d);   // builds the chosen materials in a job, then swaps them in
     // AnimNotify playback (AnimNotifies.cpp)
     struct NotifySound { int state = 0; std::vector<std::shared_ptr<AudioPcm>> clips; };   // 0 loading, 1 ready, 2 nothing playable
     struct NotifyFxTemplate { int state = 0; std::shared_ptr<Document::Attachment> fx; };

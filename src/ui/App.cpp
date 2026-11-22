@@ -623,6 +623,8 @@ void App::RebuildMeshLod(Document& d) {
                 if (x->id == id && gm) {
                     x->gpuMesh = gm;
                     x->morphDirty = true;   // morph weights are re-applied on the new LOD
+                    for (auto& o : x->matOverrides)
+                        if (!o.empty()) { ApplyMaterialVariants(x); break; }
                 }
         });
     });
@@ -1124,6 +1126,40 @@ void App::DrawModel(Document& d) {
                 if (e >= 0) OpenFile((u32)e);
             }
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("Click to open the material");
+        }
+        if (!d.matVariantsListed) {
+            ListMaterialVariants(d);
+            if (!variantOnStart.empty()) {   // --variant
+                for (size_t k = 0; k < d.matVariants.size(); k++)
+                    for (auto& v : d.matVariants[k])
+                        if (ToLower(v).find(ToLower(variantOnStart)) != std::string::npos) {
+                            d.matOverrides[k] = v;
+                            for (auto& sp : m_docs)
+                                if (sp.get() == &d) ApplyMaterialVariants(sp);
+                            k = d.matVariants.size() - 1;
+                            break;
+                        }
+                variantOnStart.clear();
+            }
+        }
+        if (i < d.matVariants.size() && !d.matVariants[i].empty()) {   // skins: sibling material instances
+            const std::string& cur = d.matOverrides[i].empty() ? s.materialPath : d.matOverrides[i];
+            std::string label = cur.substr(cur.rfind('.') + 1);
+            ImGui::SetNextItemWidth(-1);
+            if (ImGui::BeginCombo("##var", Fmt("variant: %s", label.c_str()).c_str(), ImGuiComboFlags_HeightLarge)) {
+                for (auto& v : d.matVariants[i]) {
+                    std::string vn = v.substr(v.rfind('.') + 1);
+                    bool own = IEquals(v, s.materialPath);
+                    if (ImGui::Selectable(own ? (vn + "  (default)").c_str() : vn.c_str(), IEquals(v, cur))) {
+                        d.matOverrides[i] = own ? "" : v;
+                        for (auto& sp : m_docs)
+                            if (sp.get() == &d) ApplyMaterialVariants(sp);
+                    }
+                    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", v.c_str());
+                }
+                ImGui::EndCombo();
+            }
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%zu material instances named like this one (skins / colour variants)", d.matVariants[i].size());
         }
         if (d.draw.graphMaterials && d.gpuMesh && i < d.gpuMesh->materials.size() && d.gpuMesh->materials[i]) DrawGraphParams(*d.gpuMesh->materials[i]);
         ImGui::PopID();

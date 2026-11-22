@@ -814,3 +814,56 @@ void App::MaterialHlslTab(u32 entry) {
         });
     });
 }
+
+// ------------------------------------------------------------------ material variants (skins)
+
+// Sibling material instances by name: "wpn_cutlass_pol_01_a" -> wpn_cutlass_pol_01_b / _c and Variation/..._01_a_v01 / _v02.
+void App::ListMaterialVariants(Document& d) {
+    d.matVariantsListed = true;
+    if (!d.mesh) return;
+    const Vfs& vfs = m_api->vfs;
+    size_t n = d.mesh->materials.size();
+    d.matVariants.assign(n, {});
+    d.matOverrides.resize(n);
+    for (size_t s = 0; s < n; s++) {
+        std::string own = d.mesh->materials[s].materialPath;   // /Game/X/name.name
+        if (own.empty()) continue;
+        std::string stem = ToLower(own.substr(own.rfind('/') + 1));
+        stem = stem.substr(0, stem.find('.'));
+        std::string prefix = stem + "_";
+        static const std::regex lettered("(.*_\\d\\d)_[a-z]");   // name_01_a: every letter of that number
+        std::smatch mm;
+        if (std::regex_match(stem, mm, lettered)) prefix = mm[1].str() + "_";
+        std::vector<std::string> found;
+        for (u32 i = 0; i < vfs.FileCount() && found.size() < 64; i++) {
+            std::string_view fn = vfs.FileName(i);
+            if (fn.size() < prefix.size() || !IStartsWith(fn, prefix) || !IEndsWith(fn, ".uasset")) continue;
+            std::string path = ToLower(vfs.Path(i));
+            if (path.find("/materials/") == std::string::npos) continue;
+            std::string name(fn.substr(0, fn.size() - 7));
+            std::string gp = GamePathToPackage(vfs.Path(i));
+            found.push_back(gp + "." + name);
+        }
+        std::sort(found.begin(), found.end(), [](auto& a, auto& b) { return ToLower(a.substr(a.rfind('/'))) < ToLower(b.substr(b.rfind('/'))); });
+        if (found.size() > 1 || (found.size() == 1 && !IEquals(found[0], own))) d.matVariants[s] = std::move(found);
+    }
+}
+
+void App::ApplyMaterialVariants(std::shared_ptr<Document> d) {
+    if (!d->gpuMesh || !d->mesh) return;
+    auto overrides = d->matOverrides;
+    auto base = d->gpuMesh;
+    auto mesh = d->mesh;
+    m_jobs->Push([this, d, overrides, base, mesh] {
+        auto copy = std::make_shared<GpuMesh>(*base);   // the cached mesh stays as the game ships it
+        for (size_t s = 0; s < copy->materials.size() && s < mesh->materials.size(); s++) {
+            const std::string& p = s < overrides.size() && !overrides[s].empty() ? overrides[s] : mesh->materials[s].materialPath;
+            if (!p.empty()) copy->materials[s] = m_assets->Material(p);
+        }
+        Post([this, d, copy, base] {
+            if (d->gpuMesh != base) return;   // the LOD changed meanwhile: that rebuild re-applies them
+            d->gpuMesh = copy;
+            if (d->draw.graphMaterials) RequestGraphShaders(*d);
+        });
+    });
+}
