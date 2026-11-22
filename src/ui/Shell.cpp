@@ -2177,6 +2177,8 @@ void App::DrawAudioPanel(Document& d) {
         } else d.bankTab = 0;
         if (pcm)   // leave room for the waveform and the transport below
             listH = std::max(Dip(66), std::min(listH, p.y + h - y - Dip(8) - minWaveH - transportH));
+        else   // nothing to play yet: the list takes the room, the hint line goes under it
+            listH = std::max(Dip(66), p.y + h - y - Dip(8) - ImGui::GetFontSize() - Dip(8));
         ImGui::SetCursorScreenPos(ImVec2(p.x + m, y));
         ImGui::BeginChild("##bankmedia", ImVec2(w - m * 2, listH), ImGuiChildFlags_None);
         ImDrawList* ldl = ImGui::GetWindowDrawList();
