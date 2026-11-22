@@ -331,13 +331,60 @@ unsigned int FolderCategory(std::string_view name) {
     return 0;
 }
 
+// Colour of a folder category (by its FolderCategory glyph): related kinds share hues with the asset icons
+// (textures red, materials green, meshes cyan, animation violet, sound teal, Blueprints blue, maps orange, ...)
+ImU32 CategoryTint(unsigned int cp) {
+    switch (cp) {
+    case 0xe4d8: return IM_COL32(214, 140, 170, 255);   // force feedback
+    case 0xe6c8: return IM_COL32(110, 205, 95, 255);    // materials
+    case 0xe610: return IM_COL32(60, 200, 190, 255);    // shaders
+    case 0xe2ca: return IM_COL32(238, 104, 104, 255);   // textures / images / decals
+    case 0xe730: return IM_COL32(170, 135, 248, 255);   // animation
+    case 0xe792: return IM_COL32(240, 120, 80, 255);    // cinematics
+    case 0xe1bc: return IM_COL32(80, 145, 252, 255);    // Blueprints / code
+    case 0xe860: return IM_COL32(240, 210, 90, 255);    // json
+    case 0xe6a2: return IM_COL32(252, 200, 70, 255);    // particles / effects
+    case 0xe340: return IM_COL32(240, 120, 190, 255);   // music
+    case 0xe44a: return IM_COL32(70, 212, 170, 255);    // audio
+    case 0xe476: return IM_COL32(150, 170, 215, 255);   // data tables
+    case 0xe1de: return IM_COL32(130, 150, 200, 255);   // data
+    case 0xe154: return IM_COL32(90, 200, 235, 255);    // curves
+    case 0xe270: return IM_COL32(170, 175, 190, 255);   // config
+    case 0xe4a2: return IM_COL32(110, 190, 255, 255);   // localisation
+    case 0xe6ee: return IM_COL32(215, 215, 225, 255);   // fonts
+    case 0xe32e: return IM_COL32(100, 180, 252, 255);   // UI
+    case 0xe5d4: return IM_COL32(160, 170, 185, 255);   // editor / tools
+    case 0xe5f4: return IM_COL32(235, 110, 70, 255);    // debug
+    case 0xe79e: case 0xe7a0: return IM_COL32(170, 225, 90, 255);   // prototypes / tests
+    case 0xe288: return IM_COL32(80, 160, 240, 255);    // web
+    case 0xe5ba: return IM_COL32(200, 205, 220, 255);   // weapons
+    case 0xe786: return IM_COL32(205, 145, 90, 255);    // ships
+    case 0xe4c2: return IM_COL32(236, 125, 205, 255);   // characters
+    case 0xe670: return IM_COL32(190, 140, 240, 255);   // cosmetics
+    case 0xe78e: return IM_COL32(250, 196, 60, 255);    // treasure
+    case 0xe31a: return IM_COL32(255, 160, 50, 255);    // maps / levels
+    case 0xe2dc: return IM_COL32(255, 225, 100, 255);   // lights
+    case 0xe210: return IM_COL32(70, 160, 245, 255);    // water
+    case 0xe6da: return IM_COL32(95, 195, 95, 255);     // foliage
+    case 0xe1aa: return IM_COL32(170, 205, 245, 255);   // sky / weather
+    case 0xe7ae: return IM_COL32(185, 150, 115, 255);   // landscape / rocks
+    case 0xec5e: return IM_COL32(255, 150, 60, 255);    // physics
+    case 0xe10e: return IM_COL32(175, 180, 195, 255);   // camera
+    case 0xe26e: return IM_COL32(170, 130, 240, 255);   // input
+    case 0xe596: return IM_COL32(120, 210, 120, 255);   // plugins
+    case 0xea80: return IM_COL32(150, 160, 175, 255);   // engine
+    case 0xe1da: return IM_COL32(45, 192, 232, 255);    // meshes / props
+    }
+    return IM_COL32(229, 189, 119, 255);   // plain folder
+}
+
 // Folder (closed / open) in FModel's warm colour, with its category glyph (FolderCategory) on the front panel;
 // mn = top-left of a size x size box
 // Small sizes (tree, list rows) show the category glyph alone in the folder colour: inside a 16 px folder it is unreadable.
 void IconFolder(ImDrawList* dl, ImVec2 mn, float size, bool open, std::string_view name = {}) {
-    const ImU32 folderCol = IM_COL32(229, 189, 119, 255);
     ImVec2 centre(mn.x + size * 0.5f, mn.y + size * 0.5f);
     unsigned int cp = name.empty() ? 0 : FolderCategory(name);
+    const ImU32 folderCol = CategoryTint(cp);   // each category its own colour
     char utf8[5];
     if (cp) ImTextCharToUtf8(utf8, cp);
     if (cp && size < Dip(32)) {
@@ -348,7 +395,7 @@ void IconFolder(ImDrawList* dl, ImVec2 mn, float size, bool open, std::string_vi
     if (!cp) return;
     float w = r.GetWidth(), h = r.GetHeight();
     ImVec2 c(r.Min.x + w * (open ? 0.54f : 0.5f), r.Min.y + h * (open ? 0.64f : 0.6f));   // middle of the front panel
-    Glyph(dl, c, size * 0.48f, IM_COL32(120, 78, 28, 255), utf8);
+    Glyph(dl, c, size * 0.48f, Shade(folderCol, 0.42f), utf8);   // the glyph in a dark shade of the folder colour
 }
 
 ImU32 FileTint(std::string_view name) {
