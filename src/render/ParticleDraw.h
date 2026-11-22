@@ -6,6 +6,7 @@
 struct ParticleLook {   // per emitter
     std::shared_ptr<GpuTexture> texture;   // null: soft dots
     bool additive = false, velocityAligned = false, visible = true;
+    bool frameBlend = false;   // SubUV PSUVIM_*_Blend: cross-fade between flipbook frames
     int subH = 1, subV = 1;
     Vec2 pivot;   // ParticlePivot
 };

@@ -108,6 +108,7 @@ struct SpriteVertex {
     float pos[3];
     float uv[2];
     float color[4];
+    float uv2[3] = {0, 0, 0};   // next flipbook frame (u, v) and how much of it to blend in (SubUV *_Blend)
 };
 
 class Renderer {

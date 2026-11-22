@@ -634,8 +634,10 @@ void RenderParticleSprites(const std::vector<ParticleSprite>& sprites, const std
         int x0 = std::max(0, (int)(cx - r)), x1 = std::min(W - 1, (int)(cx + r)), y0 = std::max(0, (int)(cy - r)), y1 = std::min(H - 1, (int)(cy + r));
         if (x0 > x1 || y0 > y1 || hx < 0.05f) continue;
         int sh = re ? re->subH : 1, sv = re ? re->subV : 1, cells = sh * sv;
-        int cell = ((int)s.subImage % cells + cells) % cells;
+        int cell = ((int)floorf(s.subImage) % cells + cells) % cells, next = (cell + 1) % cells;
         float cu = (float)(cell % sh) / sh, cvv = (float)(cell / sh) / sv;
+        float nu = (float)(next % sh) / sh, nvv = (float)(next / sh) / sv;
+        float fb = re && re->frameBlend && cells > 1 ? s.subImage - floorf(s.subImage) : 0.f;   // cross-fade into the next frame
         const Image* tex = re ? re->texture : nullptr;
         bool add = re && re->additive;
         for (int y = y0; y <= y1; y++)
@@ -648,6 +650,11 @@ void RenderParticleSprites(const std::vector<ParticleSprite>& sprites, const std
                     int tx = std::clamp((int)((cu + u / sh) * tex->width), 0, tex->width - 1), ty = std::clamp((int)((cvv + w / sv) * tex->height), 0, tex->height - 1);
                     const u8* t = &tex->rgba[((size_t)ty * tex->width + tx) * 4];
                     tr = t[0] / 255.f; tg = t[1] / 255.f; tb = t[2] / 255.f; ta = t[3] / 255.f;
+                    if (fb > 0.001f) {
+                        int nx = std::clamp((int)((nu + u / sh) * tex->width), 0, tex->width - 1), ny = std::clamp((int)((nvv + w / sv) * tex->height), 0, tex->height - 1);
+                        const u8* n = &tex->rgba[((size_t)ny * tex->width + nx) * 4];
+                        tr += (n[0] / 255.f - tr) * fb; tg += (n[1] / 255.f - tg) * fb; tb += (n[2] / 255.f - tb) * fb; ta += (n[3] / 255.f - ta) * fb;
+                    }
                 } else {
                     float d = (u - 0.5f) * (u - 0.5f) + (w - 0.5f) * (w - 0.5f);   // soft disc
                     ta = std::max(0.f, 1 - d * 4);

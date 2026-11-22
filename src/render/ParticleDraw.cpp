@@ -13,6 +13,7 @@ std::vector<ParticleLook> ParticleLooks(const ParticleSystemInfo& ps, const std:
         l.subH = std::max(1, e.subH);
         l.subV = std::max(1, e.subV);
         l.pivot = ParticlePivot(e);
+        l.frameBlend = e.subUVMethod.find("Blend") != std::string::npos;
     }
     return looks;
 }
@@ -58,15 +59,19 @@ int DrawParticleSprites(Renderer& r, const Camera& cam, const std::vector<Partic
         }
         ux = ux * (s.size.x * 0.5f * scale);
         uy = uy * (s.size.y * 0.5f * scale);
-        int cells = l.subH * l.subV, cell = ((int)s.subImage % cells + cells) % cells;
+        int cells = l.subH * l.subV, whole = (int)floorf(s.subImage), cell = (whole % cells + cells) % cells, next = (cell + 1) % cells;
         float u0 = (float)(cell % l.subH) / l.subH, v0 = (float)(cell / l.subH) / l.subV, du = 1.f / l.subH, dv = 1.f / l.subV;
-        if (!l.texture) u0 = v0 = 0, du = dv = 1;
+        // *_Blend flipbooks cross-fade into the next frame by the fraction of the index
+        float blend = l.frameBlend && cells > 1 ? s.subImage - floorf(s.subImage) : 0.f;
+        float nu = (float)(next % l.subH) / l.subH - u0, nv = (float)(next / l.subH) / l.subV - v0;   // offset to the next frame
+        if (!l.texture) u0 = v0 = 0, du = dv = 1, blend = 0;
         Vec3 o = it.pos + ux * (2 * l.pivot.x) - uy * (2 * l.pivot.y);   // pivot offset: (0, -0.5) puts the bottom edge on the particle
         Vec3 c[4] = {o - ux + uy, o + ux + uy, o + ux - uy, o - ux - uy};   // top-left, top-right, bottom-right, bottom-left
         float uv[4][2] = {{u0, v0}, {u0 + du, v0}, {u0 + du, v0 + dv}, {u0, v0 + dv}};
         static const int idx[6] = {0, 1, 2, 0, 2, 3};
         for (int k : idx)
-            batch.push_back({{c[k].x, c[k].y, c[k].z}, {uv[k][0], uv[k][1]}, {s.color.x, s.color.y, s.color.z, std::clamp(s.color.w, 0.f, 1.f)}});
+            batch.push_back({{c[k].x, c[k].y, c[k].z}, {uv[k][0], uv[k][1]}, {s.color.x, s.color.y, s.color.z, std::clamp(s.color.w, 0.f, 1.f)},
+                             {uv[k][0] + nu, uv[k][1] + nv, blend}});
     }
     flush();
     return (int)items.size();

@@ -127,6 +127,7 @@ void RegisterParticleTools(Api& api) {
                           re[i].additive = e.blendMode.find("Additive") != std::string::npos;
                           re[i].alignment = e.screenAlignment;
                           re[i].pivot = ParticlePivot(e);
+                          re[i].frameBlend = e.subUVMethod.find("Blend") != std::string::npos;
                       }
                       Vec3 centre;
                       float dist;

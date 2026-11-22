@@ -123,18 +123,22 @@ cbuffer Frame : register(b0) { float4x4 ViewProj; float4 EyePos; float4 LightDir
 cbuffer Sprite : register(b1) { float4 SpriteFlags; };   // x has texture, y additive
 Texture2D Tex : register(t0);
 SamplerState Samp : register(s0);
-struct VSIn { float3 pos : POSITION; float2 uv : TEXCOORD0; float4 col : COLOR0; };
-struct PSIn { float4 pos : SV_Position; float2 uv : TEXCOORD0; float4 col : COLOR0; };
+struct VSIn { float3 pos : POSITION; float2 uv : TEXCOORD0; float4 col : COLOR0; float3 uv2 : TEXCOORD1; };
+struct PSIn { float4 pos : SV_Position; float2 uv : TEXCOORD0; float4 col : COLOR0; float3 uv2 : TEXCOORD1; };
 PSIn VSMain(VSIn i) {
     PSIn o;
     o.pos = mul(float4(i.pos, 1), ViewProj);
     o.uv = i.uv;
     o.col = i.col;
+    o.uv2 = i.uv2;
     return o;
 }
 float4 PSMain(PSIn i) : SV_Target {
     float4 t;
-    if (SpriteFlags.x > 0) t = Tex.Sample(Samp, i.uv);
+    if (SpriteFlags.x > 0) {
+        t = Tex.Sample(Samp, i.uv);
+        if (i.uv2.z > 0.001) t = lerp(t, Tex.Sample(Samp, i.uv2.xy), i.uv2.z);   // flipbook frame blend
+    }
     else { float2 d = frac(i.uv) * 2 - 1; t = float4(1, 1, 1, saturate(1 - dot(d, d))); }
     float4 c = t * i.col;
     if (SpriteFlags.y > 0) return float4(c.rgb * c.a, 0);   // additive (ONE, ONE)
@@ -254,8 +258,9 @@ bool Renderer::Init(ID3D11Device* device, ID3D11DeviceContext* ctx, std::string*
         {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0},
         {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 12, D3D11_INPUT_PER_VERTEX_DATA, 0},
         {"COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 20, D3D11_INPUT_PER_VERTEX_DATA, 0},
+        {"TEXCOORD", 1, DXGI_FORMAT_R32G32B32_FLOAT, 0, 36, D3D11_INPUT_PER_VERTEX_DATA, 0},
     };
-    if (FAILED(m_dev->CreateInputLayout(spriteEl, 3, svs->GetBufferPointer(), svs->GetBufferSize(), &m_spriteLayout))) { if (error) *error = "sprite input layout"; return false; }
+    if (FAILED(m_dev->CreateInputLayout(spriteEl, 4, svs->GetBufferPointer(), svs->GetBufferSize(), &m_spriteLayout))) { if (error) *error = "sprite input layout"; return false; }
 
     D3D11_BUFFER_DESC cb = {};
     cb.Usage = D3D11_USAGE_DYNAMIC;
