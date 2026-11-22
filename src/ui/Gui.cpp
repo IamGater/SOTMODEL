@@ -382,8 +382,14 @@ int RunGui(const std::vector<std::string>& args) {
     if (forceW > 0) {
         SetWindowPos(hwnd, nullptr, 20, 20, forceW, forceH, SWP_NOZORDER);
         ShowWindow(hwnd, SW_SHOWNORMAL);
-    } else {
-        ShowWindow(hwnd, SW_SHOWMAXIMIZED);
+    } else {   // not maximized: about 90% of the work area, centred
+        MONITORINFO mi = {sizeof(mi)};
+        if (GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY), &mi)) {
+            RECT wa = mi.rcWork;
+            int ww = wa.right - wa.left, wh = wa.bottom - wa.top, w = ww * 91 / 100, h = wh * 96 / 100;
+            SetWindowPos(hwnd, nullptr, wa.left + (ww - w) / 2, wa.top + (wh - h) / 2, w, h, SWP_NOZORDER);
+        }
+        ShowWindow(hwnd, SW_SHOWNORMAL);
     }
     UpdateWindow(hwnd);
 
