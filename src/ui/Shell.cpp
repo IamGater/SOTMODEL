@@ -1592,6 +1592,10 @@ void App::DrawDocContent(Document& d) {
     float splitW = Dip(4);
     if (side && d.sideW <= 0) d.sideW = hasGraph || hasSm || hasParticles ? avail.x * 0.6f : hasShaders ? std::min(avail.x * 0.4f, Dip(520)) : has3d || hasTable ? avail.x * 0.6f : std::min(avail.x * 0.45f, Dip(400) + avail.x * 0.1f);
     float sideW = side ? std::clamp(d.sideW, Dip(160), std::max(Dip(160), avail.x - Dip(200))) : 0;
+    // the 3D view drawn in the separate window: the side only holds its two buttons, the JSON gets the room
+    bool viewerSide = has3d && !hasGraph && !hasParticles && !hasSm && !hasShaders && !hasTable && !hasAudio;
+    bool poppedOut = viewerSide && d.id == m_popoutDoc;
+    if (poppedOut) sideW = std::min(sideW, Dip(280));
     float editW = side ? avail.x - sideW - splitW : avail.x;
     ImVec2 p = ImGui::GetCursorScreenPos();
     DrawJsonEditor(d, ImVec2(editW, avail.y));
@@ -1599,7 +1603,7 @@ void App::DrawDocContent(Document& d) {
     ImGui::SetCursorScreenPos(ImVec2(p.x + editW, p.y));
     ImGui::InvisibleButton("##sidesplit", ImVec2(splitW, avail.y));
     if (ImGui::IsItemHovered() || ImGui::IsItemActive()) ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
-    if (ImGui::IsItemActive()) d.sideW = sideW - ImGui::GetIO().MouseDelta.x;
+    if (ImGui::IsItemActive() && !poppedOut) d.sideW = sideW - ImGui::GetIO().MouseDelta.x;
     ImGui::GetWindowDrawList()->AddRectFilled(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), kLayer0);
     ImGui::SetCursorScreenPos(ImVec2(p.x + editW + splitW, p.y));
     if (hasGraph) {
@@ -1657,7 +1661,9 @@ void App::DrawDocContent(Document& d) {
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(Dip(5), Dip(5)));
     ImGui::BeginChild("##viewer", ImVec2(sideW, avail.y), ImGuiChildFlags_AlwaysUseWindowPadding);
     if (d.id == m_popoutDoc) {   // drawn in the separate window instead
-        ImGui::TextDisabled("The 3D view is open in a separate window.");
+        ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+        ImGui::TextWrapped("The 3D view is open in a separate window.");
+        ImGui::PopStyleColor();
         if (ImGui::Button("Show window")) m_popoutFocus = true;
         ImGui::SameLine();
         if (ImGui::Button("Back to tab")) SetViewerWindow(false, nullptr);
