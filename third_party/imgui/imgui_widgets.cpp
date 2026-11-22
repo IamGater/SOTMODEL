@@ -1300,21 +1300,33 @@ bool ImGui::Checkbox(const char* label, bool* v)
     if (is_visible)
     {
         RenderNavCursor(total_bb, id);
-        ImU32 bg_col = ItemCol(id, GetColorU32((held && hovered) ? ImGuiCol_FrameBgActive : hovered ? ImGuiCol_FrameBgHovered : (mixed_value || checked) ? ImGuiCol_CheckboxSelectedBg : ImGuiCol_FrameBg));
-        ImU32 check_col = GetColorU32(ImGuiCol_CheckMark);
-        RenderFrame(check_bb.Min, check_bb.Max, bg_col, true, style.FrameRounding);
-        if (mixed_value)
+        // SOTModel: rounded box; unchecked = field with an outline (brighter on hover), checked = accent fill with a white
+        // check mark that pops in (eased through ItemCol)
+        const bool on = mixed_value || checked;
+        const float box_rounding = IM_TRUNC(square_sz * 0.28f);
+        const ImRect box(check_bb.Min + ImVec2(1.0f, 1.0f), check_bb.Max - ImVec2(1.0f, 1.0f));
+        const ImU32 accent = GetColorU32(ImGuiCol_CheckMark);
+        ImU32 fill = on ? ((held && hovered) ? GetColorU32(ImGuiCol_SliderGrabActive) : hovered ? GetColorU32(ImGuiCol_SliderGrabActive) : accent)
+                        : GetColorU32((held && hovered) ? ImGuiCol_FrameBgActive : hovered ? ImGuiCol_FrameBgHovered : ImGuiCol_FrameBg);
+        ImU32 bg_col = ItemCol(id, fill);
+        ImU32 outline = ItemCol(id ^ 0x0B0D, on ? fill : hovered ? GetColorU32(ImGuiCol_Text, 0.55f) : GetColorU32(ImGuiCol_Border, 1.6f));
+        window->DrawList->AddRectFilled(box.Min, box.Max, bg_col, box_rounding);
+        window->DrawList->AddRect(box.Min, box.Max, outline, box_rounding, 0, ImMax(1.0f, IM_TRUNC(square_sz / 14.0f)));
+        ImU32 mark = ItemCol(id ^ 0xC4EC, on ? IM_COL32_WHITE : (IM_COL32_WHITE & ~IM_COL32_A_MASK));
+        float k = ((mark >> IM_COL32_A_SHIFT) & 0xFF) / 255.0f;   // 0..1 while it pops in / out
+        if (k > 0.0f)
         {
-            // Undocumented tristate/mixed/indeterminate checkbox (#2644)
-            // This may seem awkwardly designed because the aim is to make ImGuiItemFlags_MixedValue supported by all widgets (not just checkbox)
-            const float pad = ImMax(1.0f, IM_TRUNC(square_sz / 3.6f));
-            const float rounding = 0.0f;// IM_TRUNC(ImMin((square_sz - pad * 2.0f) * 0.20f, style.FrameRounding)); // Clamp rounding
-            window->DrawList->AddRectFilled(check_bb.Min + ImVec2(pad, pad), check_bb.Max - ImVec2(pad, pad), check_col, rounding);
-        }
-        else if (*v)
-        {
-            const float pad = ImMax(1.0f, IM_TRUNC(square_sz / 6.0f));
-            RenderCheckMark(window->DrawList, check_bb.Min + ImVec2(pad, pad), check_col, square_sz - pad * 2.0f);
+            const ImVec2 c = box.GetCenter();
+            if (mixed_value)
+            {
+                const float hw = square_sz * 0.24f * (0.5f + 0.5f * k), hh = ImMax(1.0f, square_sz * 0.07f);
+                window->DrawList->AddRectFilled(ImVec2(c.x - hw, c.y - hh), ImVec2(c.x + hw, c.y + hh), mark, hh);
+            }
+            else
+            {
+                const float sz = (square_sz - IM_TRUNC(square_sz / 3.2f) * 2.0f) * (0.55f + 0.45f * k);
+                RenderCheckMark(window->DrawList, ImVec2(c.x - sz * 0.5f, c.y - sz * 0.5f), mark, sz);
+            }
         }
     }
     const ImVec2 label_pos = ImVec2(check_bb.Max.x + style.ItemInnerSpacing.x, check_bb.Min.y + style.FramePadding.y);
