@@ -872,7 +872,7 @@ void App::DrawLeftPanel(float width, float height) {
         if (ImGui::InvisibleButton("##ltab", ImVec2(tw, tabH))) m_leftTab = i;
         ImGui::PopID();
         bool sel = m_leftTab == i;
-        float ht = HoverAnim(), st = Anim(ImGui::GetItemID() ^ 0x7ab, sel);
+        float ht = HoverAnim(), st = Anim(ImGui::GetItemID() ^ 0x7ab, sel, 0.05f);
         dl->AddRectFilled(a, b, Mix(Mix(kPanel, kHover, ht), kTabSel, st));
         if (i > 0) dl->AddRectFilled(ImVec2(a.x - 1, a.y), ImVec2(a.x + 1, b.y), kBorder);
         ImVec2 ts = ImGui::CalcTextSize(labels[i].c_str());
@@ -903,7 +903,7 @@ void App::DrawLeftPanel(float width, float height) {
     ImGui::EndChild();
     ImGui::PopStyleColor();
     ImGui::PopStyleVar(2);
-    FadeIn(ImGui::GetID("##leftfade"), (u64)m_leftTab, ImVec2(p.x + 1, p.y + top), ImVec2(p.x + width - 1, p.y + height - 1), kPanel);
+    FadeIn(ImGui::GetID("##leftfade"), (u64)m_leftTab, ImVec2(p.x + 1, p.y + top), ImVec2(p.x + width - 1, p.y + height - 1), kPanel, 0.08f);
 }
 
 void App::DrawArchivesTab() {
