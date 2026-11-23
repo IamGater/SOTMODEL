@@ -232,6 +232,8 @@ public:
     std::string ClassCpp(const Package& p, i32 idx) {
         if (!idx) return "UObject";
         std::string name = p.ObjectName(idx);
+        if (idx < 0 ? !IStartsWith(p.ImportPackage(idx), "/Script/") : &p == &pkg)   // Blueprint classes (the dumps list some of them too)
+            classPackages.emplace(name, idx < 0 ? p.ImportPackage(idx) : pkg.PackageName());
         if (auto* cpp = SotReflection::ClassCppName(name)) return *cpp;
         return std::string(1, ClassPrefix(p, idx)) + SafeIdent(name);
     }
@@ -379,41 +381,129 @@ public:
         if (owner) *owner = own;
         if (auto* f = SotReflection::Function(own, name)) return f;
         if (auto other = LoadOther(pkg.ImportPackage(func))) {
-            if (i32 c = other->FindExport(own))
+            if (i32 c = other->FindExport(own)) {   // another Blueprint: its functions, then its parents'
                 if (auto* f = BpFunction(*other, c, name)) return f;
+                const ReflFunction* found = nullptr;
+                ForEachSuperOf(*other, c, [&](const Package& p, i32 cls) { return (found = BpFunction(p, cls, name)) != nullptr; },
+                               [&](const std::string& n) { found = NativeFunction(n, name, owner); return true; });
+                return found;
+            }
         }
-        return SotReflection::FunctionInHierarchy(own, name, owner);
+        return NativeFunction(own, name, owner);
+    }
+    // a function of a class by name: a Blueprint class seen in a type (its functions, then its parents'), else native
+    std::map<std::string, std::string> classPackages;   // Blueprint class name -> package path
+    const ReflFunction* ClassFunction(const std::string& cls, const std::string& name) {
+        auto cp = classPackages.find(cls);
+        if (cp == classPackages.end()) return NativeFunction(cls, name);
+        if (cls == clsName) return SelfFunction(name);
+        auto other = LoadOther(cp->second);
+        i32 c = other ? other->FindExport(cls) : 0;
+        if (!c) return NativeFunction(cls, name);
+        if (auto* f = BpFunction(*other, c, name)) return f;
+        const ReflFunction* found = nullptr;
+        ForEachSuperOf(*other, c, [&](const Package& p, i32 k) { return (found = BpFunction(p, k, name)) != nullptr; },
+                       [&](const std::string& n) { found = NativeFunction(n, name); return true; });
+        return found ? found : NativeFunction(cls, name);
+    }
+    // a native function from class `cls` up, else the one interface declaring it (class interfaces aren't in the table)
+    static const ReflFunction* NativeFunction(const std::string& cls, const std::string& name, std::string* owner = nullptr) {
+        if (auto* f = SotReflection::FunctionInHierarchy(cls, name, owner)) return f;
+        return SotReflection::UniqueFunction(name, true, owner);
     }
 
     // a function called by name on this object: own functions, then up the super chain (Blueprints, then native)
-    const ReflFunction* SelfFunction(const std::string& name) {
-        for (auto& f : funcs)
-            if (f.name == name) return &ownRefl[f.index];
+    // walks this class's super chain: `bp(package, class export)` for each parent Blueprint class, then `native(name)`
+    // for the first native class; stops when a callback returns true
+    template <typename Bp, typename Native> void ForEachSuper(Bp&& bp, Native&& native) { ForEachSuperOf(pkg, clsIndex, bp, native); }
+    template <typename Bp, typename Native> void ForEachSuperOf(const Package& start, i32 startCls, Bp&& bp, Native&& native) {
         std::shared_ptr<Package> holder;
-        const Package* p = &pkg;
-        i32 cls = clsIndex;
+        const Package* p = &start;
+        i32 cls = startCls;
         for (int guard = 0; guard < 24 && cls; guard++) {
             i32 sup = 0;
             Reader r;
             if (cls > 0 && BodyReader(*p, (size_t)cls - 1, r)) {
                 try { r.I32(); sup = r.I32(); } catch (const std::exception&) { sup = 0; }
             }
-            if (!sup) return nullptr;
+            if (!sup) return;
             std::string supName = p->ObjectName(sup);
             if (sup < 0) {
-                if (SotReflection::ClassCppName(supName)) return SotReflection::FunctionInHierarchy(supName, name);
+                if (IStartsWith(p->ImportPackage(sup), "/Script/")) { native(supName); return; }
                 auto other = LoadOther(p->ImportPackage(sup));
-                if (!other) return nullptr;
+                if (!other) return;
                 holder = other;
                 p = other.get();
                 cls = p->FindExport(supName);
             } else {
                 cls = sup;
             }
-            if (cls > 0)
-                if (auto* f = BpFunction(*p, cls, name)) return f;
+            if (cls > 0 && bp(*p, cls)) return;
         }
-        return nullptr;
+    }
+
+    const ReflFunction* SelfFunction(const std::string& name) {
+        for (auto& f : funcs)
+            if (f.name == name) return &ownRefl[f.index];
+        const ReflFunction* found = nullptr;
+        ForEachSuper([&](const Package& p, i32 cls) { return (found = BpFunction(p, cls, name)) != nullptr; },
+                     [&](const std::string& n) { found = NativeFunction(n, name); return true; });
+        return found;
+    }
+
+    // C++ type of a member inherited from a parent Blueprint or native class ("" when unknown)
+    std::map<std::string, std::string> inheritedTypes;
+    std::string InheritedType(const std::string& name) {
+        auto it = inheritedTypes.find(name);
+        if (it != inheritedTypes.end()) return it->second;
+        std::string type;
+        ForEachSuper(
+            [&](const Package& p, i32 cls) {
+                for (size_t i = 0; i < p.Exports().size(); i++)
+                    if (p.Exports()[i].outerIndex == cls && SafeIdent(p.Exports()[i].objectName) == name && IEndsWith(p.ExportClass(i), "Property")) {
+                        type = ReadProp(p, i).type;
+                        return true;
+                    }
+                return false;
+            },
+            [&](const std::string& n) {
+                if (auto* t = SotReflection::FieldInHierarchy(n, name)) type = *t;
+                return true;
+            });
+        return inheritedTypes[name] = type;
+    }
+    // type of a variable or member path ("Mesh", "this->Pawn", "Foo->Bar"): own variables, inherited members, native members
+    std::string ExprType(const std::string& expr) {
+        std::string e = expr;
+        if (IStartsWith(e, "this->")) e = e.substr(6);
+        size_t arrow = std::string::npos;
+        int depth = 0;
+        for (size_t i = 0; i + 1 < e.size(); i++) {
+            if (e[i] == '(' || e[i] == '[') depth++;
+            else if (e[i] == ')' || e[i] == ']') depth--;
+            else if (depth == 0 && e[i] == '-' && e[i + 1] == '>') arrow = i;
+        }
+        if (arrow != std::string::npos) {
+            std::string left = ClassOfType(ExprType(e.substr(0, arrow))), member = e.substr(arrow + 2);
+            if (left.empty() || !IsPlainIdent(member)) return "";
+            auto* t = SotReflection::FieldInHierarchy(left, member);
+            return t ? *t : "";
+        }
+        if (!IsPlainIdent(e)) return "";
+        auto it = varTypes.find(e);
+        if (it != varTypes.end()) return it->second;
+        return InheritedType(e);
+    }
+    static bool IsPlainIdent(const std::string& s) {
+        if (s.empty() || isdigit((u8)s[0])) return false;
+        for (char c : s)
+            if (!IsIdentChar(c)) return false;
+        return true;
+    }
+    static std::string ClassOfType(const std::string& t) {   // unprefixed class of an object / interface type
+        if (t.size() > 2 && t.back() == '*' && (t[0] == 'A' || t[0] == 'U')) return t.substr(1, t.size() - 2);
+        if (IStartsWith(t, "TScriptInterface<I") && t.back() == '>') return t.substr(18, t.size() - 19);
+        return "";
     }
 
     // enumerator name of a value: native enums from the reflection table, Blueprint enums from their package
@@ -465,22 +555,8 @@ public:
         std::string lit = EnumLiteral(en, v);
         return lit.empty() ? arg : lit;
     }
-    std::string VarEnum(const std::string& expr) {
-        std::string e = expr;
-        if (IStartsWith(e, "this->")) e = e.substr(6);
-        auto it = varTypes.find(e);
-        return it != varTypes.end() ? EnumOfType(it->second) : "";
-    }
-    std::string VarClass(const std::string& expr) {   // unprefixed class of an object variable
-        std::string e = expr;
-        if (IStartsWith(e, "this->")) e = e.substr(6);
-        auto it = varTypes.find(e);
-        if (it == varTypes.end()) return "";
-        std::string t = it->second;
-        if (t.size() > 2 && t.back() == '*' && (t[0] == 'A' || t[0] == 'U')) return t.substr(1, t.size() - 2);
-        if (IStartsWith(t, "TScriptInterface<I") && t.back() == '>') return t.substr(18, t.size() - 19);
-        return "";
-    }
+    std::string VarEnum(const std::string& expr) { return EnumOfType(ExprType(expr)); }
+    std::string VarClass(const std::string& expr) { return ClassOfType(ExprType(expr)); }   // unprefixed class of an object expression
 
     // ------------------------------------------------------------- bytecode
 
@@ -727,7 +803,8 @@ public:
             std::string cc = ctxClass;
             auto args = ArgList(s);
             if (IStartsWith(name, "ExecuteUbergraph") && !args.empty() && isdigit((u8)args[0][0])) entryNames[(u32)strtoul(args[0].c_str(), nullptr, 10)] = currentFunc;
-            const ReflFunction* sig = in ? (cc.empty() ? nullptr : SotReflection::FunctionInHierarchy(cc, name)) : SelfFunction(name);
+            // a context of unknown type: the only native class declaring the name
+            const ReflFunction* sig = in ? (cc.empty() ? SotReflection::UniqueFunction(name, false) : ClassFunction(cc, name)) : SelfFunction(name);
             if (!IStartsWith(name, "ExecuteUbergraph")) CountCall(sig, in ? (cc.empty() ? "?" : cc) : clsName, name);
             return SafeIdent(name) + "(" + FormatArgs(args, sig) + ")";
         }
@@ -979,6 +1056,7 @@ public:
     std::map<u32, size_t> at;   // offset -> statement index
     std::set<u32> loopHeads;
     std::set<u32> pendingResume, inlinedResume;
+    bool separateLatent = false;   // latent resumes as their own sections (retry when following them inline does not structure)
     size_t budget = 0;
 
     void Prepare(const std::vector<Stmt>& st) {
@@ -988,7 +1066,7 @@ public:
         for (size_t i = 0; i < st.size(); i++) at[st[i].off] = i;
         for (auto& t : st) {
             if ((t.kind == Stmt::Goto || t.kind == Stmt::IfNot || t.kind == Stmt::Push) && t.target <= t.off) loopHeads.insert(t.target);   // WhileLoop pushes its head
-            if (t.latent >= 0) loopHeads.insert((u32)t.latent);   // loops may wait on a latent action (checked in EmitLoop)
+            if (t.latent >= 0 && !separateLatent) loopHeads.insert((u32)t.latent);   // loops may wait on a latent action (checked in EmitLoop)
         }
     }
     const Stmt* StmtAt(u32 off) const {
@@ -1018,7 +1096,7 @@ public:
         switch (s.kind) {
         case Stmt::Normal: {
             // a latent call that ends its chain continues at its resume point (shown inline)
-            if (s.latent >= 0) {
+            if (s.latent >= 0 && !separateLatent) {
                 const Stmt* n = Effective(s.next);
                 if (!n || n->kind == Stmt::Pop || n->kind == Stmt::Return) return {(u32)s.latent};
             }
@@ -1087,7 +1165,7 @@ public:
                 if (s.latent >= 0) {
                     const Stmt* n = Effective(s.next);
                     bool ends = !n || n->kind == Stmt::Pop || n->kind == Stmt::Return;
-                    bool lastInChain = ends && (ctx.flow.empty() || IsReturnLabel(ctx.flow.back()));
+                    bool lastInChain = !separateLatent && ends && (ctx.flow.empty() || IsReturnLabel(ctx.flow.back()));
                     if (lastInChain) {
                         Line(out, ind, s.text + ";   // latent: what follows runs when it completes");
                         inlinedResume.insert((u32)s.latent);
@@ -1155,7 +1233,10 @@ public:
                 auto ra = Reach(s.next, term), rb = Reach(s.target, term);
                 i64 join = -1;
                 int best = 1 << 30;
+                // the function's return is a join only where the chain would end there anyway (not inside a loop or a pushed chain)
+                bool returnJoins = ctx.loops.empty() && (ctx.flow.empty() || IsReturnLabel(ctx.flow.back()));
                 for (auto& [o, da] : ra) {
+                    if (!returnJoins && IsReturnLabel(o)) continue;
                     auto it = rb.find(o);
                     if (it != rb.end() && da + it->second < best) { best = da + it->second; join = o; }
                 }
@@ -1199,6 +1280,8 @@ public:
                         if (chain) {
                             out.push_back(std::string((size_t)ind * 4, ' ') + "else " + elseL[0]);
                             for (size_t k = 1; k < elseL.size(); k++) out.push_back(std::string((size_t)ind * 4, ' ') + elseL[k]);
+                        } else if (thenL.back() == "return;" || IStartsWith(thenL.back(), "return ") || thenL.back() == "break;" || thenL.back() == "continue;") {
+                            EmitBlock(out, ind, elseL);   // the then branch leaves: no else needed
                         } else {
                             Line(out, ind, "else");
                             Line(out, ind, "{");
@@ -1260,15 +1343,20 @@ public:
             for (u32 p : pred[o]) if (!body.count(p)) q.push_back(p);
         }
         // a chain pushed inside the loop (a Sequence output, the loop body of ForEach) returns into it when it ends
+        // (joins of the code around the loop don't bound it: shared code reached there pops back into the loop too)
+        std::set<u32> loopTerm{head};
+        for (auto& l : ctx.loops) {
+            loopTerm.insert(l->head);
+            if (l->exit >= 0) loopTerm.insert((u32)l->exit);
+        }
         for (bool grew = true; grew;) {
             grew = false;
-            std::set<u32> t2 = term;
-            t2.insert(head);
+            const std::set<u32>& t2 = loopTerm;
             for (u32 o : std::vector<u32>(body.begin(), body.end())) {
                 const Stmt* s = StmtAt(o);
                 if (!s || s->kind != Stmt::Push) continue;
                 for (auto& [n, d] : Reach(s->next, t2))
-                    if (!term.count(n) && body.insert(n).second) grew = true;
+                    if (!loopTerm.count(n) && body.insert(n).second) grew = true;
             }
         }
         std::set<u32> exits;
@@ -1276,7 +1364,7 @@ public:
             const Stmt* s = StmtAt(o);
             if (!s) continue;
             for (u32 n : Succ(*s))
-                if (!body.count(n)) exits.insert(n);
+                if (!body.count(n) && !IsReturnLabel(n)) exits.insert(n);   // a jump to the function's return is a return inside the loop
         }
         // exits that only lead to the end of the chain can be written inside the loop (followed by break / return)
         auto inlinable = [&](const std::set<u32>& ex) {
@@ -1527,6 +1615,7 @@ public:
             } else {
                 // flat ubergraph, events as stubs
                 bodies[uber->index] = FunctionBodyFlat(*uber);
+                if (!splitFail.empty()) bodies[uber->index].code = "    // event graph kept whole (" + splitFail + ")\n" + bodies[uber->index].code;
                 for (auto& f : funcs)
                     if (stubEntries.count(f.index)) bodies[f.index] = FunctionBodyFlat(f);
             }
@@ -1621,11 +1710,13 @@ public:
     }
 
     std::map<i32, i64> stubEntries;   // event function -> ubergraph entry
+    std::string splitFail;            // why the event graph could not be split into events
 
     // each event's body = the ubergraph code from its entry, with the event parameters in place of their frame copies
     bool ExtractEvents(const FuncInfo& uber, std::map<i32, Body>& bodies, std::vector<PropInfo>& frameVars, std::string& rest) {
         std::string error;
         outArgs.clear();
+        separateLatent = false;
         struct Ev {
             const FuncInfo* f;
             i64 entry;
@@ -1667,7 +1758,17 @@ public:
                 Ctx ctx;
                 ctx.flow = sentinel;
                 if (!StmtAt((u32)ev.entry)) throw StructFail("event entry outside the ubergraph");
-                Emit((u32)ev.entry, ctx, lines, 0);
+                try {
+                    Emit((u32)ev.entry, ctx, lines, 0);
+                } catch (const StructFail&) {
+                    if (separateLatent) throw;
+                    separateLatent = true;   // a loop through latent actions: show the resumes as sections instead
+                    Prepare(st);
+                    lines.clear();
+                    budget = 0;
+                    pendingResume.clear();
+                    Emit((u32)ev.entry, ctx, lines, 0);
+                }
                 TrimTrailingReturn(lines);
                 rendered.insert((u32)ev.entry);
                 for (u32 r : inlinedResume) rendered.insert(r);
@@ -1718,10 +1819,13 @@ public:
                 for (auto& l : uber.locals)
                     if (CountIdent(rest, l.name)) useCount[l.name] += 2;
             }
-        } catch (const StructFail&) {
+        } catch (const StructFail& e) {
             renames.clear();
+            splitFail = e.what();
+            separateLatent = false;
             return false;
         }
+        separateLatent = false;
         // locals of one event stay in it; state shared between events (or macro state such as DoOnce / loop counters) lives in the frame
         for (auto& ev : events) {
             Body b;
