@@ -174,13 +174,18 @@ Typical flow: `search` → `get_package` → `get_properties` / `preview_*` → 
   event entries; the ubergraph is split into those events (frame variables renamed to the event params, variables shared
   between events listed as "event graph state"). Latent calls ending a chain continue inline; when a loop runs through
   latent actions the event is redone with the resumes as `Label_N:` sections (`// event graph kept whole (reason)` if
-  even that fails). One-use `CallFunc_*` temporaries are inlined. Native classes, calls, members and enums come from
+  even that fails). One-use `CallFunc_*` temporaries are inlined. Function parameters / locals follow the function's
+  Children -> Next property chain (the order calls pass arguments in; export order differs). A non-virtual call of a
+  parent's function this class overrides is `Super::X()`. Integer constants written to bools / enums use the target's
+  type (`false`, `EFoo::Bar`); FGuid constants are hex. Native classes, calls, members and enums come from
   third_party/sot_reflection (embedded resource 103, ue/SotReflection; generated from old-sot's depot_2020 SDK index +
-  sot-dump's SDK, see its README). The class of a call's context comes from variable / member types (own, parent
-  Blueprints', native members); interface functions and calls on an unknown type fall back to the only class declaring
-  the name. 198 signatures have unknown out-parameter positions and get no argument names. `--cli blueprints [substring]`
+  sot-dump's SDK, see its README). The class of a call's context comes from the types of the current function's
+  locals, class variables, parent Blueprints' variables, Blueprint struct members and native class / struct members;
+  interface functions and calls on an unknown type fall back to the only class declaring the name. For the 198
+  signatures whose out-parameter positions the dumps don't agree on, each call places them by its out temporaries
+  (`CallFunc_<Function>_<Parameter>`). `--cli blueprints [substring]`
   decompiles every Blueprint and prints failures, the "kept as jumps" / "kept whole" reasons and the share of calls with
-  a known signature with the unresolved ones (all 15,597: none kept as jumps, 99.7% of calls with a signature).
+  a known signature with the unresolved ones (all 15,597: none kept as jumps, every one of the 17,808 calls with a signature).
 - Texture formats in the game: BC7, DXT1/5, BC5, BC4, B8G8R8A8, G8, FloatRGBA, and BC6H (the skydome stars, unsigned)
   / PF_BC6H_SF16 (signed, the ships' deck-water height maps). BC6H decodes with third_party/bcdec (MIT / Unlicense)
   and is tone mapped like the float formats; DDS export writes DXGI 95 / 96.
