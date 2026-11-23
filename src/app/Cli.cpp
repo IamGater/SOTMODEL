@@ -182,7 +182,12 @@ static int DevBlueprints(Api& api, const std::string& filter) {
             auto& s = flat[code.substr(k + 31, e - k - 31)];
             if (s.first++ == 0) s.second = p;
         }
-        if (code.find("goto (EntryPoint)") != std::string::npos) { auto& s = flat["event graph not split into events"]; if (s.first++ == 0) s.second = p; }
+        for (size_t k = 0; (k = code.find("// event graph kept whole (", k)) != std::string::npos; k++) {
+            size_t e = code.find(")\n", k);
+            if (e == std::string::npos) break;
+            auto& s = flat["event graph: " + code.substr(k + 27, e - k - 27)];
+            if (s.first++ == 0) s.second = p;
+        }
         for (size_t k = 0; (k = code.find("// decompilation stopped: ", k)) != std::string::npos; k++) {
             size_t e = code.find('\n', k);
             std::string why = code.substr(k + 26, e - k - 26);
