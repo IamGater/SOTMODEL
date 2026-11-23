@@ -119,7 +119,7 @@ or `/Game/Models/Props/Common/cmn_barrel_debris_02_a.cmn_barrel_debris_02_a`.
 | `preview_blend_space` | PNG of the blended pose of a blend space at `x`/`y` (`time` 0..1 of each sample, played in sync) |
 | `get_world_info` | a map (.umap) as a scene: sublevels, placed meshes with Blueprint templates resolved, landscape components, instance counts, unresolved components (`filter=rock,-small` narrows the meshes). `path=Athena/Content/Maps/World_Layout/sot_world_layout_2.umap` is the whole sea: every island placed by the world layout; `islands=wsp_,-fort` / `region=[minX,minY,maxX,maxY]` select islands, `proxies=true` loads each island's merged LOD proxy instead (whole sea in seconds). Also lists lights by type, decal materials, particle emitters (systems with counts), height fog and the water level |
 | `preview_world` | renders a whole map (meshes, Blueprint components, landscape terrain coloured by paint layers) to a PNG; orbit with `yaw`/`pitch`/`zoom` or place the camera with `eye`/`target`. Lit by the map's sun / sky light / nearest 32 point and spot lights with its exponential height fog and the sea plane at the water level (`lights`, `fog`, `water`); `gizmos=true` outlines light ranges, spot cones and decal boxes |
-| `decompile_blueprint` | a Blueprint (`BlueprintGeneratedClass` package) as C++-like code: variables, functions with parameters and locals, Kismet bytecode as statements with labelled jumps |
+| `decompile_blueprint` | a Blueprint (`BlueprintGeneratedClass` package) as C++: class with C++ types, functions with structured control flow (if / else, loops, sequences), native calls with the game's signatures, events split out of the event graph; `raw=true` keeps the bytecode jumps as labels |
 | `export_world` | a whole map (.umap with sublevels) or an assembled Blueprint class as one glTF scene for Blender: level nodes, every placed mesh with materials and textures, landscape. `center` [x,y,z] + `radius` (cm) export only that part of a map, moved to the origin (`recenter=false` keeps world coordinates). For `sot_world_layout_2` pick islands with `islands` / `region` or use `proxies`. Lights go out as KHR_lights_punctual, decals as empties scaled to their box (extras: material, half extents), fog and water level as scene extras |
 | `get_world_layout` | the open world: every island / outpost / fort folder with its persistent map, sea, type, tile transform (location + yaw), bounds centre and radius (`filter`, `levels=true` for per-sublevel transforms) |
 | `find_mesh_placements` | where a mesh is placed: levels using it (reference index, also through Blueprints), instance counts and world positions (open-world levels moved to their island's place) |
@@ -164,7 +164,17 @@ Typical flow: `search` → `get_package` → `get_properties` / `preview_*` → 
   preview shader with fxc, grouping the errors (all 569 compile; mt_unq_simple_flare's Custom code returns the
   float2 ScreenAlignedPosition from a float3 function, so inside the custom expressions the preview `#define`s it to a
   float4 variant that narrows to any declared type). `SOTMODEL_DUMP_SHADER=<file>` makes the viewer write a preview shader fxc rejected.
-- Texture formats in the game: BC7, DXT1/5, BC5, BC4, B8G8R8A8, G8, FloatRGBA, and BC6H (the skydome stars, unsigned)
+- Blueprint decompiler (ue/Blueprint.cpp): Kismet 4.10 bytecode -> statements, then structured flow from the
+  execution-flow stack (function = Push(return label); Sequence pushes its later pins; ForEach / ForLoop bodies run
+  inside Push(increment) and jump back to the head; WhileLoop pushes the head). Loops, if / else joins and latent resume
+  points (FLatentActionInfo.Linkage) are rebuilt; a function whose flow can't be structured keeps labelled jumps with
+  `// control flow kept as jumps (reason)`. Event stubs (`UberGraphFrame->X = param; ExecuteUbergraph_X(N)`) give the
+  event entries; the ubergraph is split into those events (frame variables renamed to the event params, variables shared
+  between events listed as "event graph state"). One-use `CallFunc_*` temporaries are inlined. Native classes, calls and
+  enums come from third_party/sot_reflection (embedded resource 103, ue/SotReflection; generated from old-sot's depot_2020
+  SDK index + sot-dump's SDK, see its README); 198 signatures have unknown out-parameter positions and get no argument
+  names. `--cli blueprints [substring]` decompiles every Blueprint and prints failures, the "kept as jumps" reasons
+  (7 bodies of ~25k) and the share of calls with a known signature (~97%) with the unresolved ones.- Texture formats in the game: BC7, DXT1/5, BC5, BC4, B8G8R8A8, G8, FloatRGBA, and BC6H (the skydome stars, unsigned)
   / PF_BC6H_SF16 (signed, the ships' deck-water height maps). BC6H decodes with third_party/bcdec (MIT / Unlicense)
   and is tone mapped like the float formats; DDS export writes DXGI 95 / 96.
 - Material parameter collection parameters are `float` when the collection lists them under ScalarParameters.
