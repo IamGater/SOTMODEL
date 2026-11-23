@@ -260,8 +260,17 @@ public:
                 if (cls == "AssetObjectProperty") return "TAssetPtr<" + ClassCpp(p, ref()) + ">";
                 if (cls == "ClassProperty") { ref(); return "TSubclassOf<" + ClassCpp(p, ref()) + ">"; }
                 if (cls == "AssetClassProperty") { ref(); return "TAssetSubclassOf<" + ClassCpp(p, ref()) + ">"; }
-                if (cls == "InterfaceProperty") return "TScriptInterface<I" + SafeIdent(p.ObjectName(ref())) + ">";
-                if (cls == "StructProperty") return "F" + SafeIdent(p.ObjectName(ref()));
+                if (cls == "InterfaceProperty") {
+                    i32 c = ref();
+                    ClassCpp(p, c);   // records a Blueprint interface's package
+                    return "TScriptInterface<I" + SafeIdent(p.ObjectName(c)) + ">";
+                }
+                if (cls == "StructProperty") {
+                    i32 s = ref();
+                    if (s < 0 ? !IStartsWith(p.ImportPackage(s), "/Script/") : &p == &pkg)   // a Blueprint struct: members readable
+                        structPackages.emplace("F" + SafeIdent(p.ObjectName(s)), std::make_pair(s < 0 ? p.ImportPackage(s) : pkg.PackageName(), p.ObjectName(s)));
+                    return "F" + SafeIdent(p.ObjectName(s));
+                }
                 if (cls == "ByteProperty") {
                     i32 e = ref();
                     if (!e) return "uint8";
@@ -307,11 +316,12 @@ public:
         f.index = (i32)exportIdx + 1;
         f.name = p.Exports()[exportIdx].objectName;
         Reader r;
+        i32 children = 0;
         if (!BodyReader(p, exportIdx, r)) { err = "unreadable function"; return false; }
         try {
             r.I32();   // Next
             r.I32();   // SuperStruct
-            r.I32();   // Children
+            children = r.I32();
             r.I32();   // BytecodeBufferSize (in memory)
             i32 serialized = r.I32();
             if (serialized < 0 || (size_t)serialized > r.Remaining()) throw ParseError("bad script size");
@@ -325,10 +335,23 @@ public:
             err = e.what();
             return false;
         }
-        // parameters and locals: property exports inside the function, in export order
-        for (size_t i = 0; i < p.Exports().size(); i++) {
-            const auto& ex = p.Exports()[i];
-            if (ex.outerIndex != f.index || !IEndsWith(p.ExportClass(i), "Property")) continue;
+        // parameters and locals in the function's Children -> Next chain: the declaration order, which is the order
+        // calls pass arguments in (export order differs); exports the chain misses are added after it
+        std::vector<size_t> order;
+        std::set<size_t> seen;
+        for (i32 c = children; c > 0 && (size_t)c <= p.Exports().size() && order.size() < 4096;) {
+            size_t i = (size_t)c - 1;
+            if (p.Exports()[i].outerIndex != f.index || !IEndsWith(p.ExportClass(i), "Property") || !seen.insert(i).second) break;
+            order.push_back(i);
+            Reader pr;
+            c = 0;
+            if (BodyReader(p, i, pr)) {
+                try { c = pr.I32(); } catch (const std::exception&) { c = 0; }
+            }
+        }
+        for (size_t i = 0; i < p.Exports().size(); i++)
+            if (!seen.count(i) && p.Exports()[i].outerIndex == f.index && IEndsWith(p.ExportClass(i), "Property")) order.push_back(i);
+        for (size_t i : order) {
             PropInfo pi = ReadProp(p, i);
             if (pi.flags & CPF_Parm) f.params.push_back(pi);
             else f.locals.push_back(pi);
@@ -409,6 +432,7 @@ public:
     // a native function from class `cls` up, else the one interface declaring it (class interfaces aren't in the table)
     static const ReflFunction* NativeFunction(const std::string& cls, const std::string& name, std::string* owner = nullptr) {
         if (auto* f = SotReflection::FunctionInHierarchy(cls, name, owner)) return f;
+        if (auto* f = SotReflection::FunctionInHierarchy(cls, SafeIdent(name), owner)) return f;   // the dumps write "A B" as A_B
         return SotReflection::UniqueFunction(name, true, owner);
     }
 
@@ -476,23 +500,73 @@ public:
     std::string ExprType(const std::string& expr) {
         std::string e = expr;
         if (IStartsWith(e, "this->")) e = e.substr(6);
-        size_t arrow = std::string::npos;
+        size_t sep = std::string::npos, sepLen = 0;
         int depth = 0;
         for (size_t i = 0; i + 1 < e.size(); i++) {
             if (e[i] == '(' || e[i] == '[') depth++;
             else if (e[i] == ')' || e[i] == ']') depth--;
-            else if (depth == 0 && e[i] == '-' && e[i + 1] == '>') arrow = i;
+            else if (depth == 0 && e[i] == '-' && e[i + 1] == '>') { sep = i; sepLen = 2; }
+            else if (depth == 0 && e[i] == '.' && !isdigit((u8)e[i + 1])) { sep = i; sepLen = 1; }
         }
-        if (arrow != std::string::npos) {
-            std::string left = ClassOfType(ExprType(e.substr(0, arrow))), member = e.substr(arrow + 2);
-            if (left.empty() || !IsPlainIdent(member)) return "";
-            auto* t = SotReflection::FieldInHierarchy(left, member);
-            return t ? *t : "";
+        if (sep != std::string::npos) {
+            std::string leftType = ExprType(e.substr(0, sep)), member = e.substr(sep + sepLen);
+            if (!IsPlainIdent(member)) return "";
+            if (sepLen == 1) return StructMemberType(leftType, member);
+            std::string left = ClassOfType(leftType);
+            return left.empty() ? "" : MemberTypeOf(left, member);
         }
         if (!IsPlainIdent(e)) return "";
+        auto st = scopeTypes.find(e);   // parameters / locals of the function being decompiled shadow members
+        if (st != scopeTypes.end() && !IStartsWith(expr, "this->")) return st->second;
         auto it = varTypes.find(e);
         if (it != varTypes.end()) return it->second;
         return InheritedType(e);
+    }
+    // a property export named `member` directly inside export `outer` of package `p`
+    std::string PropTypeIn(const Package& p, i32 outer, const std::string& member) {
+        for (size_t i = 0; i < p.Exports().size(); i++)
+            if (p.Exports()[i].outerIndex == outer && SafeIdent(p.Exports()[i].objectName) == member && IEndsWith(p.ExportClass(i), "Property"))
+                return ReadProp(p, i).type;
+        return "";
+    }
+    // member type of a class: Blueprint classes from their package (and parents), native ones from the table
+    std::map<std::string, std::string> memberMemo;
+    std::string MemberTypeOf(const std::string& cls, const std::string& member) {
+        std::string key = cls + "\t" + member;
+        auto mm = memberMemo.find(key);
+        if (mm != memberMemo.end()) return mm->second;
+        std::string type;
+        auto cp = classPackages.find(cls);
+        if (cp == classPackages.end()) {
+            if (auto* t = SotReflection::FieldInHierarchy(cls, member)) type = *t;
+        } else if (auto other = LoadOther(cp->second)) {
+            if (i32 c = other->FindExport(cls)) {
+                type = PropTypeIn(*other, c, member);
+                if (type.empty())
+                    ForEachSuperOf(*other, c, [&](const Package& p, i32 k) { type = PropTypeIn(p, k, member); return !type.empty(); },
+                                   [&](const std::string& n) {
+                                       if (auto* t = SotReflection::FieldInHierarchy(n, member)) type = *t;
+                                       return true;
+                                   });
+            }
+        }
+        return memberMemo[key] = type;
+    }
+    // member type of a Blueprint struct (FName -> package, struct object name)
+    std::map<std::string, std::pair<std::string, std::string>> structPackages;
+    std::string StructMemberType(const std::string& structType, const std::string& member) {
+        auto sp = structPackages.find(structType);
+        if (sp == structPackages.end()) {   // a native struct (the table keys them by their F name)
+            auto* t = SotReflection::FieldInHierarchy(structType, member);
+            return t ? *t : "";
+        }
+        std::string key = structType + "\t" + member;
+        auto mm = memberMemo.find(key);
+        if (mm != memberMemo.end()) return mm->second;
+        std::string type;
+        if (auto other = LoadOther(sp->second.first))
+            if (i32 s = other->FindExport(sp->second.second)) type = PropTypeIn(*other, s, member);
+        return memberMemo[key] = type;
     }
     static bool IsPlainIdent(const std::string& s) {
         if (s.empty() || isdigit((u8)s[0])) return false;
@@ -611,6 +685,7 @@ public:
     i64 lastLatent = -1;
     bool inContext = false;                      // rendering the call part of obj->Call()
     std::string ctxClass;                        // unprefixed class of the context object, when known
+    std::string ctxObj;                          // the context object expression (for the unresolved-call report)
     std::string lastCdo;                         // class of the last class-default-object constant
     int counting = 0;                            // stats are taken on the final pass over each function only
 
@@ -670,7 +745,45 @@ public:
     }
 
     // arguments with the callee's signature: enum values by name, literals tagged with the parameter name
-    std::string FormatArgs(std::vector<std::string> args, const ReflFunction* sig) {
+    // out parameter positions of a signature the SDK dumps disagree on, from this call: the compiler passes each out
+    // parameter its own temporary named CallFunc_<Function>_<Parameter>[N]; the other parameters keep their order
+    bool OrderFromCall(const ReflFunction& sig, const std::string& fn, const std::vector<std::string>& args, ReflFunction& res) {
+        if (sig.params.size() != args.size()) return false;
+        std::vector<const ReflParam*> at(args.size(), nullptr);
+        for (auto& p : sig.params) {
+            if (p.mode != 'o') continue;
+            std::string temp = SafeIdent("CallFunc_" + fn + "_" + p.name);
+            int found = -1;
+            for (size_t i = 0; i < args.size(); i++) {
+                std::string a = IStartsWith(args[i], "this->") ? args[i].substr(6) : args[i];
+                if (!IStartsWith(a, temp)) continue;
+                bool digits = true;
+                for (size_t k = temp.size(); k < a.size(); k++) digits = digits && isdigit((u8)a[k]);
+                if (!digits || a.size() > temp.size() && a.size() - temp.size() > 3) continue;
+                if (found >= 0 || at[i]) return false;
+                found = (int)i;
+            }
+            if (found < 0) return false;
+            at[(size_t)found] = &p;
+        }
+        size_t next = 0;
+        for (auto& slot : at) {
+            if (slot) continue;
+            while (next < sig.params.size() && sig.params[next].mode == 'o') next++;
+            if (next >= sig.params.size()) return false;
+            slot = &sig.params[next++];
+        }
+        res = sig;
+        res.orderUnknown = false;
+        res.params.clear();
+        for (auto* p : at) res.params.push_back(*p);
+        return true;
+    }
+
+    std::string FormatArgs(std::vector<std::string> args, const ReflFunction* sig, const std::string& fn = "") {
+        ReflFunction ordered;
+        if (sig && sig->orderUnknown && !fn.empty() && OrderFromCall(*sig, fn, args, ordered)) sig = &ordered;
+        if (sig && sig->orderUnknown && opt.stats && counting > 0) opt.stats->callsOrderUnknown++;
         bool match = sig && !sig->orderUnknown && sig->params.size() == args.size();
         std::string out;
         for (size_t i = 0; i < args.size(); i++) {
@@ -735,7 +848,11 @@ public:
             }
         }
         if (owner == "KismetArrayLibrary" && name == "Array_Length" && args.size() == 1) return args[0] + ".Num()";
-        std::string call = fname + "(" + FormatArgs(args, sig) + ")";
+        std::string call = fname + "(" + FormatArgs(args, sig, name) + ")";
+        // a non-virtual call of a parent's function this class overrides: the "Parent: X" node
+        if (!inContext && !isStatic && funcRef < 0 && owner != clsName)
+            for (auto& f : funcs)
+                if (f.name == name) return "Super::" + call;
         if (isStatic && !inContext && !owner.empty() && owner != clsName) return ClassCppByName(owner) + "::" + call;
         return call;
     }
@@ -766,9 +883,15 @@ public:
         case 0x0B: return "";
         case 0x0C: s.Read<i32>(); return "";
         case 0x0F: case 0x14: case 0x5F: case 0x60: case 0x44: case 0x43: {   // Let / LetBool / LetObj / LetWeakObjPtr / LetDelegate / LetMulticastDelegate
-            if (op == 0x0F) s.Obj();
+            i32 prop = op == 0x0F ? s.Obj() : 0;
             std::string var = Expr(s), val = Expr(s);
             val = ApplyEnum(VarEnum(var), val);
+            if ((prop && pkg.ClassName(prop) == "BoolProperty") || ExprType(var) == "bool") {   // a bool written from an integer constant
+                std::string v = val;
+                ClearByteMarkers(v);
+                if (v == "0") val = "false";
+                else if (v == "1") val = "true";
+            }
             return var + " = " + val;
         }
         case 0x11: { s.Obj(); return std::to_string(s.Read<u8>()); }
@@ -782,9 +905,12 @@ public:
             std::string savedCls = ctxClass;
             inContext = true;
             ctxClass = !cdo.empty() ? cdo : VarClass(obj);
+            std::string savedObj = ctxObj;
+            ctxObj = obj;
             std::string ctx = Expr(s);
             inContext = savedIn;
             ctxClass = savedCls;
+            ctxObj = savedObj;
             if (!cdo.empty()) {   // static call through the class default object (operators and .Num() stay as they are)
                 size_t id = 0;
                 while (id < ctx.size() && IsIdentChar(ctx[id])) id++;
@@ -805,8 +931,8 @@ public:
             if (IStartsWith(name, "ExecuteUbergraph") && !args.empty() && isdigit((u8)args[0][0])) entryNames[(u32)strtoul(args[0].c_str(), nullptr, 10)] = currentFunc;
             // a context of unknown type: the only native class declaring the name
             const ReflFunction* sig = in ? (cc.empty() ? SotReflection::UniqueFunction(name, false) : ClassFunction(cc, name)) : SelfFunction(name);
-            if (!IStartsWith(name, "ExecuteUbergraph")) CountCall(sig, in ? (cc.empty() ? "?" : cc) : clsName, name);
-            return SafeIdent(name) + "(" + FormatArgs(args, sig) + ")";
+            if (!IStartsWith(name, "ExecuteUbergraph")) CountCall(sig, in ? (cc.empty() ? "?[" + ctxObj + "]" : cc) : clsName, name);
+            return SafeIdent(name) + "(" + FormatArgs(args, sig, name) + ")";
         }
         case 0x1C: case 0x46: case 0x68: {   // FinalFunction / LocalFinalFunction / CallMath
             i32 f = s.Obj();
@@ -827,6 +953,8 @@ public:
             std::string name = pkg.ObjectName(o), cls = pkg.ClassName(o);
             if (IStartsWith(name, "Default__")) {
                 lastCdo = name.substr(9);
+                if (o < 0 ? !IStartsWith(pkg.ImportPackage(o), "/Script/") : true)   // a Blueprint's defaults: its class is in the same package
+                    classPackages.emplace(lastCdo, o < 0 ? pkg.ImportPackage(o) : pkg.PackageName());
                 return "GetDefault<" + ClassCppByName(lastCdo) + ">()";
             }
             if (cls == "Class" || cls == "BlueprintGeneratedClass") return ClassCpp(pkg, o) + "::StaticClass()";
@@ -865,6 +993,20 @@ public:
                 targets.insert(at);
                 lastLatent = at;
                 pendingEntries[at] = "resume after a latent action in " + currentFunc;
+            }
+            if (name == "Guid") {   // FGuid's A..D are uint32: written as hex, as UE prints GUIDs
+                std::vector<std::string> parts;
+                size_t b = 0;
+                for (size_t e; (e = list.find(", ", b)) != std::string::npos; b = e + 2) parts.push_back(list.substr(b, e - b));
+                parts.push_back(list.substr(b));
+                bool ok = parts.size() == 4;
+                for (auto& p : parts) ok = ok && !p.empty() && (isdigit((u8)p[0]) || p[0] == '-');
+                if (ok && parts[0] == "0" && parts[1] == "0" && parts[2] == "0" && parts[3] == "0") return "FGuid()";
+                if (ok) {
+                    std::string g;
+                    for (auto& p : parts) g += (g.empty() ? "" : ", ") + Fmt("0x%08X", (u32)strtoll(p.c_str(), nullptr, 10));
+                    return "FGuid(" + g + ")";
+                }
             }
             return "F" + SafeIdent(name) + "(" + list + ")";
         }
@@ -1523,6 +1665,7 @@ public:
         scopeNames.clear();
         for (auto& p : f.params) scopeNames.insert(p.name);
         for (auto& p : f.locals) scopeNames.insert(p.name);
+        SetScopeTypes(f);
         renames.clear();
         outArgs.clear();
         counting++;
@@ -1584,10 +1727,6 @@ public:
         }
         for (auto& f : funcs) ownRefl[f.index] = ToRefl(f);
         for (auto& v : vars) varTypes[v.name] = v.type;
-        for (auto& f : funcs) {
-            for (auto& p : f.params) varTypes[p.name] = p.type;
-            for (auto& p : f.locals) varTypes[p.name] = p.type;
-        }
         // ubergraph entry points come from the event stubs
         const FuncInfo* uber = nullptr;
         for (auto& f : funcs) {
@@ -1672,6 +1811,7 @@ public:
         scopeNames.clear();
         for (auto& p : f.params) scopeNames.insert(p.name);
         for (auto& p : f.locals) scopeNames.insert(p.name);
+        SetScopeTypes(f);
         renames.clear();
         counting++;
         auto st = Parse(f, error);
@@ -1687,6 +1827,7 @@ public:
         std::string e;
         scopeNames.clear();
         for (auto& p : f.params) scopeNames.insert(p.name);
+        SetScopeTypes(f);
         renames.clear();
         auto st = Parse(f, e);
         if (!e.empty()) return -1;
@@ -1733,6 +1874,7 @@ public:
         renames.clear();
         scopeNames.clear();
         for (auto& p : uber.locals) scopeNames.insert(p.name);
+        SetScopeTypes(uber);
         counting++;
         auto st = Parse(uber, error);
         counting--;
@@ -1847,7 +1989,13 @@ public:
     std::string clsName, clsCpp;
     std::vector<FuncInfo> funcs;
     std::map<i32, ReflFunction> ownRefl;
-    std::map<std::string, std::string> varTypes;      // variable -> C++ type
+    std::map<std::string, std::string> varTypes;      // class variable -> C++ type
+    std::map<std::string, std::string> scopeTypes;    // parameter / local of the function being decompiled -> C++ type
+    void SetScopeTypes(const FuncInfo& f) {
+        scopeTypes.clear();
+        for (auto& p : f.params) scopeTypes[p.name] = p.type;
+        for (auto& p : f.locals) scopeTypes[p.name] = p.type;
+    }
     std::map<std::string, std::string> enumPaths;     // enum name -> object path
     std::map<std::string, std::vector<std::pair<long long, std::string>>> bpEnums;
     std::map<std::string, std::shared_ptr<Package>> loaded;

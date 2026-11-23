@@ -8,6 +8,7 @@
 // events that enter it, and control flow is rebuilt (if / else, loops, sequences) from the script jumps.
 struct BlueprintStats {
     size_t calls = 0, callsWithSignature = 0;   // function calls, and those matched to a signature (names / out parameters known)
+    size_t callsOrderUnknown = 0;                // with a signature whose out-parameter positions neither the dumps nor the call tell
     std::map<std::string, int> unresolved;       // owner::function of calls without one
 };
 struct BlueprintOptions {
