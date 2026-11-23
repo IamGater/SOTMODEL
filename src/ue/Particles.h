@@ -22,8 +22,19 @@ struct ParticleCurve {
     std::string Describe() const;                       // "5", "0.3 .. 0.6", "curve (8 keys) 0 .. 1"
 };
 
+// UVectorFieldStatic: SizeX x SizeY x SizeZ vectors (4 x half per voxel in the bulk data) over Bounds.
+struct VectorFieldData {
+    int sx = 0, sy = 0, sz = 0;
+    Vec3 boundsMin, boundsMax;
+    std::vector<Vec3> v;
+    // trilinear sample at a position in the field's local space (Bounds units); outside: clamped, or wrapped per tiled axis
+    Vec3 Sample(Vec3 local, bool tileX = false, bool tileY = false, bool tileZ = false) const;
+};
+bool ReadVectorField(PackageCache& cache, const std::string& path, VectorFieldData& out, std::string* error = nullptr);
+
 struct ParticleModuleInfo {
     std::string cls, name;
+    std::shared_ptr<const VectorFieldData> vectorField;   // ParticleModuleVectorFieldLocal
     bool enabled = true;
     std::vector<std::pair<std::string, ParticleCurve>> curves;
     std::vector<std::pair<std::string, std::string>> values;   // other simple properties
@@ -89,6 +100,7 @@ private:
         Vec3 pos, vel, accel, meshRot, meshRotRate;
         Vec3 orbitOffset, orbitRot, orbitRate;   // ParticleModuleOrbit: rendered offset, rotation (turns) and its rate
         Vec3 baseSize, baseColor;
+        float vfScale = 1;   // ParticleModuleVectorFieldScale (at spawn)
         float baseAlpha = 1, age = 0, life = 1, loopTime = 0, subLoopTime = 0, rot = 0, rotRate = 0, subRnd = 0, drag = 0, rnd = 0.5f;
     };
     struct Emitter {

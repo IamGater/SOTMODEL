@@ -1,6 +1,7 @@
 #include "ue/Particles.h"
 #include "ue/Texture.h"
 #include "ue/Material.h"
+#include "ue/TextureDecode.h"
 #include "core/Common.h"
 #include <algorithm>
 #include <cmath>
@@ -183,9 +184,26 @@ const char* kSimulated[] = {"ParticleModuleRequired", "ParticleModuleSpawn", "Pa
                             "ParticleModuleMeshRotation", "ParticleModuleMeshRotationRate", "ParticleModuleTypeDataGpu", "ParticleModuleTypeDataMesh",
                             "ParticleModulePivotOffset", "ParticleModuleRotationRateMultiplyLife", "ParticleModuleAccelerationDragScaleOverLife",
                             "ParticleModuleAttractorPointGravity", "ParticleModuleOrbit", "ParticleModuleSizeScaleBySpeed",
-                            "ParticleModuleLocationPrimitiveSphereSlice",
+                            "ParticleModuleLocationPrimitiveSphereSlice", "ParticleModuleVectorFieldLocal", "ParticleModuleVectorFieldScale",
+                            "ParticleModuleVectorFieldScaleOverLife", "ParticleModuleVectorFieldRotation", "ParticleModuleVectorFieldRotationRate",
                             // the preview emitter does not move: no parent velocity to inherit, no distance to spawn over
                             "ParticleModuleVelocityInheritParent", "ParticleModuleSpawnPerUnit"};
+
+// "(x, y, z)" as written by SimpleValue
+Vec3 ParseVec(const std::string& s, Vec3 def = {}) {
+    Vec3 v = def;
+    if (!s.empty()) sscanf(s.c_str(), "(%f, %f, %f)", &v.x, &v.y, &v.z);
+    return v;
+}
+
+// v turned about X, then Y, then Z by `turns` (1 = 360 degrees); inverse applies Z, Y, X (pass negated turns).
+Vec3 RotateTurns(Vec3 v, Vec3 turns, bool inverse) {
+    Vec3 r = turns * (2 * kPi);
+    auto rx = [&](Vec3 o) { return Vec3{o.x, o.y * cosf(r.x) - o.z * sinf(r.x), o.y * sinf(r.x) + o.z * cosf(r.x)}; };
+    auto ry = [&](Vec3 o) { return Vec3{o.x * cosf(r.y) + o.z * sinf(r.y), o.y, -o.x * sinf(r.y) + o.z * cosf(r.y)}; };
+    auto rz = [&](Vec3 o) { return Vec3{o.x * cosf(r.z) - o.y * sinf(r.z), o.x * sinf(r.z) + o.y * cosf(r.z), o.z}; };
+    return inverse ? rx(ry(rz(v))) : rz(ry(rx(v)));
+}
 
 // ParticleModuleXxx_Seeded behaves like ParticleModuleXxx (it only fixes the random seed).
 std::string BaseModuleClass(const std::string& cls) {
@@ -332,6 +350,12 @@ bool ReadParticleSystem(PackageCache& cache, const Package& pkg, size_t exportId
                 if (x.ObjIndex()) mods.push_back(x.ObjIndex());
         for (i32 o : mods) {
             ParticleModuleInfo m = ReadModule(pkg, o);
+            if (BaseModuleClass(m.cls) == "ParticleModuleVectorFieldLocal") {
+                PropertyList vp = pkg.ReadProperties((size_t)o - 1);
+                std::string vf = Obj(pkg, FindValue(vp, "VectorField"));
+                auto d = std::make_shared<VectorFieldData>();
+                if (!vf.empty() && ReadVectorField(cache, vf, *d)) m.vectorField = d;
+            }
             if (m.cls == "ParticleModuleRequired") {
                 PropertyList rp = pkg.ReadProperties((size_t)o - 1);
                 e.material = Obj(pkg, FindValue(rp, "Material"));
@@ -492,6 +516,8 @@ void ParticleSim::Spawn(Emitter& em, float et, int n) {
                 if (auto x = cv("StartRotation")) p.meshRot = x->Eval3(et, Rnd());   // turns
             } else if (c == "ParticleModuleMeshRotationRate") {
                 if (auto x = cv("StartRotationRate")) p.meshRotRate = x->Eval3(et, Rnd());
+            } else if (c == "ParticleModuleVectorFieldScale") {
+                if (auto x = cv("VectorFieldScale")) p.vfScale = x->Eval(et, 0, Rnd());
             } else if (c == "ParticleModuleOrbit") {
                 if (auto x = cv("OffsetAmount")) p.orbitOffset = x->Eval3(et, Rnd());
                 if (auto x = cv("RotationAmount")) p.orbitRot = x->Eval3(et, Rnd());
@@ -522,6 +548,33 @@ void ParticleSim::Step(float dt) {
             }
         }
         float emitterT = e.duration > 0 ? fmodf(std::max(0.f, m_time - e.delay), e.duration) / e.duration : 0;
+        // local vector field (GPU emitters): force = field * intensity, velocity pulled toward it by Tightness
+        const ParticleModuleInfo* vfm = nullptr;
+        const ParticleCurve* vfLife = nullptr;
+        Vec3 vfRot, vfRate;
+        for (auto& m : e.modules) {
+            if (!m.enabled) continue;
+            std::string c = BaseModuleClass(m.cls);
+            if (c == "ParticleModuleVectorFieldLocal" && m.vectorField && !vfm) vfm = &m;
+            else if (c == "ParticleModuleVectorFieldScaleOverLife") vfLife = m.Curve("VectorFieldScaleOverLife");
+            else if (c == "ParticleModuleVectorFieldRotation") {   // initial field rotation (turns), midpoint of the range
+                Vec3 a = ParseVec(m.Value("MinInitialRotation")), b = ParseVec(m.Value("MaxInitialRotation"));
+                vfRot = (a + b) * 0.5f;
+            } else if (c == "ParticleModuleVectorFieldRotationRate") vfRate = ParseVec(m.Value("RotationRate"));
+        }
+        Vec3 vfScale3{1, 1, 1}, vfTrans;
+        float vfIntensity = 1, vfTight = 0;
+        bool tile[3] = {};
+        if (vfm) {
+            Vec3 s = ParseVec(vfm->Value("RelativeScale3D"), {1, 1, 1});
+            vfScale3 = {s.x != 0 ? s.x : 1, s.y != 0 ? s.y : 1, s.z != 0 ? s.z : 1};
+            vfTrans = ParseVec(vfm->Value("RelativeTranslation"));
+            std::string in = vfm->Value("Intensity"), ti = vfm->Value("Tightness");
+            vfIntensity = in.empty() ? 1.f : (float)atof(in.c_str());
+            vfTight = std::clamp(ti.empty() ? 0.f : (float)atof(ti.c_str()), 0.f, 1.f);
+            tile[0] = vfm->Value("bTileX") == "true"; tile[1] = vfm->Value("bTileY") == "true"; tile[2] = vfm->Value("bTileZ") == "true";
+            vfRot = vfRot + vfRate * m_time;
+        }
         // update particles
         for (size_t i = 0; i < em.parts.size();) {
             Particle& p = em.parts[i];
@@ -534,6 +587,14 @@ void ParticleSim::Step(float dt) {
                 Vec3 d = attractPos + e.origin - p.pos;
                 float dist = Length(d), fall = attractRadius > 0 ? std::clamp(1 - dist / attractRadius, 0.f, 1.f) : 1.f;
                 if (dist > 1e-3f) p.vel = p.vel + d * (attractStrength->Eval(emitterT, 0, p.rnd) * fall * dt / dist);
+            }
+            if (vfm) {
+                Vec3 local = RotateTurns(p.pos - e.origin - vfTrans, vfRot * -1.f, true);
+                local = {local.x / vfScale3.x, local.y / vfScale3.y, local.z / vfScale3.z};
+                float k = vfIntensity * p.vfScale * (vfLife ? vfLife->Eval(rel, 0, p.rnd) : 1.f);
+                Vec3 f = RotateTurns(vfm->vectorField->Sample(local, tile[0], tile[1], tile[2]), vfRot, false) * k;
+                if (vfTight > 0) p.vel = p.vel + (f - p.vel) * std::min(1.f, vfTight * 30 * dt);   // Tightness: per 30 Hz step
+                else p.vel = p.vel + f * dt;
             }
             p.vel = p.vel + p.accel * dt;
             if (p.drag > 0) p.vel = p.vel * std::max(0.f, 1 - p.drag * dt);
@@ -801,4 +862,64 @@ void ParticleFrame(const ParticleSystemInfo& ps, float upTo, Vec3& centre, float
     if (!n) { centre = {}; dist = 300; return; }
     centre = (mn + mx) * 0.5f;
     dist = std::max(40.f, Length(mx - mn) * 0.8f);
+}
+
+// ------------------------------------------------------------------ vector fields
+
+bool ReadVectorField(PackageCache& cache, const std::string& path, VectorFieldData& out, std::string* error) {
+    try {
+        auto pkg = cache.LoadPath(path, error);
+        if (!pkg) return false;
+        i32 main = pkg->MainExport();
+        if (!main || pkg->ExportClass((size_t)main - 1) != "VectorFieldStatic") { if (error) *error = "not a VectorFieldStatic"; return false; }
+        size_t end = 0;
+        PropertyList p = pkg->ReadProperties((size_t)main - 1, &end);
+        out.sx = (int)PropInt(p, "SizeX"); out.sy = (int)PropInt(p, "SizeY"); out.sz = (int)PropInt(p, "SizeZ");
+        if (auto b = FindValue(p, "Bounds"); b && b->Fields()) { out.boundsMin = V3(b->Field("Min")); out.boundsMax = V3(b->Field("Max")); }
+        size_t n = (size_t)out.sx * out.sy * out.sz;
+        if (!n || n > (1u << 24)) { if (error) *error = "bad vector field size"; return false; }
+        Reader r = pkg->ExportReader((size_t)main - 1);
+        r.Seek(end);
+        if (r.U32()) r.Skip(16);   // object guid
+        BulkDataInfo bi;
+        ReadBulkDataHeader(*pkg, r, bi);
+        Bytes data;
+        if (!LoadBulkData(*pkg, bi, data, error)) return false;
+        if (data.size() < n * 8) { if (error) *error = Fmt("vector field data %zu < %zu", data.size(), n * 8); return false; }
+        out.v.resize(n);
+        for (size_t i = 0; i < n; i++) {   // FFloat16Color: x, y, z, (unused)
+            const u8* q = &data[i * 8];
+            out.v[i] = {HalfToFloat((u16)(q[0] | q[1] << 8)), HalfToFloat((u16)(q[2] | q[3] << 8)), HalfToFloat((u16)(q[4] | q[5] << 8))};
+        }
+        return true;
+    } catch (const std::exception& e) {
+        if (error) *error = e.what();
+        return false;
+    }
+}
+
+Vec3 VectorFieldData::Sample(Vec3 local, bool tileX, bool tileY, bool tileZ) const {
+    if (v.empty()) return {};
+    Vec3 size = boundsMax - boundsMin;
+    float u[3] = {size.x > 0 ? (local.x - boundsMin.x) / size.x : 0, size.y > 0 ? (local.y - boundsMin.y) / size.y : 0, size.z > 0 ? (local.z - boundsMin.z) / size.z : 0};
+    int dims[3] = {sx, sy, sz};
+    bool tile[3] = {tileX, tileY, tileZ};
+    int i0[3], i1[3];
+    float f[3];
+    for (int a = 0; a < 3; a++) {
+        float c = u[a] * dims[a] - 0.5f;   // voxel centres
+        float fl = floorf(c);
+        f[a] = c - fl;
+        int lo = (int)fl, hi = lo + 1;
+        if (tile[a]) { lo = ((lo % dims[a]) + dims[a]) % dims[a]; hi = ((hi % dims[a]) + dims[a]) % dims[a]; }
+        else { lo = std::clamp(lo, 0, dims[a] - 1); hi = std::clamp(hi, 0, dims[a] - 1); }
+        i0[a] = lo; i1[a] = hi;
+    }
+    auto at = [&](int x, int y, int z) { return v[((size_t)z * sy + y) * sx + x]; };
+    Vec3 r;
+    for (int k = 0; k < 8; k++) {
+        float w = ((k & 1) ? f[0] : 1 - f[0]) * ((k & 2) ? f[1] : 1 - f[1]) * ((k & 4) ? f[2] : 1 - f[2]);
+        r = r + at((k & 1) ? i1[0] : i0[0], (k & 2) ? i1[1] : i0[1], (k & 4) ? i1[2] : i0[2]) * w;
+    }
+    return r;
 }
