@@ -202,7 +202,8 @@ static int DevBlueprints(Api& api, const std::string& filter) {
     for (auto& [k, v] : fails) Out(Fmt("fail %-60s %5d  e.g. %s\n", k.c_str(), v.first, v.second.c_str()));
     for (auto& [k, v] : stops) Out(Fmt("stop %-60s %5d  e.g. %s\n", k.c_str(), v.first, v.second.c_str()));
     for (auto& [k, v] : flat) Out(Fmt("jumps %-59s %5d  e.g. %s\n", k.c_str(), v.first, v.second.c_str()));
-    Out(Fmt("calls %zu, with a signature %zu (%.1f%%)\n", stats.calls, stats.callsWithSignature, stats.calls ? 100.0 * stats.callsWithSignature / stats.calls : 0.0));
+    Out(Fmt("calls %zu, with a signature %zu (%.1f%%), argument positions unknown %zu\n", stats.calls, stats.callsWithSignature,
+            stats.calls ? 100.0 * stats.callsWithSignature / stats.calls : 0.0, stats.callsOrderUnknown));
     std::vector<std::pair<int, std::string>> top;
     for (auto& [k, v] : stats.unresolved) top.push_back({v, k});
     std::sort(top.rbegin(), top.rend());
