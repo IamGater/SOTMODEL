@@ -136,7 +136,7 @@ or `/Game/Models/Props/Common/cmn_barrel_debris_02_a.cmn_barrel_debris_02_a`.
 | `get_localized_text` | one FText (namespace + key) in every language |
 | `find_references` | packages that import the given one (meshes using a material, maps placing a Blueprint, ...); index built once, then cached |
 | `get_dependency_graph` | nodes (path, class, side -1 referencer / 0 root / 1 reference, depth, how many the per-node `limit` left out) and [importer, imported] edges around a package, `depth` levels out; `direction` both / referencers / references |
-| `search_content` | packages by main class, by what they use (`uses`), by property name / value (structs, arrays and DataTable rows searched), by localisation key (`text_key` from `search_localization`: packages holding an FText with it; the reference index records every locres key it finds in package bytes, an index cached by an older version is rebuilt once) |
+| `search_content` | packages by main class, by what they use (`uses`), by property name / value (structs, arrays and DataTable rows searched; object references show and match as full paths), by localisation key (`text_key` from `search_localization`: packages holding an FText with it; the reference index records every locres key it finds in package bytes, an index cached by an older version is rebuilt once) |
 | `get_material` | material instance chain with every texture / scalar / vector parameter resolved |
 | `export` | write files: textures (PNG/DDS), meshes (glTF/OBJ), animations (glTF with skeleton + skinned mesh), JSON; `raw=true` writes any file as stored. Meshes as glb carry their simple collision as a separate `Collision` node (`UCX_<mesh>`, `collision=false` to skip) |
 | `get_audio_info` | Wwise audio: a `.wem` (codec, channels, rate, length) or a sound bank (`WwiseBank` package / `.bnk`) with its embedded media and its events (ids, names from the WwiseEvent assets) |
@@ -209,8 +209,21 @@ Typical flow: `search` → `get_package` → `get_properties` / `preview_*` → 
   rotation + rate), SizeScaleBySpeed, AttractorPointGravity (approximation: Strength fading to 0 at Radius),
   SphereSlice as a sphere; VelocityInheritParent / SpawnPerUnit do nothing for the still preview emitter. Module
   properties that reference a Distribution object (not an inline raw distribution) are read as curves too.
-  `--cli particles` lists what stays unsimulated: modules needing the world (collision, lights, bone sockets, wind,
-  vector fields), material dynamic parameters, SoT's own MurkyColor / SizeOverVelocity / ParametersOver*, AnimTrail.
+  Vector fields: VectorFieldLocal loads its `VectorFieldStatic` (native data after the properties: bulk data of
+  SizeX*SizeY*SizeZ x 4 halfs, xyz + unused, over `Bounds`; SoT has one, `vfx_vf_noise`); the force is the trilinear
+  sample in the module's local space (RelativeTranslation / Rotation in turns / Scale3D, tiling per axis) times
+  Intensity, VectorFieldScale (+ OverLife), and Tightness pulls the velocity toward it; Rotation / RotationRate turn
+  the field. Orientation: OrientationAxisLock (EPAL_X/Y/Z lie flat in that plane, NEGATIVE mirrored, ROTATE_* spin
+  about the axis facing the camera) and AlignRotationToVelocity (texture top along the velocity) go through
+  `ParticleQuadAxes`, shared by the GPU draw and the software renderer (which rasterises any projected parallelogram).
+  SoT spawn modules: LocationWorldOffset as Location, VelocityConeEmitterPoint as VelocityCone with VelocityScale +
+  AdditiveVelocity, LocationEmitter at a random live particle of `EmitterName`, ParametersOverVelocity / OverCustom
+  scale spawn rate, lifetime, size, start velocity and opacity at input 0 (the still emitter) / 1 (gameplay value
+  assumed full), SizeOverVelocity reads `SizeMultiplier` at speed / spawn speed (0..1; the input range is a guess).
+  Modules a standalone preview cannot show carry a reason (`ParticleModuleInfo::previewNote`, `preview_note` in
+  `get_particle_system`, the module tooltip, and `--cli particles` prints them as "not previewable"): Collision(GPU),
+  Light, LocationBoneSocket, WindInfluence, ParameterDynamic (material input only), MurkyColor, SpawnRepeatPerPoint,
+  LocationVelocityComputeShaderOutput and TypeDataAnimTrail. Every other module class in the game is simulated.
 - Explorer thumbnails (`App::Thumbnail`, async, 160 px): textures, meshes (headless render, LOD 1), materials (main
   texture), particle systems (software sprite render ~2 s in), .wem (waveform), Blueprint classes (assembled actor,
   no water / fog).
