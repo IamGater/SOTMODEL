@@ -136,6 +136,7 @@ bool ResolveEventInBank(Api& api, std::shared_ptr<Package> bank, const BankInfo&
     if (!ResolveWwiseEvent(bank->Data().data(), info, eventId, tree, error)) return false;
     out.media.clear();
     out.switches = tree.switches;
+    out.rtpcs = FindWwiseRtpcs(bank->Data().data(), info, tree.nodes);
     for (size_t mi = 0; mi < tree.media.size(); mi++) {
         u32 id = tree.media[mi];
         WwiseEventMedia m;

@@ -2477,7 +2477,7 @@ void App::DrawAudioPanel(Document& d) {
         PlayAudio(d, pcm, 0);
         m_playRequest = 0;
     }
-    bool mine = m_playDoc == d.id && m_player.Active() && m_player.Clip() == pcm.get();
+    bool mine = m_playDoc == d.id && m_player.Active() && pcm && (m_player.Clip() == pcm.get() || m_playSource == pcm.get());
     // header: name, codec / rate / channels / length
     ImGui::PushFont(boldFont, FontDip(12));
     float nameH = ImGui::GetFontSize();
@@ -2595,6 +2595,34 @@ void App::DrawAudioPanel(Document& d) {
                 if (ImGui::Button("Any")) for (auto& s : d.eventSwitches) s.sel = -1;
                 if (ImGui::IsItemHovered()) Tip("Reset every switch to any value");
             }
+            if (!d.eventParams.empty()) {   // game parameters (RTPCs): the sound plays with the Volume / Pitch their curves give
+                for (size_t k = 0; k < d.eventParams.size(); k++) {
+                    auto& prm = d.eventParams[k];
+                    ImGui::PushID((int)(1000 + k));
+                    ImGui::SetCursorScreenPos(ImVec2(p.x + m, ImGui::GetCursorScreenPos().y));
+                    ImGui::AlignTextToFramePadding();
+                    ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(prm.value != prm.lo ? kText : kTextDim), "%s", prm.name.c_str());
+                    if (ImGui::IsItemHovered())
+                        Tip("Game parameter (RTPC) 0x%08X\ndrives: %s\nNames are guessed; the curves' shapes are approximated.", prm.id, prm.props.c_str());
+                    ImGui::SameLine(p.x + m + std::min(Dip(230), (w - m * 2) * 0.45f) - ImGui::GetWindowPos().x);
+                    ImGui::SetNextItemWidth(std::max(Dip(80), w - m * 2 - std::min(Dip(230), (w - m * 2) * 0.45f)));
+                    float hi = prm.hi > prm.lo ? prm.hi : prm.lo + 1;
+                    ImGui::SliderFloat("##rtpc", &prm.value, prm.lo, hi, "%.2f");
+                    if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(0)) prm.value = prm.lo;
+                    ImGui::PopID();
+                }
+                std::unordered_map<u32, float> values;
+                for (auto& prm : d.eventParams) values[prm.id] = prm.value;
+                std::string sum;
+                for (auto& [prop, val] : EvalWwiseRtpcs(d.eventRtpcs, values)) {
+                    std::string pn = WwiseRtpcPropertyName(prop);
+                    if (pn.empty()) pn = Fmt("property %u", prop);
+                    sum += Fmt("%s%s %+.1f%s", sum.empty() ? "" : "   ", pn.c_str(), val, prop == 0 ? " dB" : prop == 2 ? " cents" : "");
+                }
+                ImGui::SetCursorScreenPos(ImVec2(p.x + m, ImGui::GetCursorScreenPos().y));
+                ImGui::TextDisabled("%s", sum.c_str());
+                if (ImGui::IsItemHovered()) Tip("RTPC totals at these values; Volume and Pitch are applied when a sound starts");
+            }
             y = ImGui::GetCursorScreenPos().y + Dip(4);
             listH -= y - y0;
         } else
@@ -2694,7 +2722,7 @@ void App::DrawAudioPanel(Document& d) {
     }
     dl->AddRectFilled(wa, wb, kBorder, Dip(3));
     float mid = (wa.y + wb.y) * 0.5f, amp = waveH * 0.45f;
-    double pos = mine ? m_player.Position() : 0, len = std::max(1e-6, pcm->Seconds());
+    double pos = mine ? m_player.Position() * m_playRate : 0, len = std::max(1e-6, pcm->Seconds());
     float playX = wa.x + (float)(pos / len) * (wb.x - wa.x);
     for (int c = 0; c < cols; c++) {
         float x = wa.x + c + 0.5f;
@@ -2710,7 +2738,7 @@ void App::DrawAudioPanel(Document& d) {
         dl->AddLine(ImVec2(ImGui::GetIO().MousePos.x, wa.y), ImVec2(ImGui::GetIO().MousePos.x, wb.y), Alpha(kText, 0.35f));
         Tip("%.2f s", t * len);
         if (ImGui::IsItemClicked()) {
-            if (mine) m_player.Seek(t * len);
+            if (mine) m_player.Seek(t * len / m_playRate);
             else PlayAudio(d, pcm, t * len);
         }
     }

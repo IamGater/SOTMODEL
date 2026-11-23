@@ -18,6 +18,7 @@ struct WwiseEventInfo {
     BankInfo bankInfo;
     std::vector<WwiseEventMedia> media;
     std::vector<WwiseSwitchGroup> switches;   // switch / state groups that pick what plays
+    std::vector<WwiseRtpcCurve> rtpcs;        // game parameter curves on the event's nodes and their parents
     // plays media i with the choice (group -> value; groups not in it: any value)
     bool Plays(size_t i, const std::unordered_map<u32, u32>& choice) const;
 };

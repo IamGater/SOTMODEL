@@ -239,6 +239,14 @@ struct Document {
         int sel = -1;
     };
     std::vector<EventSwitch> eventSwitches;
+    // the event's game parameters (RTPCs) with a value each; playback applies the resulting Volume / Pitch
+    struct EventParam {
+        u32 id = 0;
+        std::string name, props;   // props: the properties it drives
+        float lo = 0, hi = 1, value = 0;
+    };
+    std::vector<EventParam> eventParams;
+    std::vector<WwiseRtpcCurve> eventRtpcs;
     std::vector<std::vector<WwiseMediaCondition>> eventConds;   // per bank.wems entry
     std::vector<std::string> eventWhen;                          // per bank.wems entry: "FootwearType = Boots, surface = Sand | Dirt"
     // bank: its events (HIRC), named from the WwiseEvent assets
@@ -503,6 +511,8 @@ private:
     std::atomic<bool> m_shutdown{false};
     AudioPlayer m_player;
     u64 m_playDoc = 0, m_playRequest = 0;
+    const AudioPcm* m_playSource = nullptr;   // the clip PlayAudio was given (the player may hold an RTPC-adjusted copy)
+    double m_playRate = 1;                    // its playback rate (RTPC pitch): player seconds * rate = clip seconds
     bool m_playLoop = false;
     bool m_showBackups = false;
     std::string m_backupMessage;

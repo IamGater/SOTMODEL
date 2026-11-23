@@ -792,6 +792,7 @@ bool ResolveWwiseEvent(const u8* data, const BankInfo& bank, u32 eventId, WwiseE
     std::function<void(u32, int, const Conds&)> walk = [&](u32 id, int depth, const Conds& conds) {
         auto it = byId.find(id);
         if (depth > 24 || it == byId.end() || !seen.insert(id).second) return;
+        tree.nodes.push_back(id);
         const HircObject& o = *it->second;
         const u8* d = data + o.offset;
         if (o.type == 2) {   // CAkSound: AkBankSourceData = u32 plugin, u8 stream type, u32 source id, ...

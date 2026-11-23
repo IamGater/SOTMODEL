@@ -728,6 +728,29 @@ void App::FillEventDocument(Document& d, const WwiseEventInfo& ev) {
         std::sort(s.values.begin(), s.values.end(), [](auto& a, auto& b) { return a.second < b.second; });
         d.eventSwitches.push_back(std::move(s));
     }
+    d.eventRtpcs = ev.rtpcs;
+    d.eventParams.clear();
+    for (auto& c : ev.rtpcs) {
+        if (c.points.empty()) continue;
+        auto it = std::find_if(d.eventParams.begin(), d.eventParams.end(), [&](auto& p) { return p.id == c.rtpc; });
+        if (it == d.eventParams.end()) {
+            Document::EventParam p;
+            p.id = c.rtpc;
+            p.name = WwiseNameOrId(*m_api, c.rtpc);
+            p.lo = c.points.front().x;
+            p.hi = c.points.back().x;
+            p.value = p.lo;
+            d.eventParams.push_back(p);
+            it = d.eventParams.end() - 1;
+        }
+        it->lo = std::min(it->lo, c.points.front().x);
+        it->hi = std::max(it->hi, c.points.back().x);
+        std::string pn = WwiseRtpcPropertyName(c.property);
+        if (pn.empty()) pn = std::to_string(c.property);
+        if (("," + it->props + ",").find("," + pn + ",") == std::string::npos) it->props += (it->props.empty() ? "" : ",") + pn;
+    }
+    for (auto& p : d.eventParams) p.value = p.lo;
+    std::sort(d.eventParams.begin(), d.eventParams.end(), [](auto& a, auto& b) { return a.name < b.name; });
     JsonWriter w;
     w.BeginObject();
     w.KV("Event", d.eventName);
@@ -827,8 +850,43 @@ bool App::ExportAudioEntry(u32 entry, const ExportOptions& opt, std::vector<std:
     return all;
 }
 
+// Volume (dB) and pitch (cents) of an event's RTPC curves at the panel's parameter values
+static std::unordered_map<u32, float> EventRtpcProps(const Document& d) {
+    std::unordered_map<u32, float> values;
+    for (auto& p : d.eventParams) values[p.id] = p.value;
+    return EvalWwiseRtpcs(d.eventRtpcs, values);
+}
+
 void App::PlayAudio(Document& d, std::shared_ptr<AudioPcm> pcm, double from) {
     if (!pcm) return;
+    m_playSource = pcm.get();
+    m_playRate = 1;
+    if (d.isEvent && !d.eventRtpcs.empty()) {   // the game parameters' Volume / Pitch, applied to a copy
+        auto props = EventRtpcProps(d);
+        float db = std::clamp(props.count(0) ? props[0] : 0.f, -96.f, 24.f), cents = std::clamp(props.count(2) ? props[2] : 0.f, -4800.f, 4800.f);
+        if (std::fabs(db) > 0.01f || std::fabs(cents) > 0.5f) {
+            double rate = pow(2.0, cents / 1200.0);
+            float gain = powf(10.f, db / 20.f);
+            auto out = std::make_shared<AudioPcm>();
+            out->channels = pcm->channels;
+            out->sampleRate = pcm->sampleRate;
+            size_t frames = pcm->Frames(), outFrames = (size_t)(frames / rate);
+            out->samples.resize(outFrames * pcm->channels);
+            for (size_t f = 0; f < outFrames; f++) {   // linear resampling
+                double src = f * rate;
+                size_t i0 = std::min((size_t)src, frames - 1), i1 = std::min(i0 + 1, frames - 1);
+                float t = (float)(src - i0);
+                for (int c = 0; c < pcm->channels; c++) {
+                    float s = (pcm->samples[i0 * pcm->channels + c] * (1 - t) + pcm->samples[i1 * pcm->channels + c] * t) * gain;
+                    out->samples[f * pcm->channels + c] = (i16)std::clamp(s, -32768.f, 32767.f);
+                }
+            }
+            m_playRate = rate;
+            if (m_player.Play(out, from / rate)) m_playDoc = d.id;
+            else LOGW("audio playback failed (no output device?)");
+            return;
+        }
+    }
     if (m_player.Play(pcm, from)) m_playDoc = d.id;
     else LOGW("audio playback failed (no output device?)");
 }

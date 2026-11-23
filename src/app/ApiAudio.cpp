@@ -97,8 +97,11 @@ void RegisterAudioTools(Api& api) {
                   "embedded in the bank or streamed (WwiseAudio/Streams/<id>.wem). 'switches' lists the switch / state groups of the event's switch "
                   "containers (names guessed from event name words, else hex ids) and each media's 'when' conditions; 'switch' "
                   "(\"group=value,group=value\", names or 0x ids) keeps only the media that play with those values. 'output_dir' also decodes "
-                  "them to .wav files there.",
-                  R"({"type":"object","properties":{"event":{"type":"string"},"switch":{"type":"string"},"output_dir":{"type":"string"}},"required":["event"]})", "event",
+                  "them to .wav files there. 'rtpcs' lists the game parameter (RTPC) curves on the event's nodes and their parent "
+                  "actor-mixers: parameter (name guessed, else hex), driven property (Volume dB, Pitch cents, LPF, ...), accumulation and "
+                  "points; 'rtpc' (\"param=value,...\") evaluates them: 'properties' gives each property's total at those values "
+                  "(missing parameters at their curve's first point; curve shapes approximated).",
+                  R"({"type":"object","properties":{"event":{"type":"string"},"switch":{"type":"string"},"rtpc":{"type":"string"},"output_dir":{"type":"string"}},"required":["event"]})", "event",
                   [](Api& a, const JsonValue& args) {
                       std::string err;
                       WwiseEventInfo ev;
@@ -143,6 +146,55 @@ void RegisterAudioTools(Api& api) {
                               w.EndObject();
                           }
                           w.EndArray();
+                      }
+                      if (!ev.rtpcs.empty()) {
+                          std::unordered_map<u32, float> values;
+                          std::string rv = args.GetStr("rtpc");
+                          for (size_t s = 0; s < rv.size();) {
+                              size_t e = rv.find(',', s);
+                              if (e == std::string::npos) e = rv.size();
+                              std::string part = rv.substr(s, e - s);
+                              s = e + 1;
+                              size_t eq = part.find('=');
+                              if (eq != std::string::npos) values[idOf(part.substr(0, eq))] = (float)atof(part.c_str() + eq + 1);
+                          }
+                          static const char* accums[] = {"none", "exclusive", "additive", "multiply", "boolean", "maximum", "filter"};
+                          static const char* scalings[] = {"none", "unsupported", "dB", "log", "dBToLinear"};
+                          w.Key("rtpcs");
+                          w.BeginArray();
+                          for (auto& c : ev.rtpcs) {
+                              w.BeginObject();
+                              w.KV("parameter", WwiseNameOrId(a, c.rtpc));
+                              if (c.rtpcType) w.KV("parameterType", c.rtpcType == 1 ? "midi" : "modulator");
+                              std::string pn = WwiseRtpcPropertyName(c.property);
+                              w.KV("property", pn.empty() ? std::to_string(c.property) : pn);
+                              w.KV("accumulation", accums[std::min<int>(c.accum, 6)]);
+                              if (c.scaling) w.KV("scaling", scalings[std::min<int>(c.scaling, 4)]);
+                              w.KV("node", (i64)c.node);
+                              w.KV("nodeType", (i64)c.nodeType);
+                              w.Key("points");
+                              w.BeginArray();
+                              for (auto& p : c.points) {
+                                  w.BeginArray();
+                                  w.Num(p.x);
+                                  w.Num(p.y);
+                                  w.EndArray();
+                              }
+                              w.EndArray();
+                              auto v = values.find(c.rtpc);
+                              if (v != values.end()) w.KV("value", (double)c.Eval(v->second));
+                              w.EndObject();
+                          }
+                          w.EndArray();
+                          if (!values.empty()) {
+                              w.Key("properties");
+                              w.BeginObject();
+                              for (auto& [p, val] : EvalWwiseRtpcs(ev.rtpcs, values)) {
+                                  std::string pn = WwiseRtpcPropertyName(p);
+                                  w.KV(pn.empty() ? std::to_string(p) : pn, (double)val);
+                              }
+                              w.EndObject();
+                          }
                       }
                       w.Key("media");
                       w.BeginArray();
