@@ -35,6 +35,7 @@ struct JsonValue;
 void SeaOptionsFrom(const JsonValue& args, WorldOptions& o);   // ApiWorld.cpp: islands / proxies / region         // ApiSearch.cpp: content search, references
 void RegisterShaderTools(Api& api);   // ApiShaders.cpp: compiled material / global shaders
 void RegisterParticleTools(Api& api);   // ApiParticles.cpp: Cascade particle systems
+void RegisterGameTools(Api& api);   // ApiGame.cpp: physical surfaces, behavior trees
 // Several AnimSequence packages of one skeleton -> one .glb (ApiExport.cpp; also used by the UI).
 bool ExportAnimationSet(PackageCache& cache, const std::vector<std::shared_ptr<Package>>& animPkgs, const std::string& meshPath, Bytes& glb, std::string& note, std::string* error);
 // The notify sounds of an AnimSequence / AnimMontage package as .wav files in <base>_sounds\ plus <base>.notifies.json with every

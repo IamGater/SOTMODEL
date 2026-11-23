@@ -4,6 +4,7 @@
 #include "core/Json.h"
 #include "ue/AssetJson.h"
 #include "ue/NativeInfo.h"
+#include "ue/GameConfig.h"
 #include "ue/Texture.h"
 #include "export/Exporter.h"
 #include "ue/Animation.h"
@@ -59,6 +60,7 @@ Api::Api(Settings& s) : settings(s) {
     RegisterSearchTools(*this);
     RegisterShaderTools(*this);
     RegisterParticleTools(*this);
+    RegisterGameTools(*this);
 }
 
 bool Api::EnsureMounted(std::string* error) {
@@ -70,6 +72,7 @@ bool Api::EnsureMounted(std::string* error) {
     if (settings.gameDir.empty()) { if (error) *error = "game directory is not configured (Settings.ini GameDir=...)"; return false; }
     if (!vfs.Mount(settings.PaksDir())) { if (error) *error = "no pak files found in " + Narrow(settings.PaksDir()); return false; }
     cache = std::make_unique<PackageCache>(vfs, 256ull << 20);
+    GameConfig::Load(vfs);
     m_mounted = true;
     std::string lerr;
     if (!SetLanguage(settings.language.empty() ? "en" : settings.language, &lerr) && settings.language != "en") SetLanguage("en");
@@ -117,6 +120,7 @@ bool Api::SetLanguage(const std::string& culture, std::string* error) {
 void Api::Unmount() {
     std::lock_guard lk(m_mountMutex);
     cache.reset();
+    GameConfig::Clear();
     vfs.Clear();
     m_mounted = false;
 }
