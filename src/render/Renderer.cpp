@@ -1,4 +1,5 @@
 #include "render/Renderer.h"
+#include "render/GraphShader.h"
 #include <d3dcompiler.h>
 #include <chrono>
 
@@ -170,6 +171,26 @@ float4 PSMain(PSIn i) : SV_Target {
 }
 )";
 
+// Material preview backdrop: the scene the graph shaders' SceneColor / SceneDepth trace (same function).
+static const char* kBackdropShader = R"(
+#pragma pack_matrix(row_major)
+cbuffer Frame : register(b0) { float4x4 ViewProj; float4 EyePos; };
+cbuffer GraphFrame : register(b2) { float4 GraphTime; float4 ViewSize; float4x4 GraphInvViewProj; float4 SceneParams; };
+)" GRAPH_BACKDROP_HLSL R"(
+struct PSIn { float4 pos : SV_Position; float2 ndc : TEXCOORD0; };
+PSIn VSMain(uint id : SV_VertexID) {
+    PSIn o;
+    float2 p = float2((id << 1) & 2, id & 2) * 2 - 1;
+    o.pos = float4(p, 0, 1);
+    o.ndc = p;
+    return o;
+}
+float4 PSMain(PSIn i) : SV_Target {
+    float2 uv = float2(i.ndc.x * 0.5 + 0.5, 0.5 - i.ndc.y * 0.5);
+    return float4(BackdropColor(EyePos.xyz, BackdropRayDir(GraphInvViewProj, EyePos.xyz, uv), SceneParams), 1);
+}
+)";
+
 struct SkyConstants {
     Mat4 invViewProj;
     float eye[4], horizon[4], zenith[4], toSun[4], sunDisc[4];
@@ -270,7 +291,7 @@ bool Renderer::Init(ID3D11Device* device, ID3D11DeviceContext* ctx, std::string*
     m_dev->CreateBuffer(&cb, nullptr, &m_frameCb);
     cb.ByteWidth = sizeof(MaterialConstants);
     m_dev->CreateBuffer(&cb, nullptr, &m_materialCb);
-    cb.ByteWidth = 32;
+    cb.ByteWidth = 112;   // GraphFrame: time, view size, inverse view-projection, backdrop
     m_dev->CreateBuffer(&cb, nullptr, &m_graphCb);
     cb.ByteWidth = sizeof(SkyConstants);
     m_dev->CreateBuffer(&cb, nullptr, &m_skyCb);
@@ -278,6 +299,10 @@ bool Renderer::Init(ID3D11Device* device, ID3D11DeviceContext* ctx, std::string*
     if (!Compile(kSkyShader, "VSMain", "vs_5_0", kvs, error) || !Compile(kSkyShader, "PSMain", "ps_5_0", kps, error)) return false;
     m_dev->CreateVertexShader(kvs->GetBufferPointer(), kvs->GetBufferSize(), nullptr, &m_skyVs);
     m_dev->CreatePixelShader(kps->GetBufferPointer(), kps->GetBufferSize(), nullptr, &m_skyPs);
+    ComPtr<ID3DBlob> bvs, bps;
+    if (!Compile(kBackdropShader, "VSMain", "vs_5_0", bvs, error) || !Compile(kBackdropShader, "PSMain", "ps_5_0", bps, error)) return false;
+    m_dev->CreateVertexShader(bvs->GetBufferPointer(), bvs->GetBufferSize(), nullptr, &m_backdropVs);
+    m_dev->CreatePixelShader(bps->GetBufferPointer(), bps->GetBufferSize(), nullptr, &m_backdropPs);
     m_startTime = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
 
     D3D11_SAMPLER_DESC sd = {};
@@ -572,7 +597,13 @@ void Renderer::BeginFrame(int width, int height, const Camera& cam, const DrawOp
     }
     if (SUCCEEDED(m_ctx->Map(m_graphCb.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &ms))) {
         double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
-        float g[8] = {opt.time >= 0 ? opt.time : (float)(now - m_startTime), 0, 0, 0, (float)m_w, (float)m_h, 1.f / m_w, 1.f / m_h};
+        float g[28] = {opt.time >= 0 ? opt.time : (float)(now - m_startTime), 0, 0, 0, (float)m_w, (float)m_h, 1.f / m_w, 1.f / m_h};
+        Mat4 inv = m_viewProj.Inverse();
+        memcpy(g + 8, &inv, sizeof(Mat4));
+        float camDist = Length(eye - cam.target);
+        g[24] = opt.backdropFloor;
+        g[25] = std::max(2000.f, camDist * 6);   // far: the backdrop gradient / where depth fades see nothing nearer
+        g[26] = opt.backdrop ? 1.f : 0.f;
         memcpy(ms.pData, g, sizeof(g));
         m_ctx->Unmap(m_graphCb.Get(), 0);
     }
@@ -593,6 +624,18 @@ void Renderer::BeginFrame(int width, int height, const Camera& cam, const DrawOp
         m_ctx->PSSetShader(m_skyPs.Get(), nullptr, 0);
         ID3D11Buffer* cb = m_skyCb.Get();
         m_ctx->PSSetConstantBuffers(1, 1, &cb);
+        m_ctx->RSSetState(m_rsSolid[1].Get());
+        m_ctx->OMSetDepthStencilState(m_noDepth.Get(), 0);
+        m_ctx->OMSetBlendState(m_opaqueBlend.Get(), nullptr, 0xffffffff);
+        m_ctx->Draw(3, 0);
+    }
+    if (opt.backdrop && !(opt.lighting && opt.lighting->sky) && m_backdropPs) {
+        m_ctx->IASetInputLayout(nullptr);
+        m_ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        m_ctx->VSSetShader(m_backdropVs.Get(), nullptr, 0);
+        m_ctx->PSSetShader(m_backdropPs.Get(), nullptr, 0);
+        ID3D11Buffer* cbs[3] = {m_frameCb.Get(), nullptr, m_graphCb.Get()};
+        m_ctx->PSSetConstantBuffers(0, 3, cbs);
         m_ctx->RSSetState(m_rsSolid[1].Get());
         m_ctx->OMSetDepthStencilState(m_noDepth.Get(), 0);
         m_ctx->OMSetBlendState(m_opaqueBlend.Get(), nullptr, 0xffffffff);

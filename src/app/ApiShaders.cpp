@@ -261,10 +261,12 @@ void RegisterShaderTools(Api& api) {
                   "Render a material on a sphere (or on 'mesh'). graph=true (default) compiles the material's translated node graph "
                   "(get_material_hlsl) into a pixel shader with stubbed engine inputs, so textures, parameters, panners and blend modes "
                   "act as in the graph; graph=false uses the viewer's simple diffuse / normal shading. 'time' fixes the material time; "
-                  "'shader_source=true' returns the generated shader.",
+                  "'shader_source=true' returns the generated shader. backdrop=true (default) draws a checker floor under the object and a "
+                  "dim gradient behind it: the scene the SceneColor / SceneDepth / DepthFade nodes read (traced per pixel), so "
+                  "translucency, refraction and depth fades show something; false keeps the flat background.",
                   R"({"type":"object","properties":{"path":{"type":"string"},"graph":{"type":"boolean","default":true},"mesh":{"type":"string"},)"
                   R"("size":{"type":"integer","default":512},"yaw":{"type":"number","default":180},"pitch":{"type":"number","default":-10},)"
-                  R"("time":{"type":"number","default":0},"shader_source":{"type":"boolean","default":false},"save_to":{"type":"string"}},"required":["path"]})",
+                  R"("time":{"type":"number","default":0},"backdrop":{"type":"boolean","default":true},"shader_source":{"type":"boolean","default":false},"save_to":{"type":"string"}},"required":["path"]})",
                   "path",
                   [](Api& a, const JsonValue& args) {
                       std::string err, path = args.GetStr("path");
@@ -292,6 +294,8 @@ void RegisterShaderTools(Api& api) {
                       req.draw.grid = false;
                       req.draw.graphMaterials = args.GetBool("graph", true);
                       req.draw.time = (float)args.GetNum("time", 0);
+                      req.draw.backdrop = args.GetBool("backdrop", true);   // what SceneColor / SceneDepth / DepthFade read
+                      req.draw.backdropFloor = m.boundsMin.z;
                       std::vector<std::string> notes;
                       req.graphNotes = &notes;
                       Image img;

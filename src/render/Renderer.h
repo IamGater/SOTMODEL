@@ -101,6 +101,10 @@ struct DrawOptions {
     const SceneLighting* lighting = nullptr;   // map lights / fog (null: the viewer's key light)
     bool graphMaterials = false;               // draw with each material's translated graph shader where compiled
     float time = -1;                           // material time (s); < 0 = wall clock
+    // material previews: draw the backdrop (GRAPH_BACKDROP_HLSL: checker floor at this z, dim gradient) that the graph
+    // shaders' SceneColor / SceneDepth / DepthFade read, so translucency, refraction and depth fades have something behind
+    bool backdrop = false;
+    float backdropFloor = -50;
 };
 
 // A particle sprite corner (DrawSprites takes triangle lists, 6 vertices per quad). Colour is linear rgb + alpha.
@@ -165,6 +169,8 @@ private:
     ComPtr<ID3D11Buffer> m_graphCb;
     ComPtr<ID3D11VertexShader> m_skyVs;
     ComPtr<ID3D11PixelShader> m_skyPs;
+    ComPtr<ID3D11VertexShader> m_backdropVs;
+    ComPtr<ID3D11PixelShader> m_backdropPs;
     ComPtr<ID3D11Buffer> m_skyCb;
     double m_startTime = 0;
     std::shared_ptr<GpuTexture> m_white, m_flatNormal;

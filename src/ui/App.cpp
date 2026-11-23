@@ -484,6 +484,8 @@ void App::LoadDocument(std::shared_ptr<Document> d) {
                     d->mesh = sm;
                     d->hasMesh = true;
                     d->draw.graphMaterials = true;
+                    d->draw.backdrop = true;   // the scene SceneColor / SceneDepth read, drawn behind the sphere
+                    d->draw.backdropFloor = -50;
                     if (auto g = m_assets->GraphShader(objPath)) {
                         auto mat = s->materials[0];
                         Post([mat, g] { if (mat && !mat->graph) mat->graph = g; });

@@ -23,7 +23,10 @@ cbuffer Frame : register(b0) {
 cbuffer GraphFrame : register(b2) {
     float4 GraphTime;   // x game time (s)
     float4 ViewSize;    // w, h, 1/w, 1/h
+    float4x4 GraphInvViewProj;
+    float4 SceneParams;   // backdrop: x floor z, y far distance, z drawn (GRAPH_BACKDROP_HLSL)
 };
+)HLSL" GRAPH_BACKDROP_HLSL R"HLSL(
 SamplerState MatSampler : register(s0);
 Texture2D StubTexture : register(t31);
 
@@ -134,9 +137,12 @@ float2 GetDefaultSceneTextureUV(FMaterialPixelParameters P) { return P.SvPositio
 float2 ScreenAlignedPosition(float4 sp) { return float2(sp.x / sp.w * 0.5 + 0.5, 0.5 - sp.y / sp.w * 0.5); }
 float4 ScreenAlignedPosition4(float4 sp) { return float4(ScreenAlignedPosition(sp), 0, 0); }
 float2 CalcScreenUVFromOffsetFraction(float4 sp, float2 off) { return ScreenAlignedPosition(sp) + off; }
-float CalcSceneDepth(float2 uv) { return 1e6; }   // no scene depth in the viewer: depth fades see nothing behind
-float3 DecodeSceneColorForMaterialNode(float2 uv) { return float3(0.05, 0.05, 0.06); }
-float4 SceneTextureLookup(float2 uv, int id) { return float4(0.05, 0.05, 0.06, 1); }
+// the scene behind the preview: the backdrop the renderer draws (floor, far gradient), traced per screen uv
+float CalcSceneDepth(float2 uv) { return BackdropDistance(EyePos.xyz, BackdropRayDir(GraphInvViewProj, EyePos.xyz, uv), SceneParams); }
+float3 DecodeSceneColorForMaterialNode(float2 uv) { return BackdropColor(EyePos.xyz, BackdropRayDir(GraphInvViewProj, EyePos.xyz, uv), SceneParams); }
+float4 SceneTextureLookup(float2 uv, int id) {   // 1 PPI_SceneDepth, 13 PPI_CustomDepth
+    return id == 1 || id == 13 ? CalcSceneDepth(uv).xxxx : float4(DecodeSceneColorForMaterialNode(uv), 1);
+}
 float4 SampleLowResClouds(float2 uv) { return 0; }
 float4 SampleUnderwaterTranslucency(float2 uv) { return 0; }
 float GetDistanceCullFade() { return 1; }
@@ -157,8 +163,8 @@ struct FRopeStub { float3 Start, End, Roughness, Thickness, Length, Tension, Col
 static FRopeStub Rope;
 Texture2D SceneDepthTexture;   // no scene depth in the viewer (unbound: reads 0)
 SamplerState SceneDepthTextureSampler;
-float ConvertFromDeviceZ(float d) { return 1e6; }
-float4 SceneTextureLookup(float2 uv, int id, bool filtered) { return float4(0.05, 0.05, 0.06, 1); }
+float ConvertFromDeviceZ(float d) { return SceneParams.y; }
+float4 SceneTextureLookup(float2 uv, int id, bool filtered) { return SceneTextureLookup(uv, id); }
 float CheaperSmoothStep(float a, float b, float x) { x = saturate((x - a) / (b - a)); return x * x * (3 - 2 * x); }
 float CheaperSmoothStep(float x) { x = saturate(x); return x * x * (3 - 2 * x); }
 float2 CheaperSmoothStep(float2 x) { x = saturate(x); return x * x * (3 - 2 * x); }
