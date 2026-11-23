@@ -13,6 +13,7 @@
 #include "ue/MaterialGraph.h"
 #include "ue/Material.h"
 #include "ue/Particles.h"
+#include "ue/Blueprint.h"
 #include <set>
 #include "render/GraphShader.h"
 #include <d3dcompiler.h>
@@ -20,6 +21,7 @@
 using Microsoft::WRL::ComPtr;
 #include <windows.h>
 #include <map>
+#include <algorithm>
 #include <functional>
 
 static void Out(const std::string& s) {
@@ -157,6 +159,52 @@ static int DevParticles(Api& api) {
     return 0;
 }
 
+// Every Blueprint package: decompile failures and where function bodies stop, grouped by reason.
+static int DevBlueprints(Api& api, const std::string& filter) {
+    std::map<std::string, std::pair<int, std::string>> stops, fails, flat;   // reason -> (count, first example)
+    size_t total = 0, funcs = 0, stopped = 0;
+    BlueprintStats stats;
+    Vfs& vfs = api.vfs;
+    for (u32 i = 0; i < vfs.FileCount(); i++) {
+        std::string p(vfs.Path(i));
+        if (!IEndsWith(p, ".uasset") || (!filter.empty() && ToLower(p).find(ToLower(filter)) == std::string::npos)) continue;
+        auto pkg = api.cache->LoadPath(p);
+        if (!pkg || !IsBlueprintPackage(*pkg)) continue;
+        total++;
+        std::string code, err;
+        BlueprintOptions bo;
+        bo.cache = api.cache.get();
+        bo.stats = &stats;
+        if (!DecompileBlueprint(*pkg, code, &err, bo)) { auto& f = fails[err]; if (f.first++ == 0) f.second = p; continue; }
+        for (size_t k = 0; (k = code.find("\n{\n", k)) != std::string::npos; k += 3) funcs++;
+        for (size_t k = 0; (k = code.find("// control flow kept as jumps (", k)) != std::string::npos; k++) {
+            size_t e = code.find(')', k + 31);
+            auto& s = flat[code.substr(k + 31, e - k - 31)];
+            if (s.first++ == 0) s.second = p;
+        }
+        if (code.find("goto (EntryPoint)") != std::string::npos) { auto& s = flat["event graph not split into events"]; if (s.first++ == 0) s.second = p; }
+        for (size_t k = 0; (k = code.find("// decompilation stopped: ", k)) != std::string::npos; k++) {
+            size_t e = code.find('\n', k);
+            std::string why = code.substr(k + 26, e - k - 26);
+            size_t at = why.find(" at ");
+            if (at != std::string::npos) why.resize(at);   // group by opcode, not offset
+            auto& s = stops[why];
+            if (s.first++ == 0) s.second = p;
+            stopped++;
+        }
+    }
+    Out(Fmt("\nblueprints %zu, failed %zu, function bodies ~%zu, stopped %zu\n", total, (size_t)fails.size(), funcs, stopped));
+    for (auto& [k, v] : fails) Out(Fmt("fail %-60s %5d  e.g. %s\n", k.c_str(), v.first, v.second.c_str()));
+    for (auto& [k, v] : stops) Out(Fmt("stop %-60s %5d  e.g. %s\n", k.c_str(), v.first, v.second.c_str()));
+    for (auto& [k, v] : flat) Out(Fmt("jumps %-59s %5d  e.g. %s\n", k.c_str(), v.first, v.second.c_str()));
+    Out(Fmt("calls %zu, with a signature %zu (%.1f%%)\n", stats.calls, stats.callsWithSignature, stats.calls ? 100.0 * stats.callsWithSignature / stats.calls : 0.0));
+    std::vector<std::pair<int, std::string>> top;
+    for (auto& [k, v] : stats.unresolved) top.push_back({v, k});
+    std::sort(top.rbegin(), top.rend());
+    for (size_t i = 0; i < top.size() && i < 40; i++) Out(Fmt("no signature %6d  %s\n", top[i].first, top[i].second.c_str()));
+    return 0;
+}
+
 static int DevNative(Api& api, const std::string& path, size_t n) {
     std::string err;
     auto pkg = api.LoadPackage(path, &err);
@@ -210,6 +258,7 @@ int RunCli(int argc, wchar_t** argv) {
     if (tool == "scan") return DevScan(api, argc > 3 ? Narrow(argv[3]) : "", argc > 4 ? (size_t)_wtoi(argv[4]) : SIZE_MAX);
     if (tool == "materials") return DevMaterials(api, argc > 3 ? Narrow(argv[3]) : "/materials/");
     if (tool == "particles") return DevParticles(api);
+    if (tool == "blueprints") return DevBlueprints(api, argc > 3 ? Narrow(argv[3]) : "");
     if (tool == "native") return DevNative(api, argc > 3 ? Narrow(argv[3]) : "", argc > 4 ? (size_t)_wtoi(argv[4]) : 128);
 
     const ApiTool* t = api.FindTool(tool);
