@@ -31,6 +31,10 @@ std::string SuperClass(std::string_view name);
 const ReflFunction* Function(std::string_view owner, std::string_view name);
 // searched from `cls` up through its native super classes
 const ReflFunction* FunctionInHierarchy(std::string_view cls, std::string_view name, std::string* owner = nullptr);
+// the only class (or only interface, a class's interfaces are not listed) declaring a function of this name
+const ReflFunction* UniqueFunction(std::string_view name, bool interfacesOnly, std::string* owner = nullptr);
+// C++ type of a native member (object, interface, class and enum members), searched up the super classes
+const std::string* FieldInHierarchy(std::string_view cls, std::string_view member);
 const ReflEnum* Enum(std::string_view name);
 bool Loaded();
 }

@@ -33,9 +33,6 @@ for f in glob.glob(os.path.join(sdk, 'Classes', '*.hpp')):
         flags, cls_, fn, body = int(m.group(1), 16), m.group(2), m.group(3), m.group(4)
         # the params struct name is <PrefixedClass>_<Function>_Params; class names can contain '_', find the split via known classes
         full = cls_ + '_' + fn
-        owner = None
-        for k in range(len(full)):
-            if full[k] == '_' and full[:k] in [c[0] for c in []]: pass
         params, ret = [], 'void'
         for line in body.split('\n'):
             lm = re.match(r'\s*(.+?) (\w+)(\[\d+\])?;\s*//', line)
@@ -46,8 +43,13 @@ for f in glob.glob(os.path.join(sdk, 'Classes', '*.hpp')):
         funcs.setdefault(('?' + full, ''), ('s' if flags & 0x2000 else '', ret, params))
 
 old_classes = json.load(open(os.path.join(inv, 'native_code', 'depot', 'sdk_class_field_index.json'), encoding='utf-8'))
-for k in old_classes:
+fields = {}   # (class, field) -> type: object / interface / enum members (contexts of calls, enum comparisons)
+for k, fs in old_classes.items():
     if k[1:] not in classes: classes[k[1:]] = (k, '')
+    for f in fs.values():
+        t = strip_kw(f.get('type', ''))
+        if t.endswith('*') or t.startswith(('TScriptInterface<', 'TEnumAsByte<', 'TSubclassOf<')) or re.match(r'^E\w+$', t):
+            fields[(k[1:], f['name'])] = t
 
 # resolve '?<Prefixed>_<Function>' param blocks to (owner, function) using the class list
 prefixed = {v[0]: k for k, v in classes.items()}
@@ -113,6 +115,8 @@ with open(out, 'w', encoding='utf-8', newline='\n') as o:
     for (owner, name) in sorted(funcs):
         flags, ret, params = funcs[(owner, name)]
         o.write('F\t' + '\t'.join([owner, name, flags, ret] + [f'{m}|{t}|{n}' for m, t, n in params]) + '\n')
+    for (c, n) in sorted(fields):
+        o.write(f'P\t{c}\t{n}\t{fields[(c, n)]}\n')
     for k in sorted(enums):
         o.write('E\t' + k + '\t' + '\t'.join(f'{v}={n}' for v, n in enums[k]) + '\n')
-print(len(classes), 'classes', len(funcs), 'functions', len(enums), 'enums')
+print(len(classes), 'classes', len(funcs), 'functions', len(fields), 'fields', len(enums), 'enums')
