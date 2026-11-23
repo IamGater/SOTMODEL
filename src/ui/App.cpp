@@ -1998,7 +1998,9 @@ void App::ExportFiles(std::vector<u32> entries, int mode, int kind) {
                     auto pkg = m_api->cache->Load(e, &err);
                     std::string code;
                     if (pkg && IsBlueprintPackage(*pkg)) {
-                        ok = DecompileBlueprint(*pkg, code, &err);
+                        BlueprintOptions bo;
+                        bo.cache = m_api->cache.get();
+                        ok = DecompileBlueprint(*pkg, code, &err, bo);
                         if (ok) {
                             std::string rel = opt.keepDirectories ? path : path.substr(path.rfind('/') + 1);
                             std::wstring out = opt.outputDir + L"\\" + Widen(rel.substr(0, rel.rfind('.')) + ".cpp");

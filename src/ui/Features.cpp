@@ -842,7 +842,9 @@ void App::DecompileBlueprintTab(u32 entry) {
     m_jobs->Push([this, entry, title] {
         std::string err, code;
         auto pkg = m_api->cache->Load(entry, &err);
-        bool ok = pkg && DecompileBlueprint(*pkg, code, &err);
+        BlueprintOptions bo;
+        bo.cache = m_api->cache.get();
+        bool ok = pkg && DecompileBlueprint(*pkg, code, &err, bo);
         Post([this, entry, title, code, ok, err] {
             if (!ok) {
                 LOGW("decompile: %s", err.c_str());
