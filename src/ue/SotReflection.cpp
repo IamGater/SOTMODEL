@@ -7,6 +7,7 @@
 #include <windows.h>
 #include <mutex>
 #include <unordered_map>
+#include <functional>
 
 namespace {
 
@@ -156,5 +157,23 @@ const ReflEnum* Enum(std::string_view name) {
 }
 
 bool Loaded() { return Get().loaded; }
+
+void ForEachName(const std::function<void(std::string_view)>& fn) {
+    auto& db = Get();
+    for (auto& [n, c] : db.classes) fn(n);
+    for (auto& [n, e] : db.enums) {
+        fn(n);
+        for (auto& [v, s] : e.values) {
+            std::string_view x = s;
+            size_t c = x.rfind("::");
+            fn(c == std::string_view::npos ? x : x.substr(c + 2));
+        }
+    }
+    for (auto& [k, t] : db.fields) fn(std::string_view(k).substr(k.find('\t') + 1));
+    for (auto& [k, f] : db.functions) {
+        fn(std::string_view(k).substr(k.find('\t') + 1));
+        for (auto& p : f.params) fn(p.name);
+    }
+}
 
 }   // namespace SotReflection

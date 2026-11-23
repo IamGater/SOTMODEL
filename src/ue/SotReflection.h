@@ -3,6 +3,7 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include <functional>
 
 // Reflection of the game's native code (classes, UFunction signatures, enums) for the Blueprint decompiler, from the
 // embedded third_party/sot_reflection/sot_reflection.txt (built from SDK dumps of the game, see its README).
@@ -37,4 +38,6 @@ const ReflFunction* UniqueFunction(std::string_view name, bool interfacesOnly, s
 const std::string* FieldInHierarchy(std::string_view cls, std::string_view member);
 const ReflEnum* Enum(std::string_view name);
 bool Loaded();
+// every class, enum, enum value, member, function and parameter name (Wwise name guessing)
+void ForEachName(const std::function<void(std::string_view)>& fn);
 }

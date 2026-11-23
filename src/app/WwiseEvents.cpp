@@ -1,5 +1,7 @@
 #include "app/WwiseEvents.h"
 #include "ue/Properties.h"
+#include "ue/GameConfig.h"
+#include "ue/SotReflection.h"
 #include <mutex>
 #include <unordered_map>
 
@@ -77,6 +79,12 @@ std::once_flag g_audioNamesOnce;
 std::unordered_map<u32, std::string> g_audioNames;
 
 void LoadAudioNames(Api& api) {
+    // physical surface names (the "surface" switch values) and every native identifier of the game (enum values such as
+    // EFootwearType::Pegleg, members, parameters: what native code passes to SetSwitch / SetRTPCValue is often one of them)
+    for (auto& [type, name] : GameConfig::PhysicalSurfaces()) g_audioNames.try_emplace(WwiseShortId(name), name);
+    SotReflection::ForEachName([](std::string_view n) {
+        if (!n.empty() && n.size() < 64) g_audioNames.try_emplace(WwiseShortId(n), std::string(n));
+    });
     std::vector<u32> entries;
     for (u32 i = 0; i < (u32)api.vfs.FileCount() && entries.size() < 600; i++) {
         std::string_view p = api.vfs.Path(i);
