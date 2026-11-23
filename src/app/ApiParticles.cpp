@@ -68,6 +68,7 @@ void RegisterParticleTools(Api& api) {
                               w.KV("class", m.cls);
                               if (!m.enabled) w.KV("enabled", false);
                               if (!m.simulated) w.KV("previewed", false);
+                              if (m.previewNote) w.KV("preview_note", m.previewNote);
                               for (auto& [n, c] : m.curves) {
                                   if (!curves) { w.KV(n, c.Describe()); continue; }
                                   w.Key(n);

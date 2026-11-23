@@ -188,7 +188,23 @@ const char* kSimulated[] = {"ParticleModuleRequired", "ParticleModuleSpawn", "Pa
                             "ParticleModuleVectorFieldScaleOverLife", "ParticleModuleVectorFieldRotation", "ParticleModuleVectorFieldRotationRate",
                             // the preview emitter does not move: no parent velocity to inherit, no distance to spawn over
                             "ParticleModuleVelocityInheritParent", "ParticleModuleSpawnPerUnit", "ParticleModuleAlignRotationToVelocity",
-                            "ParticleModuleOrientationAxisLock"};
+                            "ParticleModuleOrientationAxisLock", "ParticleModuleLocationWorldOffset", "ParticleModuleVelocityConeEmitterPoint",
+                            "ParticleModuleLocationEmitter", "ParticleModuleParametersOverVelocity", "ParticleModuleParametersOverCustom",
+                            "ParticleModuleSizeOverVelocity"};
+
+// Modules a standalone preview cannot show, with the reason (ParticleModuleInfo::previewNote).
+const std::pair<const char*, const char*> kNotPreviewable[] = {
+    {"ParticleModuleCollision", "collides with the game world (there is none in the preview)"},
+    {"ParticleModuleCollisionGPU", "collides with the scene depth buffer (there is no scene in the preview)"},
+    {"ParticleModuleLight", "lights the surroundings (there are no surfaces in the preview)"},
+    {"ParticleModuleLocationBoneSocket", "spawns on the bones of the owning actor's skeletal mesh (none in the preview)"},
+    {"ParticleModuleWindInfluence", "follows the game's wind (no wind in the preview)"},
+    {"ParticleModuleParameterDynamic", "feeds the material's DynamicParameter node (material only, no motion)"},
+    {"ParticleModuleMurkyColor", "tints by the water murkiness at the particle (no water in the preview)"},
+    {"ParticleModuleSpawnRepeatPerPoint", "repeats spawning over gameplay-supplied points (none in the preview)"},
+    {"ParticleModuleLocationVelocityComputeShaderOutput", "takes positions from the game's water compute shader"},
+    {"ParticleModuleTypeDataAnimTrail", "draws a trail along a weapon animation's sockets (needs the animated weapon)"},
+};
 
 // "(x, y, z)" as written by SimpleValue
 Vec3 ParseVec(const std::string& s, Vec3 def = {}) {
@@ -206,6 +222,8 @@ Vec3 RotateTurns(Vec3 v, Vec3 turns, bool inverse) {
     return inverse ? rx(ry(rz(v))) : rz(ry(rx(v)));
 }
 
+struct OverScales { float spawn = 1, life = 1, size = 1, velocity = 1, opacity = 1; };
+
 // ParticleModuleXxx_Seeded behaves like ParticleModuleXxx (it only fixes the random seed).
 std::string BaseModuleClass(const std::string& cls) {
     return IEndsWith(cls, "_Seeded") ? cls.substr(0, cls.size() - 7) : cls;
@@ -216,6 +234,7 @@ ParticleModuleInfo ReadModule(const Package& pkg, i32 obj) {
     m.cls = pkg.ClassName(obj);
     m.name = obj > 0 ? pkg.Exports()[obj - 1].objectName : pkg.ObjectName(obj);
     for (auto* s : kSimulated) m.simulated |= BaseModuleClass(m.cls) == s;
+    for (auto& [c, why] : kNotPreviewable) if (BaseModuleClass(m.cls) == c) m.previewNote = why;
     if (obj <= 0) return m;
     for (auto& p : pkg.ReadProperties((size_t)obj - 1)) {
         std::string key = p.arrayIndex ? Fmt("%s[%d]", p.name.c_str(), p.arrayIndex) : p.name;
@@ -446,6 +465,20 @@ int ParticleSim::Count() const {
     return n;
 }
 
+OverScales ParameterScales(const ParticleEmitterInfo& e) {
+    OverScales s;
+    for (auto& m : e.modules) {
+        if (!m.enabled) continue;
+        bool vel = m.cls == "ParticleModuleParametersOverVelocity", cus = m.cls == "ParticleModuleParametersOverCustom";
+        if (!vel && !cus) continue;
+        const char* k = vel ? "OverSpeedScale" : "OverCustomScale";
+        float x = vel ? 0.f : 1.f;
+        auto f = [&](const char* name) { auto c = m.Curve(std::string(name) + k); return c ? c->Eval(x) : 1.f; };
+        s.spawn *= f("SpawnRate"); s.life *= f("Lifetime"); s.size *= f("Size"); s.velocity *= f("InitialVelocity"); s.opacity *= f("Opacity");
+    }
+    return s;
+}
+
 void ParticleSim::Spawn(Emitter& em, float et, int n) {
     const ParticleEmitterInfo& e = *em.info;
     for (int k = 0; k < n && em.parts.size() < 4000; k++) {
@@ -477,9 +510,12 @@ void ParticleSim::Spawn(Emitter& em, float et, int n) {
                     float r = x->Eval(et, 0, Rnd()), l = Length(p.pos);
                     if (l > 1e-3f) p.vel = p.vel + p.pos * (r / l);
                 }
-            } else if (c == "ParticleModuleVelocityCone") {
+            } else if (c == "ParticleModuleVelocityCone" || c == "ParticleModuleVelocityConeEmitterPoint") {
+                // SoT EmitterPoint variant: VelocityScale for the speed, plus AdditiveVelocity
                 float ang = cv("Angle") ? cv("Angle")->Eval(et, 0, Rnd()) * kPi : 0;   // 0..1 = 0..180 degrees
-                float speed = cv("Velocity") ? cv("Velocity")->Eval(et, 0, Rnd()) : 0;
+                const ParticleCurve* sc = cv("Velocity") ? cv("Velocity") : cv("VelocityScale");
+                float speed = sc ? sc->Eval(et, 0, Rnd()) : 0;
+                p.vel = p.vel + ParseVec(m.Value("AdditiveVelocity"));
                 Vec3 dir{0, 0, 1};
                 std::string d = m.Value("Direction");
                 float dx = 0, dy = 0, dz = 1;
@@ -498,8 +534,21 @@ void ParticleSim::Spawn(Emitter& em, float et, int n) {
             } else if (c == "ParticleModuleAccelerationDrag") {
                 if (auto x = cv("DragCoefficientRaw")) p.drag = x->Eval(et, 0, Rnd());
                 else if (auto x2 = cv("DragCoefficient")) p.drag = x2->Eval(et, 0, Rnd());
-            } else if (c == "ParticleModuleLocation") {
+            } else if (c == "ParticleModuleLocation" || c == "ParticleModuleLocationWorldOffset") {   // world offset: the same for a system at the origin
                 if (auto x = cv("StartLocation")) p.pos = p.pos + x->Eval3(et, Rnd());
+                else p.pos = p.pos + ParseVec(m.Value("StartLocation"));
+            } else if (c == "ParticleModuleLocationEmitter") {   // at a live particle of another emitter (random pick)
+                std::string src = m.Value("EmitterName");
+                for (auto& o : m_emitters)
+                    if (&o != &em && IEquals(o.info->name, src) && !o.parts.empty()) {
+                        const Particle& q = o.parts[std::min(o.parts.size() - 1, (size_t)(Rnd() * o.parts.size()))];
+                        p.pos = q.pos;
+                        if (m.Value("InheritSourceVelocity") == "true") {
+                            std::string s = m.Value("InheritSourceVelocityScale");
+                            p.vel = p.vel + q.vel * (s.empty() ? 1.f : (float)atof(s.c_str()));
+                        }
+                        break;
+                    }
             } else if (c == "ParticleModuleLocationPrimitiveSphere" || c == "ParticleModuleLocationPrimitiveSphereSlice" || c == "ParticleModuleLocationPrimitiveCylinder") {
                 bool sphere = c.find("Sphere") != std::string::npos;
                 float r = cv("StartRadius") ? cv("StartRadius")->Eval(et, 0, Rnd()) : 50;
@@ -536,6 +585,14 @@ void ParticleSim::Spawn(Emitter& em, float et, int n) {
                 if (auto x = cv("RotationRateAmount")) p.orbitRate = x->Eval3(et, Rnd());
             }
         }
+        // SoT ParametersOverVelocity / OverCustom: scales by the emitter speed (0: the preview emitter is still) or a
+        // gameplay value (taken as 1)
+        OverScales os = ParameterScales(e);
+        p.life = p.life < 1e8f ? p.life * os.life : p.life;
+        p.baseSize = p.baseSize * os.size;
+        p.vel = p.vel * os.velocity;
+        p.baseAlpha *= os.opacity;
+        p.speed0 = Length(p.vel);
         em.parts.push_back(p);
     }
 }
@@ -640,6 +697,7 @@ void ParticleSim::Step(float dt) {
         }
         float rate = e.rate.Valid() ? e.rate.Eval(et, 0, Rnd()) : 0;
         if (e.rateScale.Valid()) rate *= e.rateScale.Eval(et, 0, 0.5f);
+        rate *= ParameterScales(e).spawn;
         em.spawnAcc += std::max(0.f, rate) * dt;
         int n = (int)em.spawnAcc;
         em.spawnAcc -= n;
@@ -690,6 +748,11 @@ void ParticleSim::Sprites(std::vector<ParticleSprite>& out) const {
                     if (auto x = m.Curve("AlphaScaleOverLife")) alpha *= x->Eval(rel, 0, p.rnd);
                 } else if (c == "ParticleModuleSubUV") {
                     if (auto x = m.Curve("SubImageIndex")) sub = x->Eval(subRel, 0, p.subRnd);
+                } else if (c == "ParticleModuleSizeOverVelocity") {   // SoT: SizeMultiplier over the speed, taken as a fraction of the spawn speed
+                    if (auto x = m.Curve("SizeMultiplier")) {
+                        float s = p.speed0 > 1e-3f ? std::clamp(Length(p.vel) / p.speed0, 0.f, 1.f) : 0.f;
+                        size = size * x->Eval(s, 0, p.rnd);
+                    }
                 } else if (c == "ParticleModuleSizeScaleBySpeed") {   // size x clamp(speed * SpeedScale, 1, MaxScale)
                     float sx = 0, sy = 0, mx = 1, my = 1, z;
                     sscanf(m.Value("SpeedScale").c_str(), "(%f, %f, %f)", &sx, &sy, &z);

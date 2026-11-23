@@ -95,7 +95,7 @@ void App::DrawParticlePanel(Document& d) {
             if (ImGui::Selectable(Fmt("%s##%zu", label.c_str(), i).c_str(), d.psModule == (int)i)) d.psModule = (int)i;
             if (!m.simulated) {
                 ImGui::PopStyleColor();
-                if (ImGui::IsItemHovered()) Tip("Not simulated by the preview");
+                if (ImGui::IsItemHovered()) Tip(m.previewNote ? (std::string("Not shown by the preview: it ") + m.previewNote).c_str() : "Not simulated by the preview");
             }
         }
     } else {

@@ -39,6 +39,7 @@ struct ParticleModuleInfo {
     std::vector<std::pair<std::string, ParticleCurve>> curves;
     std::vector<std::pair<std::string, std::string>> values;   // other simple properties
     bool simulated = false;                                    // understood by the preview simulation
+    const char* previewNote = nullptr;                         // why a standalone preview cannot show it (needs the game world, ...)
     const ParticleCurve* Curve(std::string_view n) const;
     std::string Value(std::string_view n) const;
 };
@@ -103,6 +104,7 @@ private:
         Vec3 orbitOffset, orbitRot, orbitRate;   // ParticleModuleOrbit: rendered offset, rotation (turns) and its rate
         Vec3 baseSize, baseColor;
         float vfScale = 1;   // ParticleModuleVectorFieldScale (at spawn)
+        float speed0 = 0;    // speed at spawn (SizeOverVelocity input)
         float baseAlpha = 1, age = 0, life = 1, loopTime = 0, subLoopTime = 0, rot = 0, rotRate = 0, subRnd = 0, drag = 0, rnd = 0.5f;
     };
     struct Emitter {

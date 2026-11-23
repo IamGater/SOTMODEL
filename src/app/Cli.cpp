@@ -131,6 +131,7 @@ static int DevMaterials(Api& api, const std::string& arg) {
 // Every ParticleSystem: modules (enabled, in some emitter LOD) the preview simulation does not understand.
 static int DevParticles(Api& api) {
     std::map<std::string, std::pair<int, std::string>> modules;   // class -> (systems, first example)
+    std::map<std::string, std::string> notes;                     // class -> why the preview cannot show it
     size_t total = 0;
     Vfs& vfs = api.vfs;
     for (u32 i = 0; i < vfs.FileCount(); i++) {
@@ -144,11 +145,15 @@ static int DevParticles(Api& api) {
         std::set<std::string> seen;
         for (auto& e : ps.emitters)
             for (auto& m : e.modules)
-                if (!m.simulated && m.enabled) seen.insert(m.cls);
+                if (!m.simulated && m.enabled) { seen.insert(m.cls); if (m.previewNote) notes[m.cls] = m.previewNote; }
         for (auto& c : seen) { auto& m = modules[c]; if (m.first++ == 0) m.second = p; }
     }
     Out(Fmt("\nparticle systems %zu\n", total));
-    for (auto& [k, v] : modules) Out(Fmt("not simulated %-48s %5d  e.g. %s\n", k.c_str(), v.first, v.second.c_str()));
+    for (auto& [k, v] : modules) {
+        bool np = notes.count(k) > 0;
+        Out(Fmt("%s %-48s %5d  e.g. %s\n", np ? "not previewable" : "not simulated  ", k.c_str(), v.first, v.second.c_str()));
+        if (np) Out("    (" + notes[k] + ")\n");
+    }
     return 0;
 }
 
