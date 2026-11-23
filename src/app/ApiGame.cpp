@@ -1,8 +1,9 @@
-// Game rule data: physical surfaces (physical materials and the materials using them).
+// Game rule data: physical surfaces (physical materials and the materials using them), AI behavior trees.
 #include "app/Api.h"
 #include "core/Json.h"
 #include "ue/GameConfig.h"
 #include "ue/Properties.h"
+#include "ue/BehaviorTree.h"
 #include <map>
 
 namespace {
@@ -49,6 +50,77 @@ int SurfaceNumber(const std::string& type) {   // SurfaceType12 -> 12, Default -
 }   // namespace
 
 void RegisterGameTools(Api& api) {
+    api.Register({"get_behavior_tree",
+                  "An AI behavior tree (BehaviorTree package, Blueprints/AI/BehaviorTree): the node tree from the root (composites Selector / "
+                  "Sequence / SimpleParallel, tasks with their settings), each node's decorators (conditions, with the editor's cooked "
+                  "description) and services, RunBehavior subtrees, and the blackboard's keys with their types. format=text (default) is an "
+                  "indented tree, json the structure.",
+                  R"({"type":"object","properties":{"path":{"type":"string"},"format":{"type":"string","enum":["text","json"],"default":"text"}},"required":["path"]})",
+                  "path",
+                  [](Api& a, const JsonValue& args) {
+                      std::string err;
+                      auto pkg = a.LoadPackage(args.GetStr("path"), &err);
+                      if (!pkg) return ApiResult::Error(err);
+                      BehaviorTreeInfo bt;
+                      if (!ReadBehaviorTree(*pkg, bt, a.cache.get(), &err)) return ApiResult::Error(err);
+                      JsonWriter w;
+                      w.BeginObject();
+                      w.KV("path", pkg->GamePath());
+                      if (args.GetStr("format") == "json") {
+                          w.KV("blackboard", bt.blackboard);
+                          w.Key("keys");
+                          w.BeginArray();
+                          for (auto& k : bt.keys) {
+                              w.BeginObject();
+                              w.KV("name", k.name);
+                              w.KV("type", k.type);
+                              if (!k.detail.empty()) w.KV("detail", k.detail);
+                              if (!k.from.empty()) w.KV("from", k.from);
+                              w.EndObject();
+                          }
+                          w.EndArray();
+                          auto aux = [&](const char* key, const std::vector<BtAux>& v) {
+                              if (v.empty()) return;
+                              w.Key(key);
+                              w.BeginArray();
+                              for (auto& x : v) {
+                                  w.BeginObject();
+                                  w.KV("class", x.cls);
+                                  w.KV("name", x.name);
+                                  if (!x.details.empty()) w.KV("details", x.details);
+                                  w.EndObject();
+                              }
+                              w.EndArray();
+                          };
+                          w.Key("nodes");
+                          w.BeginArray();
+                          for (auto& n : bt.nodes) {
+                              w.BeginObject();
+                              w.KV("class", n.cls);
+                              w.KV("name", n.name);
+                              w.KV("composite", n.composite);
+                              if (!n.details.empty()) w.KV("details", n.details);
+                              if (!n.subtree.empty()) w.KV("subtree", n.subtree);
+                              aux("decorators", n.decorators);
+                              if (!n.decoratorLogic.empty()) w.KV("decoratorLogic", n.decoratorLogic);
+                              aux("services", n.services);
+                              if (!n.children.empty()) {
+                                  w.Key("children");
+                                  w.BeginArray();
+                                  for (int c : n.children) w.Int(c);
+                                  w.EndArray();
+                              }
+                              w.EndObject();
+                          }
+                          w.EndArray();
+                      } else {
+                          w.KV("tree", BehaviorTreeText(bt));
+                      }
+                      w.EndObject();
+                      ApiResult r;
+                      r.json = w.Take();
+                      return r;
+                  }});
     api.Register({"get_physical_materials",
                   "The game's physical surfaces: every surface type named in Athena/Config/DefaultEngine.ini (PhysicsSettings "
                   "PhysicalSurfaces, the names footstep / impact sounds switch on: Wwise 'surface' switch values) with the physical "

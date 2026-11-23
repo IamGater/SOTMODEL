@@ -1865,12 +1865,13 @@ void App::DrawDocContent(Document& d) {
     bool hasShaders = d.shaders != nullptr;
     bool hasGraph = d.matGraph != nullptr;
     bool hasSm = !d.loading && d.animBp != nullptr;
+    bool hasBt = !d.loading && d.behaviorTree != nullptr;
     bool hasParticles = !d.loading && d.particles != nullptr;
-    bool side = hasParticles || hasSm || has3d || hasImage || hasAudio || hasTable || hasShaders || hasGraph;
+    bool side = hasParticles || hasSm || hasBt || has3d || hasImage || hasAudio || hasTable || hasShaders || hasGraph;
     d.hasSide = side;
     if (d.sideHidden) side = false;   // closed with the button at the right of the tab strip: the JSON takes the width
     float splitW = Dip(4);
-    if (side && d.sideW <= 0) d.sideW = hasGraph || hasSm || hasParticles ? avail.x * 0.6f : hasShaders ? std::min(avail.x * 0.4f, Dip(520)) : has3d || hasTable ? avail.x * 0.6f : std::min(avail.x * 0.45f, Dip(400) + avail.x * 0.1f);
+    if (side && d.sideW <= 0) d.sideW = hasGraph || hasSm || hasBt || hasParticles ? avail.x * 0.6f : hasShaders ? std::min(avail.x * 0.4f, Dip(520)) : has3d || hasTable ? avail.x * 0.6f : std::min(avail.x * 0.45f, Dip(400) + avail.x * 0.1f);
     float sideW = side ? std::clamp(d.sideW, Dip(160), std::max(Dip(160), avail.x - Dip(200))) : 0;
     // the 3D view drawn in the separate window: the side only holds its two buttons, the JSON gets the room
     bool viewerSide = has3d && !hasGraph && !hasParticles && !hasSm && !hasShaders && !hasTable && !hasAudio;
@@ -1906,6 +1907,14 @@ void App::DrawDocContent(Document& d) {
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(Dip(6), Dip(6)));
         ImGui::BeginChild("##statemachine", ImVec2(sideW, avail.y), ImGuiChildFlags_AlwaysUseWindowPadding, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
         DrawStateMachinePanel(d);
+        ImGui::EndChild();
+        ImGui::PopStyleVar();
+        return;
+    }
+    if (hasBt) {
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(Dip(6), Dip(6)));
+        ImGui::BeginChild("##behaviortree", ImVec2(sideW, avail.y), ImGuiChildFlags_AlwaysUseWindowPadding, ImGuiWindowFlags_NoScrollbar);
+        DrawBehaviorTreePanel(d);
         ImGui::EndChild();
         ImGui::PopStyleVar();
         return;

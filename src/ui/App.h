@@ -108,6 +108,7 @@ struct Document {
     std::vector<float> bsWeights;
     // animation blueprint: baked state machines (graph in the side panel)
     std::shared_ptr<AnimBlueprintInfo> animBp;
+    std::shared_ptr<struct BehaviorTreeInfo> behaviorTree;   // BehaviorTree packages: the node tree panel
     int smSel = 0, smState = -1;
     // particle system: CPU simulation drawn as sprites in the side panel
     std::shared_ptr<ParticleSystemInfo> particles;
@@ -356,6 +357,7 @@ private:
     bool AnimAssetPose(Document& d, std::vector<Bone>& pose);
     void DrawAnimAssetHeader(Document& d);
     void DrawStateMachinePanel(Document& d);
+    void DrawBehaviorTreePanel(Document& d);   // ui/BehaviorTreePanel.cpp
     void DrawParticlePanel(Document& d);   // ParticlePanel.cpp
     void DrawGraphParams(GpuMaterial& mat);   // live scalar / vector parameter editing (graph shader)
     void DrawAttachControls(Document& d);   // attach a mesh to one of the shown mesh's sockets
