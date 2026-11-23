@@ -126,6 +126,8 @@ void RegisterParticleTools(Api& api) {
                           re[i].subV = e.subV;
                           re[i].additive = e.blendMode.find("Additive") != std::string::npos;
                           re[i].alignment = e.screenAlignment;
+                          re[i].axisLock = e.axisLock;
+                          re[i].alignToVelocity = e.alignToVelocity;
                           re[i].pivot = ParticlePivot(e);
                           re[i].frameBlend = e.subUVMethod.find("Blend") != std::string::npos;
                       }

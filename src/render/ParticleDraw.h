@@ -8,6 +8,7 @@ struct ParticleLook {   // per emitter
     bool additive = false, velocityAligned = false, visible = true;
     bool frameBlend = false;   // SubUV PSUVIM_*_Blend: cross-fade between flipbook frames
     int subH = 1, subV = 1;
+    int axisLock = 0;   // ParticleEmitterInfo::axisLock
     Vec2 pivot;   // ParticlePivot
     std::shared_ptr<GpuMesh> mesh;   // mesh emitters (TypeDataMesh): one instance per particle; null draws sprites
 };

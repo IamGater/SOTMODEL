@@ -11,7 +11,8 @@ std::vector<ParticleLook> ParticleLooks(const ParticleSystemInfo& ps, const std:
         l.texture = i < textures.size() ? textures[i] : nullptr;
         l.mesh = i < meshes.size() ? meshes[i] : nullptr;
         l.additive = e.blendMode.find("Additive") != std::string::npos;
-        l.velocityAligned = e.screenAlignment.find("Velocity") != std::string::npos;
+        l.velocityAligned = e.screenAlignment.find("Velocity") != std::string::npos || e.alignToVelocity;
+        l.axisLock = e.axisLock;
         l.subH = std::max(1, e.subH);
         l.subV = std::max(1, e.subV);
         l.pivot = ParticlePivot(e);
@@ -64,16 +65,9 @@ int DrawParticleSprites(Renderer& r, const Camera& cam, const std::vector<Partic
             flush();
             batchEmitter = s.emitter;
         }
-        float ax = cosf(s.rotation), ay = sinf(s.rotation);
-        Vec3 ux = right * ax + up * ay, uy = up * ax - right * ay;   // rotated in the screen plane
-        if (l.velocityAligned) {
-            Vec3 v = toWorld.TransformDir(s.velocity);
-            Vec3 vs = v - fwd * Dot(v, fwd);   // velocity projected on the screen plane
-            if (Length(vs) > 1e-4f) {
-                uy = Normalize(vs);
-                ux = Normalize(Cross(fwd, uy));
-            }
-        }
+        Vec3 ux, uy;   // screen facing and rotated, axis locked, or along the velocity
+        ParticleQuadAxes(l.axisLock, l.velocityAligned, s.rotation, toWorld.TransformDir(s.velocity), right, up, fwd, ux, uy);
+        if (l.axisLock && l.axisLock <= 6) { ux = Normalize(toWorld.TransformDir(ux)); uy = Normalize(toWorld.TransformDir(uy)); }   // locked planes are in system space
         ux = ux * (s.size.x * 0.5f * scale);
         uy = uy * (s.size.y * 0.5f * scale);
         int cells = l.subH * l.subV, whole = (int)floorf(s.subImage), cell = (whole % cells + cells) % cells, next = (cell + 1) % cells;

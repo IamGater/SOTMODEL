@@ -58,6 +58,8 @@ struct ParticleEmitterInfo {
     ParticleCurve rate, rateScale;
     ParticleCurve loopTime, subUVLoopTime;   // SoT: particles with no lifetime loop their relative time over these seconds
     Vec3 origin;
+    int axisLock = 0;              // ParticleModuleOrientationAxisLock: 0 none, 1..3 EPAL_X/Y/Z, 4..6 EPAL_NEGATIVE_*, 7..9 EPAL_ROTATE_*
+    bool alignToVelocity = false;  // ParticleModuleAlignRotationToVelocity: texture top along the velocity
     std::vector<ParticleModuleInfo> modules;   // required + spawn + type data + the module stack
 };
 
@@ -122,7 +124,10 @@ private:
 
 // Simple software render of sprites (textured, subUV, alpha or additive) for CLI previews.
 struct Image;
-struct ParticleRenderEmitter { const Image* texture = nullptr; int subH = 1, subV = 1; bool additive = false, frameBlend = false; std::string alignment; Vec2 pivot; };
+struct ParticleRenderEmitter { const Image* texture = nullptr; int subH = 1, subV = 1; bool additive = false, frameBlend = false; std::string alignment; Vec2 pivot; int axisLock = 0; bool alignToVelocity = false; };
+// Unit axes of a sprite quad (ux right, uy = texture top) for a camera basis: screen facing and turned by `rotation`,
+// locked to an axis plane / rotating about an axis (axisLock), or with its top along the velocity.
+void ParticleQuadAxes(int axisLock, bool velocityAligned, float rotation, Vec3 velocity, Vec3 right, Vec3 up, Vec3 fwd, Vec3& ux, Vec3& uy);
 void RenderParticleSprites(const std::vector<ParticleSprite>& sprites, const std::vector<ParticleRenderEmitter>& emitters, Vec3 target, float distance,
                            float yawDeg, float pitchDeg, int width, int height, Image& out);
 // Camera basis shared by the GUI and the software renderer (UE axes: X forward, Y right, Z up).

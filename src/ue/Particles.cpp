@@ -187,7 +187,8 @@ const char* kSimulated[] = {"ParticleModuleRequired", "ParticleModuleSpawn", "Pa
                             "ParticleModuleLocationPrimitiveSphereSlice", "ParticleModuleVectorFieldLocal", "ParticleModuleVectorFieldScale",
                             "ParticleModuleVectorFieldScaleOverLife", "ParticleModuleVectorFieldRotation", "ParticleModuleVectorFieldRotationRate",
                             // the preview emitter does not move: no parent velocity to inherit, no distance to spawn over
-                            "ParticleModuleVelocityInheritParent", "ParticleModuleSpawnPerUnit"};
+                            "ParticleModuleVelocityInheritParent", "ParticleModuleSpawnPerUnit", "ParticleModuleAlignRotationToVelocity",
+                            "ParticleModuleOrientationAxisLock"};
 
 // "(x, y, z)" as written by SimpleValue
 Vec3 ParseVec(const std::string& s, Vec3 def = {}) {
@@ -394,6 +395,17 @@ bool ReadParticleSystem(PackageCache& cache, const Package& pkg, size_t exportId
                 else e.type = t;
             }
             e.modules.push_back(std::move(m));
+        }
+        for (auto& m : e.modules) {
+            if (!m.enabled) continue;
+            std::string c = BaseModuleClass(m.cls);
+            if (c == "ParticleModuleAlignRotationToVelocity") e.alignToVelocity = true;
+            else if (c == "ParticleModuleOrientationAxisLock") {
+                static const char* flags[] = {"EPAL_NONE", "EPAL_X", "EPAL_Y", "EPAL_Z", "EPAL_NEGATIVE_X", "EPAL_NEGATIVE_Y", "EPAL_NEGATIVE_Z",
+                                              "EPAL_ROTATE_X", "EPAL_ROTATE_Y", "EPAL_ROTATE_Z"};
+                std::string v = m.Value("LockAxisFlags");
+                for (int i = 0; i < 10; i++) if (v == flags[i] || "EPAL_" + v == flags[i]) e.axisLock = i;
+            }
         }
         if (!e.material.empty()) {
             MaterialInfo mi;
@@ -711,6 +723,28 @@ void ParticleSim::Sprites(std::vector<ParticleSprite>& out) const {
 
 // ------------------------------------------------------------------ software sprite rendering
 
+void ParticleQuadAxes(int axisLock, bool velocityAligned, float rotation, Vec3 velocity, Vec3 right, Vec3 up, Vec3 fwd, Vec3& ux, Vec3& uy) {
+    Vec3 bx = right, by = up;   // the plane the sprite lies in
+    if (axisLock >= 1 && axisLock <= 6) {   // flat in the plane facing the axis (negative: mirrored)
+        int a = (axisLock - 1) % 3;
+        float sg = axisLock > 3 ? -1.f : 1.f;
+        if (a == 0) { bx = {0, sg, 0}; by = {0, 0, 1}; }
+        else if (a == 1) { bx = {sg, 0, 0}; by = {0, 0, 1}; }
+        else { bx = {sg, 0, 0}; by = {0, 1, 0}; }
+    } else if (axisLock >= 7 && axisLock <= 9) {   // turns about the axis to face the camera
+        Vec3 axis = axisLock == 7 ? Vec3{1, 0, 0} : axisLock == 8 ? Vec3{0, 1, 0} : Vec3{0, 0, 1};
+        Vec3 side = Cross(fwd, axis);
+        if (Length(side) > 1e-4f) { by = axis; bx = Normalize(side); }
+    }
+    float ax = cosf(rotation), ay = sinf(rotation);
+    ux = bx * ax + by * ay;
+    uy = by * ax - bx * ay;
+    if (velocityAligned) {
+        Vec3 vs = velocity - fwd * Dot(velocity, fwd);   // velocity projected on the screen plane
+        if (Length(vs) > 1e-4f) { uy = Normalize(vs); ux = Normalize(Cross(fwd, uy)); }
+    }
+}
+
 void ParticleCamera(Vec3 target, float distance, float yawDeg, float pitchDeg, Vec3& eye, Vec3& right, Vec3& up, Vec3& fwd) {
     float y = yawDeg * kPi / 180, p = pitchDeg * kPi / 180;
     fwd = {cosf(p) * cosf(y), cosf(p) * sinf(y), sinf(p)};
@@ -743,21 +777,21 @@ void RenderParticleSprites(const std::vector<ParticleSprite>& sprites, const std
         const ParticleRenderEmitter* re = s.emitter < (int)emitters.size() ? &emitters[s.emitter] : nullptr;
         Vec3 v = s.pos - eye;
         float cx = W / 2 + Dot(v, right) / depth * focal, cy = H / 2 - Dot(v, up) / depth * focal;
-        float hx = s.size.x * 0.5f / depth * focal, hy = s.size.y * 0.5f / depth * focal;
-        // screen axes of the quad: rotated, or along the velocity for velocity-aligned sprites
-        float ax = cosf(s.rotation), ay = sinf(s.rotation);
-        if (re && re->alignment.find("Velocity") != std::string::npos && Length(s.velocity) > 1e-3f) {
-            float vx = Dot(s.velocity, right), vy = -Dot(s.velocity, up), l = sqrtf(vx * vx + vy * vy);
-            if (l > 1e-4f) { ax = -vy / l; ay = vx / l; }   // texture top along the velocity (as UE's VelocityUp = -direction)
+        // quad axes in the world (as the viewport draws them), projected to screen half-extents A (u) and B (texture top)
+        Vec3 ux, uy;
+        bool velAligned = re && (re->alignment.find("Velocity") != std::string::npos || re->alignToVelocity);
+        ParticleQuadAxes(re ? re->axisLock : 0, velAligned, s.rotation, s.velocity, right, up, fwd, ux, uy);
+        auto proj = [&](Vec3 w) { return Vec2{Dot(w, right) / depth * focal, -Dot(w, up) / depth * focal}; };
+        Vec2 A = proj(ux * (s.size.x * 0.5f)), B = proj(uy * (s.size.y * 0.5f));
+        if (re) {   // pivot offset along the quad's own axes: (0, -0.5) puts the bottom edge on the particle
+            cx += 2 * re->pivot.x * A.x - 2 * re->pivot.y * B.x;
+            cy += 2 * re->pivot.x * A.y - 2 * re->pivot.y * B.y;
         }
-        if (re) {   // pivot offset: move the quad centre along its own axes (screen y points down)
-            float ox = 2 * hx * re->pivot.x, oy = 2 * hy * re->pivot.y;
-            cx += ox * ax - oy * ay;
-            cy += ox * ay + oy * ax;
-        }
-        float r = sqrtf(hx * hx + hy * hy) + 1;
-        int x0 = std::max(0, (int)(cx - r)), x1 = std::min(W - 1, (int)(cx + r)), y0 = std::max(0, (int)(cy - r)), y1 = std::min(H - 1, (int)(cy + r));
-        if (x0 > x1 || y0 > y1 || hx < 0.05f) continue;
+        float det = A.x * B.y - A.y * B.x;
+        if (fabsf(det) < 0.01f) continue;   // edge-on or sub-pixel
+        float rx = fabsf(A.x) + fabsf(B.x) + 1, ry = fabsf(A.y) + fabsf(B.y) + 1;
+        int x0 = std::max(0, (int)(cx - rx)), x1 = std::min(W - 1, (int)(cx + rx)), y0 = std::max(0, (int)(cy - ry)), y1 = std::min(H - 1, (int)(cy + ry));
+        if (x0 > x1 || y0 > y1) continue;
         int sh = re ? re->subH : 1, sv = re ? re->subV : 1, cells = sh * sv;
         int cell = ((int)floorf(s.subImage) % cells + cells) % cells, next = (cell + 1) % cells;
         float cu = (float)(cell % sh) / sh, cvv = (float)(cell / sh) / sv;
@@ -768,7 +802,9 @@ void RenderParticleSprites(const std::vector<ParticleSprite>& sprites, const std
         for (int y = y0; y <= y1; y++)
             for (int x = x0; x <= x1; x++) {
                 float dx = x + 0.5f - cx, dy = y + 0.5f - cy;
-                float u = (dx * ax + dy * ay) / (2 * hx) + 0.5f, w = (-dx * ay + dy * ax) / (2 * std::max(hy, 0.05f)) + 0.5f;
+                // d = A * a + B * b (a, b in -1..1): u = (a + 1) / 2, texture row w runs from the top (b = 1) down
+                float qa = (dx * B.y - dy * B.x) / det, qb = (A.x * dy - A.y * dx) / det;
+                float u = (qa + 1) * 0.5f, w = (1 - qb) * 0.5f;
                 if (u < 0 || u >= 1 || w < 0 || w >= 1) continue;
                 float tr = 1, tg = 1, tb = 1, ta;
                 if (tex && tex->width > 0) {
