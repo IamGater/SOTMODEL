@@ -12,7 +12,7 @@ namespace {
 // property path match: "Speed", "Settings.Speed" or "Items[2].Name"; value: case-insensitive substring of the cell text
 // (or exact with value_exact). Walks structs and arrays; records "Path=Value" of the hits.
 void MatchProps(const PropertyList& props, const std::string& prefix, const std::string& want, const std::string& value, bool exact,
-                std::vector<std::string>& hits, int depth = 0, const std::string& textKey = {}) {
+                std::vector<std::string>& hits, int depth = 0, const std::string& textKey = {}, const Package* pkg = nullptr) {
     if (depth > 8 || hits.size() > 20) return;
     for (auto& p : props) {
         std::string path = prefix + (prefix.empty() ? "" : ".") + p.name + (p.arrayIndex ? Fmt("[%d]", p.arrayIndex) : "");
@@ -20,17 +20,18 @@ void MatchProps(const PropertyList& props, const std::string& prefix, const std:
             bool nameOk = want.empty() || IEquals(pth, want) || IEndsWith(pth, "." + want) || IEquals(pth.substr(pth.rfind('.') + 1), want);
             if (!nameOk) return;
             if (!textKey.empty() && !(v.type == PropType::Text && v.items.size() == 2 && IEquals(v.items[1].str, textKey))) return;
-            std::string text = TableCell(v);
+            // object references resolve through the package (TableCell alone shows bare indices as None)
+            std::string text = v.type == PropType::Object && v.str.empty() && pkg && v.ObjIndex() ? pkg->FullPath(v.ObjIndex()) : TableCell(v);
             bool valueOk = value.empty() || (exact ? IEquals(text, value) : ToLower(text).find(ToLower(value)) != std::string::npos);
             if (valueOk) hits.push_back(pth + " = " + (text.size() > 160 ? text.substr(0, 160) + "..." : text));
         };
         check(path, p.value);
-        if (p.value.type == PropType::Struct && p.value.Fields()) MatchProps(*p.value.Fields(), path, want, value, exact, hits, depth + 1, textKey);
+        if (p.value.type == PropType::Struct && p.value.Fields()) MatchProps(*p.value.Fields(), path, want, value, exact, hits, depth + 1, textKey, pkg);
         if (p.value.type == PropType::Array)
             for (size_t i = 0; i < p.value.items.size() && i < 256; i++) {
                 const PropValue& it = p.value.items[i];
                 std::string ip = path + Fmt("[%zu]", i);
-                if (it.type == PropType::Struct && it.Fields()) MatchProps(*it.Fields(), ip, want, value, exact, hits, depth + 1, textKey);
+                if (it.type == PropType::Struct && it.Fields()) MatchProps(*it.Fields(), ip, want, value, exact, hits, depth + 1, textKey, pkg);
                 else check(ip, it);
             }
     }
@@ -231,14 +232,14 @@ bool SearchContent(Api& a, const ContentQuery& q, ContentSearchResult& out, std:
                     std::string perr;
                     PropertyList props = pkg->ReadProperties(x, nullptr, &perr);
                     std::vector<std::string> h;
-                    MatchProps(props, "", q.prop, q.value, q.exact, h, 0, q.textKey);
+                    MatchProps(props, "", q.prop, q.value, q.exact, h, 0, q.textKey, pkg.get());
                     for (auto& s : h) hits.push_back(pkg->Exports()[x].objectName + ": " + s);
                     if (IsTableClass(pkg->ExportClass(x))) {   // DataTable rows count as properties too
                         TableData t;
                         if (ReadTable(*pkg, x, t))
                             for (auto& row : t.rows) {
                                 std::vector<std::string> rh;
-                                MatchProps(row.fields, "", q.prop, q.value, q.exact, rh, 0, q.textKey);
+                                MatchProps(row.fields, "", q.prop, q.value, q.exact, rh, 0, q.textKey, pkg.get());
                                 for (auto& s : rh) hits.push_back("Rows." + row.name + ": " + s);
                             }
                     }
