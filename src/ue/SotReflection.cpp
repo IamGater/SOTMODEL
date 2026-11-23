@@ -1,7 +1,7 @@
 // Loads the embedded reflection table (resource 103, see ui/Resources.rc). Line format, tab separated:
 //   C  <name> <PrefixedName> <super name>
 //   F  <owner> <function> <flags: s static, c const, u out-parameter positions unknown> <return type> <mode|type|name>...
-//   P  <class> <member> <C++ type>          (object / interface / class / enum members only)
+//   P  <class> <member> <C++ type>          (object / interface / class / enum / bool members; structs by F name)
 //   E  <enum> <value=Enumerator>...
 #include "ue/SotReflection.h"
 #include <windows.h>

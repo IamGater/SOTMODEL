@@ -27,7 +27,8 @@ Line format (tab separated):
 ```
 C  <name> <PrefixedName> <super name>
 F  <owner> <function> <flags: s static, c const, u out-parameter positions unknown> <return type> <mode|type|name>...
-P  <class> <member> <C++ type>     (object, interface, class and enum members of native classes)
+P  <class> <member> <C++ type>     (object, interface, class, enum and bool members of native classes;
+                                   native structs by their F name, inherited members included)
 E  <enum> <value=Enumerator>...
 ```
 

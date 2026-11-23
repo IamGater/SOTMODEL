@@ -23,6 +23,10 @@ def split_top(s):
     if cur.strip(): parts.append(cur)
     return [p.strip() for p in parts]
 
+# member types kept for the decompiler: objects, interfaces, classes, enums, bools
+def keep_type(t):
+    return t.endswith('*') or t == 'bool' or t.startswith(('TScriptInterface<', 'TEnumAsByte<', 'TSubclassOf<')) or re.match(r'^E\w+$', t)
+
 # --- sot-dump: classes with supers, enums, function parameter blocks (fallback signatures)
 for f in glob.glob(os.path.join(sdk, 'Classes', '*.hpp')):
     text = open(f, encoding='utf-8', errors='replace').read()
@@ -48,8 +52,25 @@ for k, fs in old_classes.items():
     if k[1:] not in classes: classes[k[1:]] = (k, '')
     for f in fs.values():
         t = strip_kw(f.get('type', ''))
-        if t.endswith('*') or t.startswith(('TScriptInterface<', 'TEnumAsByte<', 'TSubclassOf<')) or re.match(r'^E\w+$', t):
+        if keep_type(t):
             fields[(k[1:], f['name'])] = t
+
+# native structs (newer dump): object / enum / class / bool members, inherited ones included; keyed by the F name
+struct_fields, struct_super = {}, {}
+for f in [os.path.join(sdk, 'Structs.hpp')] + glob.glob(os.path.join(sdk, 'Classes', '*.hpp')):
+    text = open(f, encoding='utf-8', errors='replace').read()
+    for m in re.finditer(r'^struct (F\w+)(?: : public (F\w+))?\s*\n\{\n(.*?)\n\};', text, re.S | re.M):
+        name, sup, body = m.group(1), m.group(2), m.group(3)
+        if sup: struct_super[name] = sup
+        fs = struct_fields.setdefault(name, {})
+        for lm in re.finditer(r'^\t(.+?) (\w+)(?: : \d+)?;', body, re.M):
+            t, n = strip_kw(lm.group(1)), lm.group(2)
+            if not n.startswith('pad_') and keep_type(t): fs[n] = t
+for name in list(struct_fields):
+    s, guard = struct_super.get(name), 0
+    while s and guard < 16:
+        for n, t in struct_fields.get(s, {}).items(): struct_fields[name].setdefault(n, t)
+        s, guard = struct_super.get(s), guard + 1
 
 # resolve '?<Prefixed>_<Function>' param blocks to (owner, function) using the class list
 prefixed = {v[0]: k for k, v in classes.items()}
@@ -115,6 +136,9 @@ with open(out, 'w', encoding='utf-8', newline='\n') as o:
     for (owner, name) in sorted(funcs):
         flags, ret, params = funcs[(owner, name)]
         o.write('F\t' + '\t'.join([owner, name, flags, ret] + [f'{m}|{t}|{n}' for m, t, n in params]) + '\n')
+    for s in sorted(struct_fields):
+        for n in sorted(struct_fields[s]):
+            o.write(f'P\t{s}\t{n}\t{struct_fields[s][n]}\n')
     for (c, n) in sorted(fields):
         o.write(f'P\t{c}\t{n}\t{fields[(c, n)]}\n')
     for k in sorted(enums):
