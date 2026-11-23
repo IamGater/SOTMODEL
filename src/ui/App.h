@@ -109,6 +109,17 @@ struct Document {
     // animation blueprint: baked state machines (graph in the side panel)
     std::shared_ptr<AnimBlueprintInfo> animBp;
     std::shared_ptr<struct BehaviorTreeInfo> behaviorTree;   // BehaviorTree packages: the node tree panel
+    // loose files: the HTML UI (open in a browser), images (shown like textures), fonts (sample text)
+    std::string webRoot;            // web UI folder the file is in (Athena/Content/WebRoot/ or uiresources/)
+    std::string webStatus;          // last "open in browser" result
+    std::vector<std::string> webPages;   // the root's .html pages (relative)
+    std::atomic<bool> webBusy{false};
+    bool looseImage = false;
+    bool isFont = false;
+    ImFont* previewFont = nullptr;  // atlas font made from the file (kept per file by the app)
+    std::string fontInfo;           // family / style / glyph count from the font tables
+    float fontSize = 32;
+    char fontSample[256] = {};
     int smSel = 0, smState = -1;
     // particle system: CPU simulation drawn as sprites in the side panel
     std::shared_ptr<ParticleSystemInfo> particles;
@@ -358,6 +369,10 @@ private:
     void DrawAnimAssetHeader(Document& d);
     void DrawStateMachinePanel(Document& d);
     void DrawBehaviorTreePanel(Document& d);   // ui/BehaviorTreePanel.cpp
+    void DrawWebPanel(Document& d);            // ui/LooseFilePanels.cpp
+    void DrawFontPanel(Document& d);
+    void LoadLooseFile(std::shared_ptr<Document> d);
+    std::unordered_map<std::string, std::pair<ImFont*, std::string>> m_previewFonts;   // per game path: font + info
     void DrawParticlePanel(Document& d);   // ParticlePanel.cpp
     void DrawGraphParams(GpuMaterial& mat);   // live scalar / vector parameter editing (graph shader)
     void DrawAttachControls(Document& d);   // attach a mesh to one of the shown mesh's sockets

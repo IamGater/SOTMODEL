@@ -1682,25 +1682,8 @@ void App::OpenFile(u32 entry, bool newTab) {
         LoadAudioDocument(d);
         return;
     }
-    if (!IsPackageFile(d->gamePath)) {   // loose files: show their text
-        d->loading = true;
-        m_jobs->Push([this, d] {
-            Bytes data;
-            std::string err;
-            if (m_api->vfs.Read(d->entry, data, &err)) {
-                bool text = true;
-                for (size_t i = 0; i < std::min<size_t>(data.size(), 4096); i++)
-                    if (data[i] == 0) { text = false; break; }
-                d->json = text ? std::string((const char*)data.data(), data.size()) : Fmt("// binary file, %s", HumanSize(data.size()).c_str());
-            } else {
-                d->json = "// " + err;
-            }
-            d->lines.clear();
-            d->lines.push_back(0);
-            for (u32 i = 0; i < (u32)d->json.size(); i++) if (d->json[i] == '\n') d->lines.push_back(i + 1);
-            d->loading = false;
-            Post([] {});
-        });
+    if (!IsPackageFile(d->gamePath)) {   // loose files: text, images, fonts, the HTML UI (ui/LooseFilePanels.cpp)
+        LoadLooseFile(d);
         return;
     }
     LoadDocument(d);
@@ -1867,11 +1850,13 @@ void App::DrawDocContent(Document& d) {
     bool hasSm = !d.loading && d.animBp != nullptr;
     bool hasBt = !d.loading && d.behaviorTree != nullptr;
     bool hasParticles = !d.loading && d.particles != nullptr;
-    bool side = hasParticles || hasSm || hasBt || has3d || hasImage || hasAudio || hasTable || hasShaders || hasGraph;
+    bool hasFont = !d.loading && d.isFont;
+    bool hasWeb = !d.loading && !d.webRoot.empty() && !hasFont && !hasImage;
+    bool side = hasParticles || hasSm || hasBt || hasFont || hasWeb || has3d || hasImage || hasAudio || hasTable || hasShaders || hasGraph;
     d.hasSide = side;
     if (d.sideHidden) side = false;   // closed with the button at the right of the tab strip: the JSON takes the width
     float splitW = Dip(4);
-    if (side && d.sideW <= 0) d.sideW = hasGraph || hasSm || hasBt || hasParticles ? avail.x * 0.6f : hasShaders ? std::min(avail.x * 0.4f, Dip(520)) : has3d || hasTable ? avail.x * 0.6f : std::min(avail.x * 0.45f, Dip(400) + avail.x * 0.1f);
+    if (side && d.sideW <= 0) d.sideW = hasGraph || hasSm || hasBt || hasParticles || hasFont ? avail.x * 0.6f : hasShaders ? std::min(avail.x * 0.4f, Dip(520)) : has3d || hasTable ? avail.x * 0.6f : std::min(avail.x * 0.45f, Dip(400) + avail.x * 0.1f);
     float sideW = side ? std::clamp(d.sideW, Dip(160), std::max(Dip(160), avail.x - Dip(200))) : 0;
     // the 3D view drawn in the separate window: the side only holds its two buttons, the JSON gets the room
     bool viewerSide = has3d && !hasGraph && !hasParticles && !hasSm && !hasShaders && !hasTable && !hasAudio;
@@ -1915,6 +1900,15 @@ void App::DrawDocContent(Document& d) {
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(Dip(6), Dip(6)));
         ImGui::BeginChild("##behaviortree", ImVec2(sideW, avail.y), ImGuiChildFlags_AlwaysUseWindowPadding, ImGuiWindowFlags_NoScrollbar);
         DrawBehaviorTreePanel(d);
+        ImGui::EndChild();
+        ImGui::PopStyleVar();
+        return;
+    }
+    if (hasFont || hasWeb) {
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(Dip(8), Dip(8)));
+        ImGui::BeginChild("##loose", ImVec2(sideW, avail.y), ImGuiChildFlags_AlwaysUseWindowPadding, ImGuiWindowFlags_NoScrollbar);
+        if (hasFont) DrawFontPanel(d);
+        else DrawWebPanel(d);
         ImGui::EndChild();
         ImGui::PopStyleVar();
         return;
@@ -2066,7 +2060,7 @@ void App::DrawImagePanel(Document& d) {
             if (ImGui::MenuItem("Copy Image", nullptr, false, d.texture && d.pkg)) {
                 for (auto& sp : m_docs) if (sp.get() == &d) CopyTextureImage(sp);
             }
-            if (ImGui::MenuItem("Export Image")) ExportFiles({d.entry}, 0, d.texture ? 1 : 0);
+            if (ImGui::MenuItem("Export Image")) ExportFiles({d.entry}, 0, d.texture && !d.looseImage ? 1 : 0);
             ImGui::Separator();
             if (ImGui::MenuItem("Fit")) { d.texZoom = 0; d.texPanX = d.texPanY = 0; }
             if (ImGui::MenuItem("Actual Size")) { d.texZoom = (float)std::max(1, d.tex.sizeX) / tex->width; d.texPanX = d.texPanY = 0; }

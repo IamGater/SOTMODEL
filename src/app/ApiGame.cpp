@@ -4,6 +4,7 @@
 #include "ue/GameConfig.h"
 #include "ue/Properties.h"
 #include "ue/BehaviorTree.h"
+#include "app/WebUi.h"
 #include <map>
 
 namespace {
@@ -120,6 +121,44 @@ void RegisterGameTools(Api& api) {
                       ApiResult r;
                       r.json = w.Take();
                       return r;
+                  }});
+    api.Register({"export_web_ui",
+                  "The game's HTML interface (Coherent UI pages: Athena/Content/WebRoot holds the front end menus, HUD, tooltips; "
+                  "Athena/Content/uiresources the in-game HUD pages). Writes the whole web root (html, css, js, images, fonts) to "
+                  "<outputDir>\\Web\\... keeping its folders so the pages open in a browser (without the game's data bindings), and "
+                  "lists the .html pages. root: 'WebRoot' (default), 'uiresources', or any game path inside one.",
+                  R"({"type":"object","properties":{"root":{"type":"string","default":"WebRoot"},"outputDir":{"type":"string"}}})",
+                  "root",
+                  [](Api& a, const JsonValue& args) {
+                      std::string r = args.GetStr("root");
+                      if (r.empty()) r = "WebRoot";
+                      std::string root = WebRootOf(r);
+                      if (root.empty()) root = WebRootOf("Athena/Content/" + r + "/");
+                      if (root.empty()) return ApiResult::Error("not a web UI root: " + r);
+                      std::string od = args.GetStr("outputDir");
+                      std::wstring local;
+                      int written = 0, total = 0;
+                      std::string err;
+                      if (!ExportWebRoot(a, root, od.empty() ? a.settings.outputDir : Widen(od), local, &written, &total, &err))
+                          return ApiResult::Error(err);
+                      JsonWriter w;
+                      w.BeginObject();
+                      w.KV("root", root);
+                      w.KV("local", Narrow(local));
+                      w.KV("files", total);
+                      w.KV("written", written);
+                      if (!err.empty()) w.KV("firstError", err);
+                      w.Key("pages");
+                      w.BeginArray();
+                      for (u32 i = 0; i < a.vfs.FileCount(); i++) {
+                          std::string_view p = a.vfs.Path(i);
+                          if (IStartsWith(p, root) && IsWebPageFile(p)) w.Str(p.substr(root.size()));
+                      }
+                      w.EndArray();
+                      w.EndObject();
+                      ApiResult res;
+                      res.json = w.Take();
+                      return res;
                   }});
     api.Register({"get_physical_materials",
                   "The game's physical surfaces: every surface type named in Athena/Config/DefaultEngine.ini (PhysicsSettings "
