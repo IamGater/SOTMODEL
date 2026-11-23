@@ -132,6 +132,7 @@ float2 GetViewportUV(FMaterialPixelParameters P) { return P.SvPosition.xy * View
 float2 GetPixelPosition(FMaterialPixelParameters P) { return P.SvPosition.xy; }
 float2 GetDefaultSceneTextureUV(FMaterialPixelParameters P) { return P.SvPosition.xy * ViewSize.zw; }
 float2 ScreenAlignedPosition(float4 sp) { return float2(sp.x / sp.w * 0.5 + 0.5, 0.5 - sp.y / sp.w * 0.5); }
+float4 ScreenAlignedPosition4(float4 sp) { return float4(ScreenAlignedPosition(sp), 0, 0); }
 float2 CalcScreenUVFromOffsetFraction(float4 sp, float2 off) { return ScreenAlignedPosition(sp) + off; }
 float CalcSceneDepth(float2 uv) { return 1e6; }   // no scene depth in the viewer: depth fades see nothing behind
 float3 DecodeSceneColorForMaterialNode(float2 uv) { return float3(0.05, 0.05, 0.06); }
@@ -404,6 +405,24 @@ bool BuildGraphShaderSource(const std::string& translated, const std::string& bl
     replaceAll("View.LocalDisturbanceTexture", "StubTexture");
     replaceAll("View.BilinearWrapSampler", "MatSampler");
     code = std::regex_replace(code, std::regex(R"(Material\.(?:Wrap|Clamp)_WorldGroupSettings)"), "MatSampler");   // shared samplers
+    // Custom node code may return ScreenAlignedPosition from a float3 function (mt_unq_simple_flare): inside the custom
+    // expressions it returns a float4 that narrows to any declared type (with a truncation warning only)
+    if (size_t cs = code.find("// ---- custom expressions\n"); cs != std::string::npos) {
+        size_t s = code.find('\n', cs) + 1, end = code.size();
+        int d = 0;
+        static const std::regex sigRe(R"(^\w+\s+CustomExpression\d+\s*\()");
+        while (s < code.size()) {
+            size_t e = code.find('\n', s);
+            if (e == std::string::npos) e = code.size();
+            std::string l = code.substr(s, e - s);
+            bool skip = d > 0 || l.empty() || l.rfind("//", 0) == 0 || l[0] == '{' || l[0] == '}' || std::regex_search(l, sigRe);
+            for (char c : l) d += c == '{' ? 1 : c == '}' ? -1 : 0;
+            if (!skip) { end = s; break; }
+            s = e + 1;
+        }
+        code.insert(end, "#undef ScreenAlignedPosition\n");
+        code.insert(cs, "#define ScreenAlignedPosition ScreenAlignedPosition4\n");
+    }
 
     static const std::regex texDecl(R"(^(Texture2D|TextureCube)\s+(\w+)\s*;(.*)$)");
     static const std::regex varDecl(R"(^((?:float|half|int|uint|bool)[234]?(?:x[234])?|FMaterialAttributes)\s+(\w+)\s*(=\s*([^;]*))?;(.*)$)");
