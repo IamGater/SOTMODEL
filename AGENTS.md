@@ -167,14 +167,21 @@ Typical flow: `search` → `get_package` → `get_properties` / `preview_*` → 
 - Blueprint decompiler (ue/Blueprint.cpp): Kismet 4.10 bytecode -> statements, then structured flow from the
   execution-flow stack (function = Push(return label); Sequence pushes its later pins; ForEach / ForLoop bodies run
   inside Push(increment) and jump back to the head; WhileLoop pushes the head). Loops, if / else joins and latent resume
-  points (FLatentActionInfo.Linkage) are rebuilt; a function whose flow can't be structured keeps labelled jumps with
+  points (FLatentActionInfo.Linkage) are rebuilt. Code a pushed chain jumps to (shared code after an outer join) belongs
+  to the loop it pops back into and is repeated there; a jump to the function's return label is a `return` (never an
+  if / else join inside loops or pushed chains). A function whose flow can't be structured keeps labelled jumps with
   `// control flow kept as jumps (reason)`. Event stubs (`UberGraphFrame->X = param; ExecuteUbergraph_X(N)`) give the
   event entries; the ubergraph is split into those events (frame variables renamed to the event params, variables shared
-  between events listed as "event graph state"). One-use `CallFunc_*` temporaries are inlined. Native classes, calls and
-  enums come from third_party/sot_reflection (embedded resource 103, ue/SotReflection; generated from old-sot's depot_2020
-  SDK index + sot-dump's SDK, see its README); 198 signatures have unknown out-parameter positions and get no argument
-  names. `--cli blueprints [substring]` decompiles every Blueprint and prints failures, the "kept as jumps" reasons
-  (7 bodies of ~25k) and the share of calls with a known signature (~97%) with the unresolved ones.- Texture formats in the game: BC7, DXT1/5, BC5, BC4, B8G8R8A8, G8, FloatRGBA, and BC6H (the skydome stars, unsigned)
+  between events listed as "event graph state"). Latent calls ending a chain continue inline; when a loop runs through
+  latent actions the event is redone with the resumes as `Label_N:` sections (`// event graph kept whole (reason)` if
+  even that fails). One-use `CallFunc_*` temporaries are inlined. Native classes, calls, members and enums come from
+  third_party/sot_reflection (embedded resource 103, ue/SotReflection; generated from old-sot's depot_2020 SDK index +
+  sot-dump's SDK, see its README). The class of a call's context comes from variable / member types (own, parent
+  Blueprints', native members); interface functions and calls on an unknown type fall back to the only class declaring
+  the name. 198 signatures have unknown out-parameter positions and get no argument names. `--cli blueprints [substring]`
+  decompiles every Blueprint and prints failures, the "kept as jumps" / "kept whole" reasons and the share of calls with
+  a known signature with the unresolved ones (all 15,597: none kept as jumps, 99.7% of calls with a signature).
+- Texture formats in the game: BC7, DXT1/5, BC5, BC4, B8G8R8A8, G8, FloatRGBA, and BC6H (the skydome stars, unsigned)
   / PF_BC6H_SF16 (signed, the ships' deck-water height maps). BC6H decodes with third_party/bcdec (MIT / Unlicense)
   and is tone mapped like the float formats; DDS export writes DXGI 95 / 96.
 - Material parameter collection parameters are `float` when the collection lists them under ScalarParameters.
