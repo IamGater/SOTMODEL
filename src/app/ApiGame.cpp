@@ -163,10 +163,13 @@ void RegisterGameTools(Api& api) {
     api.Register({"serve_web_ui",
                   "Opens the game's HTML UI in a normal browser: starts a local web server (127.0.0.1, this process's lifetime; "
                   "--cli keeps running until killed) that serves the web roots straight from the archives with a script standing "
-                  "in for the game (Coherent engine calls / events answered with empty data, feature flags, the game's fonts, "
-                  "Texture2D'...' images as PNG, localised text) and returns the URL of a page. path: a page's game path, "
-                  "default the front end (Athena/Content/WebRoot/Root/frontend.html, title screen); add ?state=Lobby / "
-                  "PirateSelection / LoadUserSettings / ... (BootFlowStart<state>StateEvent) to a front end URL for another screen.",
+                  "in for the game (Coherent engine calls / events answered with sample or empty data: player, wallet, crew, "
+                  "modes, settings, key bindings from the game's configs; feature flags, the game's fonts, Texture2D'...' "
+                  "images as PNG, localised text) and returns the URL of a page. path: a page's game path, default the front "
+                  "end (Athena/Content/WebRoot/Root/frontend.html, title screen); add ?state=Lobby / PirateSelection / "
+                  "LoadUserSettings / ... (BootFlowStart<state>StateEvent) for another screen, ?event=Dispatcher:Name,... to "
+                  "send game events, ?name= ?crew=1..4 ?ship=sloop|brigantine|galleon ?error= ?gamepad=1 "
+                  "?features=Name,-Name ?lang= for other sample data, ?debug=1 to log the traffic in the console.",
                   R"({"type":"object","properties":{"path":{"type":"string","default":"Athena/Content/WebRoot/Root/frontend.html"}}})",
                   "path",
                   [](Api& a, const JsonValue& args) {

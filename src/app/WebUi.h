@@ -15,9 +15,11 @@ bool ExportWebRoot(Api& a, const std::string& root, const std::wstring& outputDi
 
 // Local web server (http://127.0.0.1:<port>/<game path>) that runs the pages in a normal browser: files come straight
 // from the archives, coui:// links (web root files, fonts, Texture2D'/Game/...' as PNG) are rewritten to it and pages
-// get a script standing in for the game (Coherent engine calls / events answered with empty data, feature flags,
-// localised text from the game's locres; ?state=Engage (title, default) / Lobby / PirateSelection / ... picks the front
-// end screen: the BootFlowStart<state>StateEvent the game would send).
+// get a script standing in for the game (Coherent engine calls / events answered with sample or empty data, feature
+// flags, localised text from the game's locres, key bindings from Config/DefaultInput.ini + DefaultGame.ini).
+// URL options: ?state=Engage (title, default) / Lobby / PirateSelection / ... picks the front end screen (the
+// BootFlowStart<state>StateEvent the game would send), ?event=Dispatcher:Name,... sends game events, ?name= / ?crew=1..4 /
+// ?ship= / ?error= / ?gamepad=1 / ?features=Name,-Name / ?lang= change the sample data, ?debug=1 logs the traffic.
 // Starts on first use; the URL of a game path, or "" + error.
 std::string WebUiUrl(Api& a, std::string_view gamePath, std::string* error = nullptr);
 void StopWebUiServer();   // before the archives are unmounted / the Api goes away

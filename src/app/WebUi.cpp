@@ -70,7 +70,8 @@ namespace {
 // wait for engine.call results and for request / response events on the ObjectMessaging dispatchers, read feature flags
 // from featureConfig and get text from engine.translate / data-l10n-id: none of that exists outside the game, so the
 // page stayed white.
-const char* kShim = R"JS(
+const char* kShim =   // two literals: MSVC limits one string literal piece to 16 KB
+R"JS(
 (function () {
     "use strict";
     var Q = {};
@@ -92,19 +93,41 @@ const char* kShim = R"JS(
             dropFrame(id);
             fn(t === undefined ? performance.now() : t);
         };
-        frames[id] = { raf: raf(run), timer: setTimeout(run, 50) };
+        frames[id] = { raf: raf(run), timer: setTimeout(run, 20) };
         return id;
     };
     window.cancelAnimationFrame = function (id) { if (frames[id]) dropFrame(id); };
-    // what Coherent's browser adds: toArray on element lists, static methods on the resolver-style Promise the HUD
-    // scripts wrap the browser's in
+    // what Coherent's browser adds: toArray on element lists
     [window.NodeList, window.HTMLCollection].forEach(function (c) {
         if (c && !c.prototype.toArray) c.prototype.toArray = function () { return Array.prototype.slice.call(this); };
     });
-    var NativePromise = window.Promise;
+    var NativePromise = (async function () {})().constructor;   // window.Promise may already be Bluebird
+    // the HUD (window.Promise native after Bluebird.noConflict) uses Coherent's old DOM-Promise form,
+    // new Promise(function (resolver) { resolver.fulfill(v); }), and wraps Promise itself (without fulfill) unless PromiseResolver exists
+    if (window.Promise === NativePromise) {
+        window.PromiseResolver = window.PromiseResolver || function PromiseResolver() {};
+        window.Promise = class extends NativePromise {
+            constructor(executor) {
+                super(function (resolve, reject) {
+                    resolve.fulfill = resolve.resolve = resolve;
+                    resolve.reject = reject;
+                    return executor(resolve, reject);
+                });
+            }
+        };
+    }
+    // the HUD takes "Promise.try || Bluebird.try" and calls it unbound: Coherent had no Promise.try, newer browsers do (and need "this")
+    if (typeof Promise.try === "function") {
+        var nativeTry = Promise.try;
+        Promise.try = function () { return nativeTry.apply(typeof this === "function" ? this : NativePromise, arguments); };
+    }
     var yes = function () { return true; }, no = function () { return false; };
+    // the game's feature flags (Features.json is not in the archives): all on except the unfinished grey-tile front end and the
+    // developer button; ?features=Name,-Name turns flags on / off
+    var FEATURES = { UIDynamicFrontend: false, UIEnableDebugFeatureButton: false };
+    (Q.features || "").split(",").forEach(function (f) { if (f) FEATURES[f.replace(/^-/, "")] = f[0] !== "-"; });
     window.featureConfig = window.featureConfig || {
-        isFeatureEnabled: yes, isPC: yes, isWin64: yes, hasKeyboard: yes, hasMouse: yes,
+        isFeatureEnabled: function (name) { return FEATURES[name] !== false; }, isPC: yes, isWin64: yes, hasKeyboard: yes, hasMouse: yes,
         isUWP: no, isXbox: no, isTechAlpha: no, isHDRAvailable: no, isHDREnabled: no, showPerformanceMode: no
     };
     var LOC = window.__sotLoc || {};
@@ -144,44 +167,132 @@ const char* kShim = R"JS(
         setTimeout(function () { if (deferred) deferred.resolve(name === "GetLocale" ? (Q.lang || "en") : undefined); }, 0);
     };
     // ObjectMessaging: "FireEventTo<dispatcher>" requests get the matching registered response with known or empty data
+    // sample data for what the game would send (responses, and PUSH events sent once the page listens for them)
+    var GAMERTAG = Q.name || "Pirate";
     var KNOWN = {
-        BootFlowStateQueryResponseEvent: function () { return { StateName: "BootFlowStart" + (Q.state || "Engage") + "StateEvent" }; },
+        BootFlowStateQueryResponseEvent: function () { return { StateName: stateEvent() }; },
         EventUserGameSettingsResponse: function () { return { CurrentSettings: {} }; },
         EventAthenaLocalPlayerRequestRequiredControllersConnectedResponse: function () { return { ControllerConnected: true }; },
-        EventAthenaLoadingScreenStateResponse: function () { return { IsVisible: false }; }
+        EventAthenaLoadingScreenStateResponse: function () { return { IsVisible: false }; },
+        EventAthenaLocalPlayerControllerTypeChange: function () { return { ControllerType: Q.gamepad ? 0 : 1 }; },
+        PlayerInfoResponse: function () { return { GamerTag: GAMERTAG, Title: "Legendary Pirate" }; },
+        GamerTagUpdated: function () { return { GamerTag: GAMERTAG }; },
+        EventCompanyDataResponse: function () { return { CompanyData: [] }; },
+        EventGetAllKeybindingsResponse: function () { return keyBindings(); },
+        EventScreenSizeInfo: function () {
+            return { ScreenWidth: 1920, ScreenHeight: 1080, WindowWidth: 1920, WindowHeight: 1080, AutoDetectedMaxVerticalResolution: 2160,
+                     AutoDetectedMachineSpec: 3, IsFullScreen: true };
+        },
+        EventCompanyProgressData: function () { return { CompanyProgress: [] }; },
+        BootFlowErrorMessageQueryResponseEvent: function () {
+            return { ErrorMessage: Q.error || "The servers are not reachable from this preview: it runs the game's interface without the game." };
+        },
+        SetFrontEndSelection: function () { return { IsAdventureActive: true, IsArenaActive: true, IsTutorialActive: true, IsCreativeActive: false }; },
+        SetContestShipTypes: function () {
+            return { IsGalleonEnabled: true, IsBrigantineEnabled: true, IsSloopEnabled: true, IsSloopDuoEnabled: true, IsMixedGalleonBrigantineEnabled: false };
+        },
+        CrewUpdateEvent: function () {   // ?crew=N members (1..4), this player the captain
+            var n = Math.max(1, Math.min(4, parseInt(Q.crew, 10) || 1)), members = [];
+            for (var i = 0; i < n; i++)
+                members.push({ GamerTag: i ? "Crewmate " + i : GAMERTAG, CurrentPlayer: !i, Captain: !i, ReservedForPlayerThatDroppedConnection: false });
+            return { CrewDefinition: { CrewMembers: members } };
+        },
+        RequestLobbyUIEvent: function () { return { SessionType: shipType(), SessionVisibility: 1 }; },
+        SessionTypeSelectionResponseEvent: function () { return { SessionType: shipType() }; },
+        UpdateWalletBalanceHUDEvent: function () {
+            return { Balances: [{ CurrencyId: 1, Balance: 125000, DisplayBalance: "125,000" }, { CurrencyId: 2, Balance: 40, DisplayBalance: "40" },
+                                { CurrencyId: 3, Balance: 1500, DisplayBalance: "1,500" }] };
+        }
+    };
+)JS"
+R"JS(    // default key bindings: Config/DefaultInput.ini has the keys per input action / axis, DefaultGame.ini's Virtual*BindingDefinitions
+    // the settings' binding names (labels) over those actions
+    var configText = function (path) {
+        return fetch(path).then(function (r) { return r.ok ? r.text() : ""; }).catch(function () { return ""; });
+    };
+    var bindingsData = null;
+    var keyBindings = function () {
+        if (!bindingsData) bindingsData = NativePromise.all([configText("/Athena/Config/DefaultInput.ini"), configText("/Athena/Config/DefaultGame.ini")]).then(function (t) {
+            var keys = {};   // action / axis+ / axis- -> [keyboard key, gamepad key]
+            t[0].split("\n").forEach(function (line) {
+                var m = /^\+?(Action|Axis)Mappings=\((?:Action|Axis)Name="([^"]+)",Key=(\w+)(?:.*Scale=(-?[\d.]+))?/.exec(line.trim());
+                if (!m) return;
+                var name = m[2] + (m[1] === "Axis" ? (parseFloat(m[4]) < 0 ? "-" : "+") : "");
+                var pad = /^Gamepad_/.test(m[3]) ? 1 : 0;
+                (keys[name] = keys[name] || [])[pad] = keys[name][pad] || m[3];
+            });
+            var action = [], axis = [];
+            t[1].split("\n").forEach(function (line) {
+                var m = /^\+Virtual(Action|Axis)BindingDefinitions=\((?:Action|Axis)Names=\(([^)]*)\).*BindingName="([^"]+)"(?:,Scale=(-?[\d.]+))?/.exec(line.trim());
+                if (!m) return;
+                var isAxis = m[1] === "Axis", names = m[2].split(",").map(function (n) { return n.replace(/"/g, "") + (isAxis ? (parseFloat(m[4]) < 0 ? "-" : "+") : ""); });
+                var key = function (pad) {
+                    for (var i = 0; i < names.length; i++) if (keys[names[i]] && keys[names[i]][pad]) return keys[names[i]][pad];
+                    return "None";
+                };
+                (isAxis ? axis : action).push({ BindingName: m[3], KeyName: key(0), ControllerType: 1 }, { BindingName: m[3], KeyName: key(1), ControllerType: 0 });
+            });
+            return { ActionBindings: action, AxisBindings: axis, DefaultKeyboardLayout: 0 };
+        });
+        return bindingsData.then(function (d) { return JSON.parse(JSON.stringify(d)); });
+    };
+    var shipType = function () {   // ?ship=sloop / brigantine / galleon
+        return { sloop: 1, brigantine: 2, galleon: 3 }[(Q.ship || "").toLowerCase()] || (Math.max(1, Math.min(4, parseInt(Q.crew, 10) || 1)) > 2 ? 3 : 1);
+    };
+    var PUSH = ["GamerTagUpdated", "UpdateWalletBalanceHUDEvent", "EventAthenaLocalPlayerControllerTypeChange", "SetFrontEndSelection",
+                "SetContestShipTypes", "CrewUpdateEvent"];
+    if (/Lobby/.test(Q.state || "")) PUSH.push("RequestLobbyUIEvent");
+    var stateEvent = function () {
+        var st = Q.state || "Engage";
+        return /Event(_\w+)?$/.test(st) ? st : (st === "WaitForEntryLevel" || st === "LoadIntoGame") ? "BootFlowStart" + st + "Event" : "BootFlowStart" + st + "StateEvent";
     };
     var payload = function (type) {
         var o = KNOWN[type] ? KNOWN[type]() : {};
+        if (o && typeof o.then === "function") return o.then(function (v) { v.__Type = type; return v; });
+        if (Q.debug) console.log("SOT " + (KNOWN[type] ? "data " : "empty ") + type);
         o.__Type = type;
         return o;
     };
     var registered = {};
+    var fire = function (dispatcher, type) {
+        NativePromise.resolve(payload(type)).then(function (p) { trigger.call(engine, "EventFiredOn" + dispatcher, p); });
+    };
     var trigger = engine.trigger;
     var respond = function (dispatcher, name) {
         var names = registered[dispatcher] || {};
         var candidates = [name.replace(/Request(?!.*Request)/, "Response"), name.replace(/^Request/, "") + "Response",
                           name.replace(/QueryEvent$/, "QueryResponseEvent"), name.replace(/Request(Event)?$/, "$1"),
-                          name.replace(/Request$/, "Change"), name.replace(/Request$/, "Changed")];
+                          name.replace(/Request$/, "Change"), name.replace(/Request$/, "Changed"), name.replace(/Request$/, "Data")];
+        if (name === "RequestCurrentCrewSessionEvent") candidates.unshift("CrewUpdateEvent");
+        if (Q.debug) console.log("SOT request " + dispatcher + ":" + name);
         for (var i = 0; i < candidates.length; i++) {
             if (candidates[i] !== name && names[candidates[i]]) {
-                trigger.call(engine, "EventFiredOn" + dispatcher, payload(candidates[i]));
+                fire(dispatcher, candidates[i]);
                 return;
             }
         }
     };
     engine.trigger = function (name, arg) {
         var m = /^RegisterEventWith(.+)$/.exec(name);
-        if (m) (registered[m[1]] = registered[m[1]] || {})[arg] = true;
+        if (m) {
+            var first = !(registered[m[1]] || {})[arg];
+            (registered[m[1]] = registered[m[1]] || {})[arg] = true;
+            if (first && PUSH.indexOf(arg) >= 0) {
+                var d = m[1];
+                setTimeout(function () { fire(d, arg); }, 50);
+            }
+        }
         m = /^FireEventTo(.+)$/.exec(name);
         if (m && typeof arg === "string") setTimeout(function () { respond(m[1], arg); }, 0);
         return trigger.apply(this, arguments);
     };
     window.addEventListener("load", function () {
         engine.translate = translate;
-        if (window.Promise !== NativePromise)
-            ["resolve", "reject", "all", "race"].forEach(function (k) {
-                if (typeof window.Promise[k] !== "function") window.Promise[k] = NativePromise[k].bind(NativePromise);
-            });
+        // the pages run Bluebird on animation frames (one promise step per frame, the start takes minutes in a browser):
+        // microtasks as in any browser
+        [window.Promise, window.Bluebird].forEach(function (B) {
+            if (B && typeof B.setScheduler === "function") B.setScheduler(queueMicrotask.bind(window));
+        });
         var core = window.core, roles = window.roles, menus = window.menus;
         // requests nothing answers resolve with empty data after a moment instead of hanging the page's start
         if (core && core.fireDispatcherRequest) {
@@ -192,19 +303,53 @@ const char* kShim = R"JS(
                 return P.race([p, new P(function (resolve) { setTimeout(function () { resolve(payload(name)); }, 300); })]);
             };
         }
-        if (roles && roles.DialogPlaceHolder) {
-            var DP = roles.DialogPlaceHolder.prototype, init = DP.initDialog;
-            DP.initDialog = function () {
-                var p = init.apply(this, arguments), P = p.constructor;
-                return P.race([p, new P(function (resolve) { setTimeout(resolve, 1500); })]);
+        // components start one after another: one waiting for data that never comes would stall the rest of the dialog
+        var templates = window.templates;
+        if (templates && templates.TemplateMountLifecycle) {
+            var LP = templates.TemplateMountLifecycle.prototype;
+            var limit = function (P, value, mount, what) {
+                if (!value || typeof value.then !== "function") return value;
+                return new P(function (resolve, reject) {
+                    var t = setTimeout(function () {
+                        if (Q.debug) console.log("SOT " + what + " timeout " + (mount.constructor && mount.constructor.name));
+                        resolve();
+                    }, 2000);
+                    value.then(function (v) { clearTimeout(t); resolve(v); }, function (e) { clearTimeout(t); reject(e); });
+                });
+            };
+            LP.recursivelyInit = function (mount) {
+                var self = this, P = window.Promise;
+                return P.try(function () { return limit(P, mount.preInit(), mount, "preInit"); })
+                    .then(function () { return self.recursivelyInitGroup(mount.mounts); })
+                    .then(function () { return limit(P, mount.init(), mount, "init"); });
             };
         }
-        // settings the game never sent read as false / 0 / ""
+        // settings the game never sent start as false / 0 / "" / no changed key bindings (stored, so they can be changed)
         var settings = menus && menus.common && menus.common.settings && menus.common.settings.BaseGameSettings;
+        var numberDefault = function (name) {   // usual values rather than the lowest of every list / slider
+            var fixed = { FieldOfView: 90, BackBufferCount: 2, ResolutionScaling: 100, ParticleEmitterQuality: 2, MouseSensitivity: 50, ControllerSensitivity: 50 };
+            if (fixed[name] !== undefined) return fixed[name];
+            if (/Volume$/.test(name)) return 80;
+            if (/(Detail|Quality)$/.test(name)) return 3;
+            return 0;
+        };
         if (settings) {
-            [["getBooleanSetting", false], ["getNumberSetting", 0], ["getStringSetting", ""]].forEach(function (g) {
+            [["getBooleanSetting", false], ["getNumberSetting", 0], ["getStringSetting", ""], ["getKeyBindingSetting", null]].forEach(function (g) {
                 var get = settings.prototype[g[0]];
-                if (get) settings.prototype[g[0]] = function () { try { return get.apply(this, arguments); } catch (e) { return g[1]; } };
+                if (get) settings.prototype[g[0]] = function (name) {
+                    try { return get.apply(this, arguments); } catch (e) {
+                        if (!this.currentSettings) this.currentSettings = {};
+                        return this.currentSettings[name] = g[1] === null ? [] : g[0] === "getNumberSetting" ? numberDefault(name) : g[1];
+                    }
+                };
+            });
+            ["setBooleanSetting", "setFloatSetting", "setIntegerSetting", "setStringSetting", "setKeyBindingSetting"].forEach(function (n) {
+                var set = settings.prototype[n];
+                if (set) settings.prototype[n] = function (name, value) {
+                    if (!this.currentSettings) this.currentSettings = {};
+                    if (typeof this.currentSettings[name] !== typeof value) this.currentSettings[name] = value;
+                    return set.apply(this, arguments);
+                };
             });
         }
         setTimeout(function () {
@@ -217,7 +362,7 @@ const char* kShim = R"JS(
             var p = ev.indexOf(":"), dispatcher = ev.substr(0, p), name = ev.substr(p + 1), tries = 0;
             if (p <= 0) return;
             var poll = function () {
-                if ((registered[dispatcher] || {})[name]) setTimeout(function () { trigger.call(engine, "EventFiredOn" + dispatcher, payload(name)); }, 500);
+                if ((registered[dispatcher] || {})[name]) setTimeout(function () { fire(dispatcher, name); }, 500);
                 else if (++tries < 120) setTimeout(poll, 250);
             };
             poll();
