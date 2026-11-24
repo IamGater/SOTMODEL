@@ -306,5 +306,9 @@ int RunCli(int argc, wchar_t** argv) {
         w.EndObject();
         Out(w.Take() + "\n");
     }
+    if (r.ok && tool == "serve_web_ui") {   // the server lives in this process
+        fflush(stdout);
+        for (;;) Sleep(1000);
+    }
     return r.ok ? 0 : 1;
 }

@@ -7,6 +7,7 @@
 #include "ue/WorldLayout.h"
 #include "render/Offscreen.h"
 #include "app/WwiseEvents.h"
+#include "app/WebUi.h"
 #include "imgui.h"
 #include "imgui_internal.h"
 #include <windows.h>
@@ -131,6 +132,7 @@ App::~App() {
     m_shutdown = true;   // stops the reference indexer
     if (m_contentJob) m_contentJob->cancel = true;
     for (auto& t : m_refThreads) t.join();
+    StopWebUiServer();
     m_classes.Stop();   // saves Classes.bin while the archives are still mounted
     m_jobs.reset();   // joins workers before the renderer / api go away
     m_docs.clear();
@@ -280,6 +282,7 @@ void App::ReloadArchives() {
     m_jobs->WaitIdle();
     m_assets.reset();
     m_classes.Stop();
+    StopWebUiServer();
     m_api->Unmount();
     m_searchResults.clear();
     m_lastSearch.clear();
@@ -2267,6 +2270,7 @@ void App::DrawSettings() {
             m_docs.clear();
             m_assets.reset();
             m_classes.Stop();
+            StopWebUiServer();
     m_api->Unmount();
             m_searchResults.clear();
             m_lastSearch.clear();

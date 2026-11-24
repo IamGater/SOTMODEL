@@ -160,6 +160,30 @@ void RegisterGameTools(Api& api) {
                       res.json = w.Take();
                       return res;
                   }});
+    api.Register({"serve_web_ui",
+                  "Opens the game's HTML UI in a normal browser: starts a local web server (127.0.0.1, this process's lifetime; "
+                  "--cli keeps running until killed) that serves the web roots straight from the archives with a script standing "
+                  "in for the game (Coherent engine calls / events answered with empty data, feature flags, the game's fonts, "
+                  "Texture2D'...' images as PNG, localised text) and returns the URL of a page. path: a page's game path, "
+                  "default the front end (Athena/Content/WebRoot/Root/frontend.html, title screen); add ?state=Lobby / "
+                  "PirateSelection / LoadUserSettings / ... (BootFlowStart<state>StateEvent) to a front end URL for another screen.",
+                  R"({"type":"object","properties":{"path":{"type":"string","default":"Athena/Content/WebRoot/Root/frontend.html"}}})",
+                  "path",
+                  [](Api& a, const JsonValue& args) {
+                      std::string p = args.GetStr("path");
+                      if (p.empty()) p = "Athena/Content/WebRoot/Root/frontend.html";
+                      i64 e = a.vfs.Find(p);
+                      if (e < 0 || WebRootOf(p).empty()) return ApiResult::Error("not a web UI file: " + p);
+                      std::string err, url = WebUiUrl(a, a.vfs.Path((u32)e), &err);
+                      if (url.empty()) return ApiResult::Error(err);
+                      JsonWriter w;
+                      w.BeginObject();
+                      w.KV("url", url);
+                      w.EndObject();
+                      ApiResult res;
+                      res.json = w.Take();
+                      return res;
+                  }});
     api.Register({"get_physical_materials",
                   "The game's physical surfaces: every surface type named in Athena/Config/DefaultEngine.ini (PhysicsSettings "
                   "PhysicalSurfaces, the names footstep / impact sounds switch on: Wwise 'surface' switch values) with the physical "

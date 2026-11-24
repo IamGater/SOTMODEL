@@ -148,6 +148,16 @@ void App::LoadLooseFile(std::shared_ptr<Document> d) {
 
 void App::DrawWebPanel(Document& d) {
     auto open = [&](const std::string& gamePath, bool folder) {
+        if (!folder) {   // served from the archives with the game stood in for (a file:// page stays white)
+            std::string err, url = WebUiUrl(*m_api, gamePath, &err);
+            if (url.empty()) {
+                d.webStatus = "failed: " + err;
+            } else {
+                ShellExecuteW(nullptr, L"open", Widen(url).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+                d.webStatus = "opened " + url;
+            }
+            return;
+        }
         if (d.webBusy) return;
         d.webBusy = true;
         d.webStatus = "writing the web UI files...";
@@ -184,8 +194,10 @@ void App::DrawWebPanel(Document& d) {
     ImGui::TextDisabled("Game HTML interface (Coherent UI)");
     ImGui::TextUnformatted(d.webRoot.c_str());
     ImGui::Spacing();
-    ImGui::TextWrapped("The pages run in the game's embedded browser with data bound by the game; in a normal browser the layout, "
-                       "styles and images load, the live values do not. The whole folder is written to the output directory first.");
+    ImGui::TextWrapped("The pages run in the game's embedded browser with data bound by the game. \"Open in browser\" serves them from "
+                       "the archives on a local web server that stands in for the game (empty data, the game's fonts, textures and "
+                       "text), so the layout shows without live values; add ?state=Lobby / PirateSelection / ... to the front end URL "
+                       "for another screen than the title. \"Show in folder\" writes the whole folder to the output directory.");
     ImGui::Spacing();
     ImGui::BeginDisabled(d.webBusy);
     if (ImGui::Button(IsWebPageFile(d.gamePath) ? "Open in browser" : "Open file")) open(d.gamePath, false);
