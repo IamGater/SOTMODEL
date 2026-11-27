@@ -372,7 +372,6 @@ int RunGui(const std::vector<std::string>& args) {
     ImGui_ImplWin32_EnableDpiAwareness();
     HINSTANCE inst = GetModuleHandleW(nullptr);
     WNDCLASSEXW wc = {sizeof(wc), CS_CLASSDC, WndProc, 0, 0, inst, LoadIconW(inst, MAKEINTRESOURCEW(1)), LoadCursorW(nullptr, IDC_ARROW), nullptr, nullptr, L"SOTModel", nullptr};
-    if (!wc.hIcon) wc.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
     RegisterClassExW(&wc);
     float scale = ImGui_ImplWin32_GetDpiScaleForMonitor(MonitorFromPoint(POINT{0, 0}, MONITOR_DEFAULTTOPRIMARY));
     HWND hwnd = CreateWindowExW(0, wc.lpszClassName, L"SOTModel - Sea of Thieves asset explorer", WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT,

@@ -83,7 +83,7 @@ if ($stale.Count) {
 # embedded resources (icon fonts)
 $rcSrc = Join-Path $root 'src\ui\Resources.rc'
 $res = Join-Path $obj 'Resources.res'
-$rcInputs = @(Get-Item $rcSrc) + @(Get-ChildItem "$root\third_party\phosphor" -Filter *.ttf) + @(Get-Item "$root\third_party\sot_reflection\sot_reflection.txt")
+$rcInputs = @(Get-Item $rcSrc) + @(Get-Item "$root\src\ui\App.ico") + @(Get-ChildItem "$root\third_party\phosphor" -Filter *.ttf) + @(Get-Item "$root\third_party\sot_reflection\sot_reflection.txt")
 $resStale = -not (Test-Path $res) -or ($rcInputs | Where-Object { $_.LastWriteTime -gt (Get-Item $res).LastWriteTime })
 if ($resStale) {
     Write-Host 'Compiling resources'

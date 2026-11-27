@@ -1,4 +1,5 @@
 // Embedded data (build.ps1 compiles this with rc.exe). IDs match ui/Icons.h.
+1 ICON "App.ico"
 101 RCDATA "../../third_party/phosphor/Phosphor.ttf"
 102 RCDATA "../../third_party/phosphor/Phosphor-Fill.ttf"
 103 RCDATA "../../third_party/sot_reflection/sot_reflection.txt"   // Blueprint decompiler reflection (ue/SotReflection.cpp)
