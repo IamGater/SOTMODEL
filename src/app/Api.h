@@ -7,6 +7,8 @@
 #include "app/Settings.h"
 #include "ue/Localization.h"
 #include "app/RefIndex.h"
+#include "app/CodeIndex.h"
+#include <mutex>
 
 // Tool layer shared by the command line (--cli) and the MCP server (--mcp): every tool takes JSON arguments and
 // returns JSON text (plus optional images), so any AI agent or script can browse, inspect and export game data.
@@ -36,6 +38,7 @@ void SeaOptionsFrom(const JsonValue& args, WorldOptions& o);   // ApiWorld.cpp: 
 void RegisterShaderTools(Api& api);   // ApiShaders.cpp: compiled material / global shaders
 void RegisterParticleTools(Api& api);   // ApiParticles.cpp: Cascade particle systems
 void RegisterGameTools(Api& api);   // ApiGame.cpp: physical surfaces, behavior trees
+void RegisterCodeTools(Api& api);   // ApiCode.cpp: global code search
 // Several AnimSequence packages of one skeleton -> one .glb (ApiExport.cpp; also used by the UI).
 bool ExportAnimationSet(PackageCache& cache, const std::vector<std::shared_ptr<Package>>& animPkgs, const std::string& meshPath, Bytes& glb, std::string& note, std::string* error);
 // The notify sounds of an AnimSequence / AnimMontage package as .wav files in <base>_sounds\ plus <base>.notifies.json with every
@@ -69,7 +72,12 @@ public:
     std::shared_ptr<ReferenceIndex> references;
     // needTextKeys: an index (cached by an older version) without text keys is rebuilt when buildIfMissing
     ReferenceIndex* EnsureReferences(bool buildIfMissing, std::string* error = nullptr, bool needTextKeys = false);
-    std::unordered_set<u32> TextKeyHashes() const;   // ReferenceIndex::TextKeyHash of every localisation key (empty: none loaded)
+    std::unordered_set<u32> TextKeyHashes() const;
+    // decompiled Blueprints / material HLSL for the global code search; null until loaded from cache or built (blocking,
+    // one build at a time; done / total report progress)
+    std::shared_ptr<CodeIndex> code;
+    std::shared_ptr<CodeIndex> EnsureCodeIndex(bool buildIfMissing, std::string* error = nullptr, std::atomic<int>* done = nullptr,
+                                               std::atomic<int>* total = nullptr, const std::atomic<bool>* cancel = nullptr);   // ReferenceIndex::TextKeyHash of every localisation key (empty: none loaded)
 
     // helpers for tools
     i64 ResolveFile(const std::string& path) const;   // game path, /Game path or object path
@@ -84,7 +92,7 @@ private:
     void RegisterAssetTools();
     std::vector<ApiTool> m_tools;
     std::atomic<bool> m_mounted{false};
-    std::mutex m_mountMutex;
+    std::mutex m_mountMutex, m_codeMutex;
     friend void RegisterMeshTools(Api&);
 };
 

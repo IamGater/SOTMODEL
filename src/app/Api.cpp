@@ -61,6 +61,7 @@ Api::Api(Settings& s) : settings(s) {
     RegisterShaderTools(*this);
     RegisterParticleTools(*this);
     RegisterGameTools(*this);
+    RegisterCodeTools(*this);
 }
 
 bool Api::EnsureMounted(std::string* error) {
@@ -117,8 +118,32 @@ bool Api::SetLanguage(const std::string& culture, std::string* error) {
     return true;
 }
 
+std::shared_ptr<CodeIndex> Api::EnsureCodeIndex(bool build, std::string* error, std::atomic<int>* done, std::atomic<int>* total,
+                                                const std::atomic<bool>* cancel) {
+    std::lock_guard lk(m_codeMutex);
+    if (auto c = std::atomic_load(&code); c && c->Ready()) return c;
+    auto idx = std::make_shared<CodeIndex>();
+    if (!idx->LoadCache(vfs)) {
+        if (!build) {
+            if (error) *error = "the code index is not built yet";
+            return nullptr;
+        }
+        std::atomic<bool> never{false};
+        LOGI("code index: decompiling every Blueprint and translating every material (once, then cached)...");
+        if (!idx->Build(vfs, *cache, std::max(2u, std::thread::hardware_concurrency() / 2), cancel ? *cancel : never, done, total)) {
+            if (error) *error = "indexing cancelled";
+            return nullptr;
+        }
+        idx->SaveCache(vfs);
+        LOGI("code index: %zu documents, %.1f MB", idx->Docs().size(), idx->Bytes() / 1048576.0);
+    }
+    std::atomic_store(&code, idx);
+    return idx;
+}
+
 void Api::Unmount() {
     std::lock_guard lk(m_mountMutex);
+    std::atomic_store(&code, std::shared_ptr<CodeIndex>());
     cache.reset();
     GameConfig::Clear();
     vfs.Clear();

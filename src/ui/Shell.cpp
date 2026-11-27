@@ -3196,10 +3196,10 @@ void App::DrawSearchWindow() {
     // Search / References (FModel SearchView tabs)
     {
         ImDrawList* dl = ImGui::GetWindowDrawList();
-        const char* names[4] = {"Search", "References", "Localization", "Content"};
+        const char* names[5] = {"Search", "References", "Localization", "Content", "Code"};
         float tw = Dip(120), th = Dip(24);
         ImVec2 p = ImGui::GetCursorScreenPos();
-        for (int i = 0; i < 4; i++) {
+        for (int i = 0; i < 5; i++) {
             ImGui::SetCursorScreenPos(ImVec2(p.x + tw * i, p.y));
             ImGui::PushID(i);
             if (ImGui::InvisibleButton("##stab", ImVec2(tw, th))) m_searchTab = i;
@@ -3216,10 +3216,11 @@ void App::DrawSearchWindow() {
         ImGuiWindow* win = ImGui::GetCurrentWindow();
         FadeIn(ImGui::GetID("##stabfade"), (u64)m_searchTab, ImVec2(p.x, p.y + th + Dip(4)), win->InnerRect.Max, kPanel);
     }
-    if (m_searchTab >= 1 && m_searchTab <= 3) {
+    if (m_searchTab >= 1 && m_searchTab <= 4) {
         if (m_searchTab == 1) DrawReferencesTab();
         else if (m_searchTab == 2) DrawLocalizationTab();
-        else DrawContentTab();
+        else if (m_searchTab == 3) DrawContentTab();
+        else DrawCodeTab();
         ImGui::End();
         ImGui::PopStyleColor(3);
         return;
@@ -3606,5 +3607,123 @@ void App::DrawFileMenu(u32 e) {
         if (ImGui::MenuItem("Package Name w/o Extension")) CopyToClipboard(noExt(name));
         if (ImGui::MenuItem("/Game Path")) CopyToClipboard(GamePathToPackage(path));
         ImGui::EndMenu();
+    }
+}
+
+// ================================================================== Code tab: global search over decompiled Blueprints / material HLSL
+
+void App::StartCodeSearch() {
+    if (m_mountState != MountState::Ready || !m_codeQuery[0]) return;
+    if (m_codeJob && !m_codeJob->done) return;   // one at a time (the first one may be building the index)
+    auto job = std::make_shared<CodeJob>();
+    job->query = m_codeQuery;
+    job->folder = m_codeFolder;
+    job->kinds = m_codeKind == 1 ? 1 : m_codeKind == 2 ? 2 : 3;
+    m_codeJob = job;
+    m_refThreads.emplace_back([this, job] {
+        std::string err;
+        auto idx = m_api->EnsureCodeIndex(true, &err, &job->progress, &job->total, &m_shutdown);
+        if (idx) {
+            job->index = idx;
+            job->hits = idx->Search(job->query, job->kinds, job->folder, 5000, m_api->vfs, &job->docsMatched, &m_shutdown);
+        } else {
+            job->error = err;
+        }
+        job->done = true;
+        Post([] {});
+    });
+}
+
+void App::OpenCodeHit(const CodeIndex& idx, const CodeHit& h) {
+    const CodeDoc& doc = idx.Docs()[h.doc];
+    std::string name(m_api->vfs.FileName(doc.entry));
+    name = name.substr(0, name.rfind('.')) + (doc.kind == CodeDoc::Blueprint ? " (Decompiled)" : " (HLSL)");
+    OpenTextTab(name, doc.text, doc.entry, true, 1);
+    if (Document* d = ActiveDoc()) {   // the hit's line, selected and scrolled to
+        int line = (int)h.line - 1;
+        if (line >= 0 && line < (int)d->lines.size()) {
+            d->selA = d->lines[line];
+            d->selB = line + 1 < (int)d->lines.size() ? d->lines[line + 1] - 1 : (u32)d->json.size();
+            d->scrollToLine = line;
+        }
+    }
+}
+
+void App::DrawCodeTab() {
+    float kindW = Dip(120), folderW = Dip(200);
+    SearchBox("##codeq", m_codeQuery, sizeof(m_codeQuery), "Search code: every term on one line, \"quoted phrase\"... (Enter)",
+              ImGui::GetContentRegionAvail().x - kindW - folderW - Dip(12), m_focusCode);
+    m_focusCode = false;
+    bool go = ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows) && ImGui::IsKeyPressed(ImGuiKey_Enter);
+    ImGui::SameLine(0, Dip(6));
+    ImGui::SetNextItemWidth(kindW);
+    PushFieldStyle();
+    const char* kinds[] = {"All code", "Blueprints", "Materials"};
+    if (ImGui::Combo("##codekind", &m_codeKind, kinds, 3)) go = true;
+    PopFieldStyle();
+    ImGui::SameLine(0, Dip(6));
+    SearchBox("##codefolder", m_codeFolder, sizeof(m_codeFolder), "Path contains...", folderW, false);
+    if (go) StartCodeSearch();
+    auto job = m_codeJob;
+    bool running = job && !job->done;
+    if (running) {
+        int t = job->total, p = job->progress;
+        if (t > 0)
+            ImGui::TextDisabled("Building the code index (once, then cached): %d / %d packages, %.0f%%", p, t, 100.0 * p / t);
+        else
+            ImGui::TextDisabled("Searching...");
+        return;
+    }
+    if (!job) {
+        ImGui::TextWrapped("Searches the decompiled C++ of every Blueprint and the translated HLSL of every material and material function. "
+                           "The first search builds the index for the whole game (several minutes, in the background), later ones read it "
+                           "from CodeIndex.bin next to the settings.");
+        return;
+    }
+    if (!job->error.empty()) {
+        ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(kError), "%s", job->error.c_str());
+        return;
+    }
+    ImGui::TextDisabled("%zu line(s)%s in %zu of %zu documents", job->hits.size(), job->hits.size() >= 5000 ? " (first 5000)" : "",
+                        job->docsMatched, job->index ? job->index->Docs().size() : (size_t)0);
+    if (!job->index) return;
+    const CodeIndex& idx = *job->index;
+    if (ImGui::BeginTable("##code", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable | ImGuiTableFlags_BordersInnerV)) {
+        ImGui::TableSetupScrollFreeze(0, 1);
+        ImGui::TableSetupColumn("Line", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn("Package", ImGuiTableColumnFlags_WidthFixed, Dip(260));
+        ImGui::TableSetupColumn("#", ImGuiTableColumnFlags_WidthFixed, Dip(44));
+        ImGui::TableHeadersRow();
+        ImGuiListClipper clip;
+        clip.Begin((int)job->hits.size());
+        while (clip.Step())
+            for (int i = clip.DisplayStart; i < clip.DisplayEnd; i++) {
+                const CodeHit& h = job->hits[i];
+                const CodeDoc& doc = idx.Docs()[h.doc];
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::PushID(i);
+                ImGui::PushFont(monoFont, FontDip(11) * 0.9f);
+                bool open = ImGui::Selectable(h.text.c_str(), false, ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowDoubleClick) &&
+                            ImGui::IsMouseDoubleClicked(0);
+                ImGui::PopFont();
+                std::string path(m_api->vfs.Path(doc.entry));
+                if (ImGui::IsItemHovered()) Tip("%s:%u\nDouble-click: open the %s at this line", path.c_str(), h.line, doc.kind == CodeDoc::Blueprint ? "decompiled Blueprint" : "material HLSL");
+                if (ImGui::BeginPopupContextItem("##codectx")) {
+                    if (ImGui::MenuItem("Open Code At This Line")) open = true;
+                    if (ImGui::MenuItem("Open Package")) OpenFile(doc.entry, true);
+                    ImGui::Separator();
+                    if (ImGui::MenuItem("Copy Line")) CopyToClipboard(h.text);
+                    if (ImGui::MenuItem("Copy Path")) CopyToClipboard(path);
+                    ImGui::EndPopup();
+                }
+                if (open) OpenCodeHit(idx, h);
+                ImGui::TableNextColumn();
+                ImGui::TextDisabled("%s %s", doc.kind == CodeDoc::Blueprint ? "BP " : "MAT", std::string(m_api->vfs.FileName(doc.entry)).c_str());
+                ImGui::TableNextColumn();
+                ImGui::TextDisabled("%u", h.line);
+                ImGui::PopID();
+            }
+        ImGui::EndTable();
     }
 }

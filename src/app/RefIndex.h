@@ -24,9 +24,9 @@ public:
     bool HasTextKeys() const { return m_hasTextKeys; }
     const std::vector<u32>* TextUsers(std::string_view key) const;
     static u32 TextKeyHash(std::string_view key);   // FNV-1a of the lower-case key
+    static u64 Signature(const Vfs& vfs);           // the mounted archive set (caches built for another set are stale)
 
 private:
-    static u64 Signature(const Vfs& vfs);
     std::unordered_map<u32, std::vector<u32>> m_map;
     std::unordered_map<u32, std::vector<u32>> m_text;   // TextKeyHash -> packages
     bool m_ready = false, m_hasTextKeys = false;

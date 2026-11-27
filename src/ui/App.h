@@ -467,7 +467,7 @@ private:
     i64 m_selected = -1;            // selected package (Packages list / explorer)
     u32 m_selFolder = UINT32_MAX;   // folder card selected in the explorer
     bool m_showSearch = false, m_focusGlobalSearch = false;   // Packages > Search window
-    int m_searchTab = 0;                       // 0 search, 1 references, 2 localization, 3 content
+    int m_searchTab = 0;                       // 0 search, 1 references, 2 localization, 3 content, 4 code
     // Content tab (SearchContent): runs on its own thread, the table shows the last finished search
     struct ContentJob {
         ContentQuery query;
@@ -484,6 +484,24 @@ private:
     void DrawContentTab();
     void DrawExportResultsMenu(const std::vector<u32>& entries);   // inside a popup: export a result list
     void StartContentSearch();
+    // Code tab (Api::EnsureCodeIndex + CodeIndex::Search, ui/CodeSearchTab.cpp): the index builds once on the first search
+    struct CodeJob {
+        std::string query, folder;
+        int kinds = 3;
+        std::atomic<bool> done{false};
+        std::atomic<int> progress{0}, total{0};
+        std::shared_ptr<CodeIndex> index;
+        std::vector<CodeHit> hits;
+        size_t docsMatched = 0;
+        std::string error;
+    };
+    std::shared_ptr<CodeJob> m_codeJob;
+    char m_codeQuery[256] = {}, m_codeFolder[256] = {};
+    int m_codeKind = 0;   // 0 all, 1 Blueprints, 2 materials
+    bool m_focusCode = false;
+    void DrawCodeTab();
+    void StartCodeSearch();
+    void OpenCodeHit(const CodeIndex& idx, const CodeHit& h);
     char m_locQuery[256] = {};
     std::string m_locLast;
     std::vector<const LocEntry*> m_locResults;
