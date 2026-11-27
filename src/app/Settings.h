@@ -27,7 +27,8 @@ struct Settings {
     std::string language = "en";  // culture of the localised strings shown for FText (Localisation/<target>/<culture>)
     std::vector<std::string> favoriteDirs;   // Packages > Favorite Directories (game folder paths)
 
-    static std::wstring Path();   // %APPDATA%\SOTModel\Settings.ini
+    static std::wstring DataDir();   // <exe folder>\Data: settings, caches, imgui.ini, oodle-data-shared.dll
+    static std::wstring Path();      // <exe folder>\Data\Settings.ini
     void Load();
     bool Save() const;
     std::vector<AesKey> ParsedKeys() const;

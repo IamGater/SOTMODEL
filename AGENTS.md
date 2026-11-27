@@ -73,7 +73,7 @@ DataTable / CurveTable tabs show a sortable table with a filter per column (`>x`
 
 ## Configuration
 
-`%APPDATA%\SOTModel\Settings.ini` (written by the UI). Missing values are imported automatically from an
+`Data\Settings.ini` next to the exe (written by the UI; the caches, `imgui.ini` and `oodle-data-shared.dll` live in that `Data` folder too, exports go to `Output` next to the exe; the files of an older `%APPDATA%\SOTModel` are copied over on first run). Missing values are imported automatically from an
 FModel installation (`%APPDATA%\FModel\AppSettings.json`): game directory, AES keys, Oodle DLL.
 
 ```

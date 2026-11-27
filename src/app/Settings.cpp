@@ -20,9 +20,26 @@ static bool FileExists(const std::wstring& p) {
     return a != INVALID_FILE_ATTRIBUTES && !(a & FILE_ATTRIBUTE_DIRECTORY);
 }
 
-std::wstring Settings::Path() { return AppData() + L"\\SOTModel\\Settings.ini"; }
+std::wstring Settings::DataDir() { return ExeDirectory() + L"\\Data"; }
+std::wstring Settings::Path() { return DataDir() + L"\\Settings.ini"; }
+
+// First run next to this exe: take over the files of the older %APPDATA%\SOTModel location.
+static void MigrateOldData(const std::wstring& dataDir) {
+    std::wstring old = AppData() + L"\\SOTModel";
+    if (!DirExists(old) || FileExists(dataDir + L"\\Settings.ini")) return;
+    CreateDirectories(dataDir);
+    WIN32_FIND_DATAW fd;
+    HANDLE h = FindFirstFileW((old + L"\\*").c_str(), &fd);
+    if (h == INVALID_HANDLE_VALUE) return;
+    do {
+        if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
+            CopyFileW((old + L"\\" + fd.cFileName).c_str(), (dataDir + L"\\" + fd.cFileName).c_str(), TRUE);
+    } while (FindNextFileW(h, &fd));
+    FindClose(h);
+}
 
 void Settings::Load() {
+    MigrateOldData(DataDir());
     Bytes b;
     if (ReadWholeFile(Path(), b)) {
         std::string text(b.begin(), b.end());
@@ -62,10 +79,10 @@ void Settings::Load() {
             else if (k == "FavoriteDir") { if (!v.empty()) favoriteDirs.push_back(v); }
         }
     }
-    if (outputDir.empty()) {
-        wchar_t* docs = nullptr;
-        if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_Documents, 0, nullptr, &docs))) outputDir = std::wstring(docs) + L"\\SOTModel\\Output";
-        CoTaskMemFree(docs);
+    if (outputDir.empty()) outputDir = ExeDirectory() + L"\\Output";
+    if (oodlePath.empty() || !FileExists(oodlePath)) {   // the DLL kept in the Data folder
+        std::wstring dll = DataDir() + L"\\oodle-data-shared.dll";
+        if (FileExists(dll)) oodlePath = dll;
     }
 }
 
